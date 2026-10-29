@@ -212,11 +212,22 @@ function expectThrows(operation: () => unknown, message: string): void {
     ],
     'delayed and revoked transactions reach subscribers as purchaseUpdated events',
   );
+  // A refunded transaction StoreKit keeps unfinished stays listed, as
+  // `revoked`: the reconciler finishes it (granting nothing) once the backend
+  // has answered for it, and never verifies it.
   assertEqual(
-    (await provider.getAvailablePurchases()).map((purchase) => purchase.transactionId),
-    ['2000000123456789', '2000000123456790'],
-    'a revoked transaction is not available',
+    (await provider.getAvailablePurchases()).map((purchase) => [
+      purchase.transactionId,
+      purchase.state,
+    ]),
+    [
+      ['2000000123456789', 'purchased'],
+      ['2000000123456790', 'purchased'],
+      ['2000000123456791', 'revoked'],
+    ],
+    'an unfinished revoked transaction is listed as revoked',
   );
+  assertEqual(provider.acceptsRevokedFinish, true, 'the provider takes the revoked finish');
 
   const finish = provider.finishTransaction;
   if (finish === undefined) {

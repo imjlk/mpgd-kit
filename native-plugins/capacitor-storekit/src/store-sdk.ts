@@ -413,7 +413,11 @@ export function createCapacitorStoreKitStoreSdk(
   // native call; the v2 reconciler is the gate that authorizes the call.
   const inFlightFinishes = new Map<
     string,
-    { readonly ledgerEntryId: string; readonly promise: Promise<StoreSdkFinishTransactionResult> }
+    {
+      readonly ledgerEntryId: string;
+      readonly revoked: boolean;
+      readonly promise: Promise<StoreSdkFinishTransactionResult>;
+    }
   >();
 
   /**
@@ -462,6 +466,9 @@ export function createCapacitorStoreKitStoreSdk(
    *
    * A consumable of another token, or a transaction bound to no token, is
    * never finished here.
+   *
+   * A revoked finish (`revoked`, see `revokedFinishPermitted`) has its own
+   * gate; an ordinary finish of a revoked transaction stays refused.
    */
   const finishPermitted = async (
     transactionId: string,
@@ -471,13 +478,7 @@ export function createCapacitorStoreKitStoreSdk(
     | { readonly verdict: 'finish'; readonly appAccountToken: string }
     | { readonly verdict: 'finished' | 'refused' }
   > => {
-    const response: unknown = await sdk.getTransactions();
-    if (!isRecord(response) || !Array.isArray(response.transactions)) {
-      throw evidenceInvalid('StoreKit returned an invalid transaction list.');
-    }
-    const entries = (response.transactions as readonly unknown[]).filter(
-      (candidate) => isRecord(candidate) && candidate.transactionId === transactionId,
-    );
+    const entries = await listedEntries(transactionId);
     const transaction = entries.find(isValidStoreKitTransaction);
     if (transaction === undefined) {
       return { verdict: entries.length === 0 && lostAcknowledgement ? 'finished' : 'refused' };
@@ -502,8 +503,53 @@ export function createCapacitorStoreKitStoreSdk(
     return { verdict: 'refused' };
   };
 
+  /** The native list's entries of one transaction id, in any shape. */
+  const listedEntries = async (transactionId: string): Promise<readonly unknown[]> => {
+    const response: unknown = await sdk.getTransactions();
+    if (!isRecord(response) || !Array.isArray(response.transactions)) {
+      throw evidenceInvalid('StoreKit returned an invalid transaction list.');
+    }
+    return (response.transactions as readonly unknown[]).filter(
+      (candidate) => isRecord(candidate) && candidate.transactionId === transactionId,
+    );
+  };
+
+  /**
+   * The gate of a revoked finish (`revoked`): a consumable the App Store
+   * refunded while it was still unfinished, which StoreKit keeps in
+   * `Transaction.unfinished` and redelivers at every launch until `finish()`.
+   * The caller (the reconciler) asks only once the backend answered for it
+   * without a standing grant, and finishing it grants nothing: it only stops
+   * the redelivery. It is finished only when the native list carries it as
+   * revoked (`revokedAt`), as a consumable of a SKU the catalog declares
+   * consumable, bound to the session token. A transaction that is not
+   * revoked (still a paid purchase), a durable, or a consumable of another
+   * or no token stays refused, as does an entry of the id in a malformed
+   * shape. One the list no longer carries has nothing left to finish
+   * (a refund of a finished consumable is reported too), so it answers
+   * finished with no native call.
+   */
+  const revokedFinishPermitted = async (
+    transactionId: string,
+    appAccountToken: string,
+  ): Promise<'finish' | 'finished' | 'refused'> => {
+    const entries = await listedEntries(transactionId);
+    const transaction = entries.find(isValidStoreKitTransaction);
+    if (transaction === undefined) {
+      return entries.length === 0 ? 'finished' : 'refused';
+    }
+    return transaction.revokedAt !== undefined
+      && transaction.type === 'consumable'
+      && kinds.get(transaction.productId) === 'consumable'
+      && transaction.appAccountToken?.toLowerCase() === appAccountToken
+      ? 'finish'
+      : 'refused';
+  };
+
   return {
     store: appStoreStoreId,
+    // `finishTransaction` reads `revoked` (see `revokedFinishPermitted`).
+    acceptsRevokedFinish: true,
     ...(presentation === undefined ? {} : { purchasePresentation: presentation.purchasePresentation }),
     capabilities: storeKitStoreSdkCapabilities,
     async fetchProducts(request: StoreSdkFetchProductsInput): Promise<readonly StoreSdkProduct[]> {
@@ -646,11 +692,33 @@ export function createCapacitorStoreKitStoreSdk(
           false,
         );
       }
+      const revoked = request.revoked === true;
       const active = inFlightFinishes.get(transactionId);
-      if (active !== undefined && active.ledgerEntryId === ledgerEntryId) {
+      if (
+        active !== undefined
+        && active.ledgerEntryId === ledgerEntryId
+        && active.revoked === revoked
+      ) {
         return active.promise;
       }
       const promise = (async (): Promise<StoreSdkFinishTransactionResult> => {
+        if (revoked) {
+          if (request.isConsumable !== true) {
+            return { finished: false };
+          }
+          const verdict = await revokedFinishPermitted(transactionId, appAccountToken);
+          if (verdict !== 'finish') {
+            return { finished: verdict === 'finished' };
+          }
+          // A native build from before the flag ignores it and applies its
+          // ordinary gate, which refuses a revoked transaction: `finished: false`.
+          return readFinishResult(await sdk.finishTransaction({
+            transactionId,
+            ledgerEntryId,
+            appAccountToken,
+            revoked: true,
+          }));
+        }
         // Same match the native plugin applies: missing, revoked, unbound, or
         // another account never reaches `transaction.finish()`, except a
         // durable of another token (see `finishPermitted`). On a retry, a
@@ -664,17 +732,13 @@ export function createCapacitorStoreKitStoreSdk(
         if (permitted.verdict !== 'finish') {
           return { finished: permitted.verdict === 'finished' };
         }
-        const reported: unknown = await sdk.finishTransaction({
+        return readFinishResult(await sdk.finishTransaction({
           transactionId,
           ledgerEntryId,
           appAccountToken: permitted.appAccountToken,
-        });
-        if (!isRecord(reported) || typeof reported.finished !== 'boolean') {
-          throw evidenceInvalid('StoreKit returned an invalid finish result.');
-        }
-        return { finished: reported.finished };
+        }));
       })();
-      inFlightFinishes.set(transactionId, { ledgerEntryId, promise });
+      inFlightFinishes.set(transactionId, { ledgerEntryId, revoked, promise });
       try {
         return await promise;
       } finally {
@@ -883,6 +947,13 @@ function isValidStoreKitProduct(value: unknown): value is StoreKitProduct {
     && typeof value.description === 'string'
     && typeof value.formattedPrice === 'string'
     && typeof value.currencyCode === 'string' && value.currencyCode.length > 0;
+}
+
+function readFinishResult(reported: unknown): StoreSdkFinishTransactionResult {
+  if (!isRecord(reported) || typeof reported.finished !== 'boolean') {
+    throw evidenceInvalid('StoreKit returned an invalid finish result.');
+  }
+  return { finished: reported.finished };
 }
 
 function storeKitError(code: string, message: string, retryable: boolean): StoreSdkError & Error {

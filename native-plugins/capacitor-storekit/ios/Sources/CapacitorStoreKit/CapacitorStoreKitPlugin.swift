@@ -253,6 +253,10 @@ public class CapacitorStoreKitPlugin: CAPPlugin, CAPBridgedPlugin {
             return
         }
         guard providerReady(call) else { return }
+        if call.getBool("revoked") == true {
+            finishRevokedTransaction(call, transactionId: transactionId, accountToken: accountToken)
+            return
+        }
         Task { [module] in
             do {
                 // The verified transaction behind the id, through the same read
@@ -278,6 +282,36 @@ public class CapacitorStoreKitPlugin: CAPPlugin, CAPBridgedPlugin {
                 try await module.finishTransaction(
                     purchase: .purchaseIos(StoreKitTransactionPolicy.finishInput(match)),
                     isConsumable: match.type == .consumable)
+                call.resolve(["finished": true])
+            } catch {
+                call.reject("StoreKit could not finish the transaction.",
+                            StoreKitTransactionPolicy.queryFailureCode(error), error)
+            }
+        }
+    }
+
+    /// `finishTransaction` with `revoked`: finish a consumable the App Store
+    /// refunded while it was unfinished, so StoreKit stops redelivering it.
+    /// Grants nothing; the StoreKit SDK asks only once the game backend
+    /// answered for it without a standing grant. Only a verified, revoked,
+    /// unfinished consumable bound to the session token matches
+    /// (`StoreKitTransactionPolicy.finishableRevoked`); anything else answers
+    /// `finished: false` and is left alone.
+    private func finishRevokedTransaction(_ call: CAPPluginCall, transactionId: String, accountToken: String) {
+        Task { [module] in
+            do {
+                guard let match = StoreKitTransactionPolicy.finishableRevoked(
+                    transactionId: transactionId,
+                    appAccountToken: accountToken,
+                    in: await RecoveryReadShim.unfinished()) else {
+                    call.resolve(["finished": false])
+                    return
+                }
+                // OpenIAP finishes it by id from `Transaction.unfinished`; it
+                // does not check the revocation date.
+                try await module.finishTransaction(
+                    purchase: .purchaseIos(StoreKitTransactionPolicy.finishInput(match)),
+                    isConsumable: true)
                 call.resolve(["finished": true])
             } catch {
                 call.reject("StoreKit could not finish the transaction.",

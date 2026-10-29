@@ -84,9 +84,11 @@ export interface CapacitorStoreKitPlugin {
   /** User-initiated App Store account synchronization before restore. */
   sync(): Promise<{ readonly synced: boolean }>;
   /**
-   * Call only after the authenticated backend confirms the ledger grant.
-   * Finishing never grants. Native finishes only a verified, non-revoked,
-   * one-time transaction whose app account token matches `appAccountToken`.
+   * Call only after the authenticated backend confirms the ledger grant
+   * (with `revoked`: after it answered for a refunded transaction without a
+   * standing grant). Finishing never grants. Native finishes only a
+   * verified, non-revoked, one-time transaction whose app account token
+   * matches `appAccountToken` (with `revoked`: only a revoked consumable).
    * The StoreKit SDK injects the session token and applies the same match
    * before this call, including for `commerce.v2.finishTransaction`. Games
    * must not call this plugin method directly. The token match is not a
@@ -98,6 +100,14 @@ export interface CapacitorStoreKitPlugin {
     readonly ledgerEntryId: string;
     /** Session app account token; must match the verified transaction. */
     readonly appAccountToken: string;
+    /**
+     * Finish a transaction StoreKit lists as revoked (refunded) instead:
+     * only an unfinished, revoked consumable bound to `appAccountToken`, and
+     * nothing else. Grants nothing; it stops StoreKit redelivering it. A
+     * native build from before the flag ignores it and refuses the revoked
+     * transaction (`finished: false`).
+     */
+    readonly revoked?: boolean;
   }): Promise<{ readonly finished: boolean }>;
   addListener(
     eventName: 'transactionUpdated',

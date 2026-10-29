@@ -888,6 +888,153 @@ async function settled(): Promise<void> {
   );
 }
 
+// A revoked finish: a consumable the App Store refunded while it was still
+// unfinished stays in `Transaction.unfinished` and is redelivered at every
+// launch until `finish()`. With `revoked`, and only then, the SDK finishes a
+// listed, revoked consumable of the session token, granting nothing. A
+// transaction still paid, a durable, another token's consumable, a SKU the
+// catalog does not declare consumable, and a malformed entry stay refused; a
+// transaction the list no longer carries has nothing left to finish.
+{
+  const refunded = '2026-07-18T00:00:00Z';
+  const otherAccount = crypto.randomUUID();
+  const plugin = createFakeStoreKitPlugin({
+    transactions: [
+      fakeTransaction({ transactionId: '50', unfinished: true, revokedAt: refunded }),
+      fakeTransaction({ transactionId: '51', unfinished: true }),
+      fakeTransaction({
+        transactionId: '52',
+        type: 'non_consumable',
+        productId: removeAdsSku,
+        unfinished: true,
+        revokedAt: refunded,
+      }),
+      fakeTransaction({
+        transactionId: '53',
+        unfinished: true,
+        revokedAt: refunded,
+        appAccountToken: otherAccount,
+      }),
+      fakeTransaction({
+        transactionId: '54',
+        productId: removeAdsSku,
+        unfinished: true,
+        revokedAt: refunded,
+      }),
+      fakeTransaction({ transactionId: '56', unfinished: true, revokedAt: refunded }),
+    ],
+  });
+  plugin.transactions.push({ transactionId: '55', productId: sku, revokedAt: refunded } as never);
+  const { sdk } = createSdk({ plugin });
+  assertEqual(sdk.acceptsRevokedFinish, true, 'the SDK declares the revoked finish');
+  const finish = sdk.finishTransaction;
+  if (finish === undefined) {
+    throw new Error('finishTransaction is required for finish: client.');
+  }
+
+  const callsBeforeOrdinary = plugin.calls.length;
+  assertEqual(
+    await finish.call(sdk, { transactionId: '50', isConsumable: true, ledgerEntryId: 'le-50' }),
+    { finished: false },
+    'an ordinary finish of a revoked consumable stays refused',
+  );
+  assertEqual(
+    await finish.call(sdk, {
+      transactionId: '50',
+      isConsumable: true,
+      ledgerEntryId: 'le-50',
+      retry: true,
+    }),
+    { finished: false },
+    'so does a retried one',
+  );
+  assertEqual(
+    plugin.calls.slice(callsBeforeOrdinary),
+    ['getTransactions', 'getTransactions'],
+    'neither reaches the native finish',
+  );
+
+  const callsBeforeRevoked = plugin.calls.length;
+  assertEqual(
+    await finish.call(sdk, {
+      transactionId: '50',
+      isConsumable: true,
+      ledgerEntryId: 'le-50',
+      revoked: true,
+    }),
+    { finished: true },
+    'a revoked finish finishes the refunded consumable',
+  );
+  assertEqual(
+    plugin.calls.slice(callsBeforeRevoked),
+    ['getTransactions', `finish:50:le-50:${fakeAccountToken}:revoked`],
+    'natively, with the session token and the revoked flag',
+  );
+  assertEqual(
+    plugin.transactions.some((transaction) => transaction.transactionId === '50'),
+    false,
+    'StoreKit no longer lists it, so it is not redelivered',
+  );
+
+  const callsBeforeRefusals = plugin.calls.length;
+  for (const [transactionId, isConsumable, message] of [
+    ['51', true, 'a consumable that is not revoked (still paid) is never finished this way'],
+    ['52', false, 'a revoked durable is not'],
+    ['52', true, 'nor when the caller calls it a consumable'],
+    ['53', true, "nor another token's revoked consumable"],
+    ['54', true, 'nor a consumable of a SKU the catalog declares durable'],
+    ['55', true, 'nor a malformed entry of the id'],
+    ['56', false, 'nor a revoked consumable the caller does not call a consumable'],
+  ] as const) {
+    assertEqual(
+      await finish.call(sdk, { transactionId, isConsumable, ledgerEntryId: 'op-1', revoked: true }),
+      { finished: false },
+      message,
+    );
+  }
+  assertEqual(
+    plugin.calls.slice(callsBeforeRefusals).filter((call) => call.startsWith('finish:')),
+    [],
+    'no refusal reaches the native finish',
+  );
+
+  const callsBeforeMissing = plugin.calls.length;
+  assertEqual(
+    await finish.call(sdk, {
+      transactionId: '50',
+      isConsumable: true,
+      ledgerEntryId: 'le-50',
+      revoked: true,
+    }),
+    { finished: true },
+    'a transaction the list no longer carries has nothing left to finish',
+  );
+  assertEqual(plugin.calls.slice(callsBeforeMissing), ['getTransactions'], 'without a native call');
+
+  // A native build from before the flag ignores it and applies its ordinary
+  // gate, which refuses a revoked transaction: today's behaviour.
+  const older = createFakeStoreKitPlugin({
+    revokedFinish: 'ignored',
+    transactions: [fakeTransaction({ transactionId: '57', unfinished: true, revokedAt: refunded })],
+  });
+  const olderSdk = createSdk({ plugin: older }).sdk;
+  assertEqual(
+    await olderSdk.finishTransaction?.({
+      transactionId: '57',
+      isConsumable: true,
+      ledgerEntryId: 'op-57',
+      revoked: true,
+    }),
+    { finished: false },
+    'an older native build leaves it unfinished',
+  );
+  assertEqual(
+    older.transactions.map((transaction) => transaction.transactionId),
+    ['57'],
+    'and StoreKit keeps listing it',
+  );
+}
+
 // restorePurchases asks the App Store to synchronize.
 {
   const { plugin, sdk } = createSdk();

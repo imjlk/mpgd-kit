@@ -79,6 +79,12 @@ export function createFakeStoreKitPlugin(input: {
    * (a native build from before sheet facts), or `absent` (no such method).
    */
   readonly presentationSupport?: 'supported' | 'unimplemented' | 'absent';
+  /**
+   * How the native finish treats `revoked`: `supported` (default) finishes
+   * only a listed, revoked consumable of the token; `ignored` is a native
+   * build from before the flag, whose ordinary gate refuses it.
+   */
+  readonly revokedFinish?: 'supported' | 'ignored';
 } = {}): FakeStoreKitPlugin {
   const presentationListeners = new Set<(event: StoreKitPurchasePresentationEvent) => void>();
   const presentationIds: (string | undefined)[] = [];
@@ -194,15 +200,26 @@ export function createFakeStoreKitPlugin(input: {
       return plugin.syncResult;
     },
     async finishTransaction(request) {
+      const revoked = request.revoked === true && input.revokedFinish !== 'ignored';
       calls.push(
-        `finish:${request.transactionId}:${request.ledgerEntryId}:${request.appAccountToken}`,
+        `finish:${request.transactionId}:${request.ledgerEntryId}:${request.appAccountToken}${
+          request.revoked === true ? ':revoked' : ''}`,
       );
       const script = finishQueue.shift();
       if (script === undefined) {
         // The native token match: a listed transaction bound to another (or
-        // no) token is not finished.
+        // no) token is not finished. The ordinary gate refuses a revoked
+        // transaction; the revoked one finishes only an unfinished, revoked
+        // consumable.
         const listed = transactions.find((entry) => entry.transactionId === request.transactionId);
         if (listed !== undefined && listed.appAccountToken?.toLowerCase() !== request.appAccountToken) {
+          return { finished: false };
+        }
+        if (
+          revoked
+            ? listed === undefined || listed.revokedAt === undefined || listed.type !== 'consumable'
+            : listed?.revokedAt !== undefined
+        ) {
           return { finished: false };
         }
         remove(request.transactionId);
