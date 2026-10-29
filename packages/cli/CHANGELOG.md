@@ -1,5 +1,24 @@
 # @mpgd/cli
 
+## 0.66.0 — 2026-10-29
+
+### Fixed
+
+- [b85c2a06](https://github.com/imjlk/mpgd-kit/commit/b85c2a068adb871da772190436eece21b3839fec) Allow hosted web and Microsoft Store PWA production targets to use a clean same-origin `/api` game-services path for an authoritative edge service binding. Keep absolute public HTTPS requirements for native and third-party runtimes, and reject protocol-relative, encoded, traversal, query and fragment paths.
+  
+  Add the DOM-free `resolveGameServicesBaseUrl` composition helper and wire starter commerce/notification clients to resolve a hosted path against the actual browser origin before the existing absolute-URL authority checks. Invalid or native relative inputs remain fail-closed without a backend fallback.
+  
+  Add `isHostedGameServicesPath` to `@mpgd/platform/routes`, re-exported from `@mpgd/game-services`: the one rule for a clean same-origin ingress path, shared by the CLI's production readiness check and `resolveGameServicesBaseUrl`. — Thanks @imjlk!
+- [3ffc437c](https://github.com/imjlk/mpgd-kit/commit/3ffc437cee459cec101be7f849e6384cc41e3630) The generated game's Delete account entry no longer warns that a purchase is still being processed because of a journal record parked as another account's purchase (`isParkedForAnotherAccount` from `@mpgd/game-services`): such a record is not a purchase of this player in progress. — Thanks @imjlk!
+
+### Changed
+
+- [fa2c44b4](https://github.com/imjlk/mpgd-kit/commit/fa2c44b4533d74df106a70aa6a75971a376a2ae3) The generated game's purchase journal (`src/platform/monetizationJournal.ts`) bounds records parked as another account's purchase, which it kept forever as open records: they leave 30 days after their last write (the parking or the player's last Restore Purchases resend, `parkedRetentionMs`), at most the 20 most recently written are kept across every player of the install (`maxParkedRecords`), and the byte budget may drop them before granted purchases. A parked record written within the in-flight window (`parkedInFlightMs`, 10 minutes by default, the reconciler's default `inFlightTimeoutMs`; a game that changes that timeout passes the same value), in any tab, or the one the journal wrote last, is never dropped: a Restore Purchases resend rewrites its record before it is sent, and the record must be there when the answer arrives. A parked record without a readable time is never in flight; it sorts as the newest, so only the count bound and the byte budget drop it. Dropping one cannot lose a grant: the backend ledger decides every grant; a purchase the store still lists is verified once more and parked again. Every other open record is still kept, and the document format is unchanged, so older and newer games read each other's journals. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/adapter-ait@0.21.7, @mpgd/adapter-browser@0.12.3, @mpgd/adapter-capacitor@0.18.0, @mpgd/adapter-devvit@0.14.9, @mpgd/adapter-verse8@0.7.18, @mpgd/analytics@0.5.7, @mpgd/bridge@0.18.0, @mpgd/capacitor-play-billing@0.6.0, @mpgd/capacitor-storekit@0.6.0, @mpgd/catalog@0.14.1, @mpgd/game-runtime@0.9.0, @mpgd/game-services@0.32.0, @mpgd/i18n@0.6.28, @mpgd/platform@0.34.0, @mpgd/target-config@0.24.5
+
 ## 0.65.0 — 2026-10-28
 
 ### Changed

@@ -1,5 +1,33 @@
 # @mpgd/game-services
 
+## 0.32.0 — 2026-10-29
+
+### Added
+
+- [b85c2a06](https://github.com/imjlk/mpgd-kit/commit/b85c2a068adb871da772190436eece21b3839fec) Allow hosted web and Microsoft Store PWA production targets to use a clean same-origin `/api` game-services path for an authoritative edge service binding. Keep absolute public HTTPS requirements for native and third-party runtimes, and reject protocol-relative, encoded, traversal, query and fragment paths.
+  
+  Add the DOM-free `resolveGameServicesBaseUrl` composition helper and wire starter commerce/notification clients to resolve a hosted path against the actual browser origin before the existing absolute-URL authority checks. Invalid or native relative inputs remain fail-closed without a backend fallback.
+  
+  Add `isHostedGameServicesPath` to `@mpgd/platform/routes`, re-exported from `@mpgd/game-services`: the one rule for a clean same-origin ingress path, shared by the CLI's production readiness check and `resolveGameServicesBaseUrl`. — Thanks @imjlk!
+
+### Fixed
+
+- [fa2c44b4](https://github.com/imjlk/mpgd-kit/commit/fa2c44b4533d74df106a70aa6a75971a376a2ae3) Restore Purchases reads a parked another-account record from the journal again before it resends it. A journal that bounds parked records (the starter journal now does) may drop one that a running reconciler still holds in memory; the resend then failed the pass with a journal write error. A record the journal no longer holds for the player is forgotten, and the store's report is matched as a purchase the journal does not know: a new record under its derived key, sent as a restore. The same holds when another context's save drops the record between that read and Restore's rewrite: the failed rewrite forgets it instead of failing the pass. — Thanks @imjlk!
+
+### Changed
+
+- [3ffc437c](https://github.com/imjlk/mpgd-kit/commit/3ffc437cee459cec101be7f849e6384cc41e3630) A verify whose store binding names another account is no longer a terminal rejection. When one player's session verifies another player's Google Play or App Store purchase, the reference verifiers answer `{ status: 'rejected', reason, anotherAccount: true }` (new `EvidenceVerificationDecision` field) once every other check passed, and `createGameServicesBackend` grants and records nothing and throws the new `GameServicesPurchaseBoundToAnotherAccountError` (`code` `PURCHASE_BOUND_TO_ANOTHER_ACCOUNT`, `reason`, `status` 409). The HTTP handler answers it as 409 `{ error: 'PURCHASE_BOUND_TO_ANOTHER_ACCOUNT', reason }` (new `GameServicesBackendErrorCode` member and `reason` field), the oRPC router as that error code with `data.reason` (409 through `createGameServicesRpcFetchHandler`), and analytics tracks `purchase_rejected` with `boundToAnotherAccount` (a failed analytics report never replaces the answer). oRPC 2.0.0-beta.46 errors carry no status, so a host that mounts `createGameServicesRouter` in its own `RPCHandler` passes the new `gameServicesRpcErrorStatusMap` as `errorStatusMap` to answer 409. A restorable purchase bound to another account that restore sharing does not cover (policy `refuse`, a game-started checkout, a consumable) gets the same answer instead of `rejected`. Restore sharing and the holder limit are unchanged; a restorable decision for a purchase bound to no account now carries the `*_MISSING` reason below, is still shared under `share`, and is refused for good (`rejected`) without a share.
+  
+  The commerce reconciler parks such a record instead of ending it: it stays `verifying` with the new `anotherAccount: { reason, reportedAt }` field, is reported with the new `another-account` reconciler event (not a `failure`), is never resent by start, resume, or event passes, is left out of `listRecoverable()`, summarizes as `rejected` for its player, and is sent again only by that player's Restore Purchases when the store reports the purchase again, as a restore with the evidence the store reports then; it stays parked when that resend fails in transport. Its shared journal key no longer refuses another player of the install, who journals the purchase under its own player-scoped key (consumables included), so the purchase's own account recovers it on the same device. A `rejected` receipt with `GOOGLE_PLAY_ACCOUNT_MISMATCH`, `GOOGLE_PLAY_PROFILE_MISMATCH`, or `APP_STORE_ACCOUNT_TOKEN_MISMATCH` (an older backend, or a game server that maps every refusal to `rejected`) is parked the same way, and a terminal record from an older client with one of those reasons also leaves the key to the owner. New exports: `purchaseBoundToAnotherAccountCode`, `purchaseBoundToAnotherAccountStatus`, `storeAccountMismatchReasons`, `isStoreAccountMismatchReason`, `readPurchaseBoundToAnotherAccount`, `createPurchaseBoundToAnotherAccountBody`, `isParkedForAnotherAccount`, `gameServicesRpcErrorStatusMap`. A game that switches over `CommerceReconcilerEvent` handles the new `another-account` member.
+  
+  A purchase bound to no account is no account's and stays `rejected`, now with its own reason so the mismatch reasons mean only "another account": `GOOGLE_PLAY_ACCOUNT_ID_MISSING` and `GOOGLE_PLAY_PROFILE_ID_MISSING` (was `GOOGLE_PLAY_ACCOUNT_MISMATCH` / `GOOGLE_PLAY_PROFILE_MISMATCH`), `GOOGLE_PLAY_ACCOUNT_BINDING_UNEXPECTED` for a bound purchase on a backend that binds nobody (was `GOOGLE_PLAY_ACCOUNT_MISMATCH`), and `APP_STORE_ACCOUNT_TOKEN_MISSING` (was `APP_STORE_ACCOUNT_TOKEN_MISMATCH`). An App Store transaction with another token whose other checks fail (revoked, wrong product type) now reports that check's reason instead of the token mismatch.
+  
+  Released clients (0.27 to 0.31) treat the 409 as a transport failure: the record stays `verifying` and is resent on later passes, instead of ending as `rejected`. A game server that wraps the verifiers should pass the answer through: catch `GameServicesPurchaseBoundToAnotherAccountError` from `backend.purchases.verifyPurchase` (or check `decision.anotherAccount === true` when it calls a verifier itself) and answer 409 with `createPurchaseBoundToAnotherAccountBody(reason)` instead of a `rejected` receipt; see "Another account's purchase" in `docs/GAME_SERVICES_BACKEND.md`. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/analytics@0.5.7, @mpgd/catalog@0.14.1, @mpgd/platform@0.34.0
+
 ## 0.31.0 — 2026-10-28
 
 ### Added

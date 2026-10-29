@@ -1,5 +1,17 @@
 # @mpgd/capacitor-storekit
 
+## 0.6.0 — 2026-10-29
+
+### Added
+
+- [b73b129d](https://github.com/imjlk/mpgd-kit/commit/b73b129d35097331dc6d8de0363191c9cf110dd2) The StoreKit provider reports the purchase sheet (`CommerceProvider.presentation`): the native plugin reports `open` right before `Product.purchase()` and `closed` when it returns or throws (an Ask to Buy is closed when the call returns), `not-started` for a call refused before it. Facts arrive as `purchasePresentation` events and in the `purchase` answer's `presentation`; `getPresentationSupport` declares them. Apple does not document that `Product.purchase()` returns only once the sheet is dismissed, so this is unverified until device testing.
+  
+  On by default (`purchasePresentation: false` keeps the result-based pause). A web bundle on a native build from before the facts reports the store `configuration-required` and refuses new purchases with `CONFIGURATION_REQUIRED` / `STOREKIT_PRESENTATION_UNSUPPORTED`; recovery is unaffected. An adapter from before the facts sends no presentation id, and purchases run as before. Rebuild the app (`cap sync`) with this version's native code. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/adapter-capacitor@0.18.0, @mpgd/bridge@0.18.0, @mpgd/game-services@0.32.0, @mpgd/platform@0.34.0
+
 ## 0.5.0 — 2026-10-28
 
 ### Added

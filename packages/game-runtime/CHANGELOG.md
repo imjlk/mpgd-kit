@@ -1,5 +1,17 @@
 # @mpgd/game-runtime
 
+## 0.9.0 — 2026-10-29
+
+### Changed
+
+- [7a558442](https://github.com/imjlk/mpgd-kit/commit/7a5584427614e1594d9a706e275b38a5916d2386) `createGamePlatformRuntime` coordinates purchases on a gateway without an ad provider. When `gateway.ads.provider` is absent but the commerce provider offers `presentation` facts (or the runtime gets a `purchasePresentation` source), `runtime.gateway.commerce` is a `createCoordinatedCommerceProvider` over the runtime's full-screen scope: a purchase owns `runtime.presentation` and blocks simulation, gameplay input and audio from the request until the sheet's `closed` or `not-started` fact, a second purchase is refused while the sheet is up, and a settled key does not reopen it. Before, only a gateway with an ad provider got this, and a game without ads relied on the gateway's own lifecycle pause. `runtime.actions` keeps its own block on such a gateway. A commerce provider without facts keeps the plain gateway and the earlier behavior.
+  
+  `createCoordinatedCommerceProvider` (and so `createCoordinatedPlatformGateway`) answers a call it refuses before the provider runs as a provider's pre-launch refusal: a `not-started` fact for the key, then `{ outcome: 'failed' }` with a retryable `IN_PROGRESS` (`PRESENTATION_BUSY`, `PRESENTATION_HISTORY_FULL`) or `NOT_PREPARED` (`PRESENTATION_DISPOSED`) error, instead of rejecting with `PresentationExecutionError` `busy`, `disposed` or `history-full`. The game-services reconciler then keeps the key retryable instead of ending its record `failed`. `presentation.subscribe` no longer throws after disposal. Once `maxRememberedInvocations` keys are remembered, a new key evicts the oldest settled, closed, non-retryable key (never an in-flight, retryable or the last settled one) instead of being refused. `key-conflict`, `already-completed` and `presentation-unavailable` still reject. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/game-services@0.32.0, @mpgd/platform@0.34.0
+
 ## 0.8.10 — 2026-10-28
 
 ### Patch changes
