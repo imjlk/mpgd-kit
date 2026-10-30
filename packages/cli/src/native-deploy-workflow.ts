@@ -184,6 +184,14 @@ function quoted(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
 }
 
+// Linux jobs pin a runner image instead of `ubuntu-latest`, as the kit's own CI does:
+// the rolling label moves to a new Ubuntu image, with different preinstalled toolchains
+// (for example the Go that ttsc keys its compiled plugins on), without a workflow change.
+// The generated jobs cache only the pnpm store, which no image toolchain keys, so they
+// need no image-keyed cache; a game that adds one should put the image in its key.
+const LINUX_RUNNER = 'ubuntu-24.04';
+const MACOS_RUNNER = 'macos-26';
+
 function renderNativeDeployWorkflow(input: WorkflowRenderInput): string {
   const options = input.targets.map((target) => `          - ${target}`);
   const lines = [
@@ -223,7 +231,7 @@ function renderNativeDeployWorkflow(input: WorkflowRenderInput): string {
     'jobs:',
     '  validate:',
     "    if: github.event_name == 'pull_request'",
-    '    runs-on: ubuntu-latest',
+    `    runs-on: ${LINUX_RUNNER}`,
     '    steps:',
     '      - uses: actions/checkout@v5',
     '        with:',
@@ -266,7 +274,7 @@ function renderDeployJob(
     `  deploy_${target}:`,
     `    if: github.event_name == 'workflow_dispatch' && github.ref == `
       + `'refs/heads/${input.releaseBranch}' && inputs.target == '${target}'`,
-    `    runs-on: ${target === 'android' ? 'ubuntu-latest' : 'macos-26'}`,
+    `    runs-on: ${target === 'android' ? LINUX_RUNNER : MACOS_RUNNER}`,
     `    environment: ${quoted(input.approvalEnvironment)}`,
     '    permissions:',
     '      contents: write',
