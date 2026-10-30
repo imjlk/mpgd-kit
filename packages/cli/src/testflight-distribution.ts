@@ -677,6 +677,9 @@ function classifyExternalReview(
     case 'BETA_APPROVED':
       return { kind: 'status', status: 'approved' };
     case 'READY_FOR_BETA_TESTING':
+    // Not in Apple's current ExternalBetaState list; asc 5.5.0 still accepts
+    // it as a value App Store Connect returned before the rename.
+    case 'READY_FOR_TESTING':
     case 'IN_BETA_TESTING':
       // Testable by external testers; without a submission of its own, the
       // build did not need one.

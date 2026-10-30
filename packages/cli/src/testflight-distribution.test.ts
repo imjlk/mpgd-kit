@@ -311,6 +311,15 @@ try {
     ]);
   }
 
+  // The pre-rename READY_FOR_TESTING state asc 5.5.0 still accepts reads the same way.
+  {
+    const { state, port } = fake({ externalBuildState: 'READY_FOR_TESTING' });
+    const result = await applyTestFlightDistribution(port, { ...external, groups: ['iPad QA'] });
+    assert.equal(result.betaReview.status, 'not-needed');
+    assert.ok(state.writes.includes('add-groups group-ipad'));
+    assert.equal((await readTestFlightBuildStatus(port, target)).betaReview, 'not-needed');
+  }
+
   // An auto-approved submission reports approved.
   {
     const { port } = fake({ submitState: 'APPROVED' });
