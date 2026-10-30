@@ -170,8 +170,11 @@ interface PlannedWrites {
 }
 
 // App Store Connect `AppVersionState` (and the legacy `AppStoreVersionState` spellings).
+// READY_FOR_REVIEW: the version is in a review submission that was not submitted
+// yet (a partial apply), so it is prepared and submitted like the others.
 const editableVersionStates = new Set([
   'PREPARE_FOR_SUBMISSION',
+  'READY_FOR_REVIEW',
   'DEVELOPER_REJECTED',
   'REJECTED',
   'METADATA_REJECTED',
@@ -181,7 +184,6 @@ const renameableVersionStates = new Set(['PREPARE_FOR_SUBMISSION', 'DEVELOPER_RE
 const submittedVersionStates = new Set([
   'WAITING_FOR_REVIEW',
   'IN_REVIEW',
-  'READY_FOR_REVIEW',
   'WAITING_FOR_EXPORT_COMPLIANCE',
 ]);
 const approvedVersionStates = new Set([
@@ -1529,7 +1531,7 @@ function summarize(
       ? `${name} is in preparation with an unsubmitted review submission ${submission.id}; apply the release plan to submit it.`
       : `${name} is in preparation (${state}); "${appStoreReleasePlanCommand}" lists what is left before review.`;
   }
-  if (state === 'WAITING_FOR_REVIEW' || state === 'READY_FOR_REVIEW') {
+  if (state === 'WAITING_FOR_REVIEW') {
     return `${name} is waiting for App Review${
       submission?.submittedDate === undefined ? '' : ` (submitted ${submission.submittedDate})`}.`;
   }

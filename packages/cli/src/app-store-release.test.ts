@@ -313,6 +313,11 @@ function fakeAsc(initial: Partial<AscState> = {}): FakeAsc {
           : { inAppPurchaseVersionId: input.id }),
       });
       state.items.set(input.submissionId, items);
+      // App Store Connect marks a version in an unsubmitted submission READY_FOR_REVIEW.
+      const version = state.versions.find((candidate) => candidate.id === input.id);
+      if (input.type === 'appStoreVersions' && version !== undefined) {
+        Object.assign(version, { state: 'READY_FOR_REVIEW' });
+      }
     },
     async submitReviewSubmission(submissionId) {
       write(`submit ${submissionId}`);
@@ -627,6 +632,31 @@ try {
       applyAppStoreRelease({ saved: unsurePlan, plan: input(), ports: unsure.ports, approved: true }),
       (error: unknown) => error instanceof AppStoreReleaseApplyError && !error.definitive
         && /result is unknown/u.test(error.message),
+    );
+    // The submit did not land: the version is READY_FOR_REVIEW in an unsubmitted
+    // submission, and the next plan only submits it.
+    unsure.state.submissions = unsure.state.submissions.map((submission) => ({
+      ...submission,
+      state: 'READY_FOR_REVIEW',
+    }));
+    assert.equal(
+      unsure.state.versions.find((version) => version.id === 'v2')?.state,
+      'READY_FOR_REVIEW',
+    );
+    const resubmit = await planAppStoreRelease(input(), unsure.ports);
+    assert.equal(resubmit.stage, 'prepare');
+    assert.deepEqual(resubmit.blockers, []);
+    assert.deepEqual(resubmit.operations, ['submit for App Review']);
+    const resubmitted = await applyAppStoreRelease({
+      saved: resubmit,
+      plan: input(),
+      ports: unsure.ports,
+      approved: true,
+    });
+    assert.equal(resubmitted.status, 'submitted');
+    assert.equal(
+      unsure.state.versions.find((version) => version.id === 'v2')?.state,
+      'WAITING_FOR_REVIEW',
     );
   }
 
@@ -1464,6 +1494,14 @@ try {
         ports,
       ),
       /names MPGD_REVIEW_PASSWORD, which is not set/u,
+    );
+    await assert.rejects(
+      planAppStoreReleaseCommand(
+        { game, profile: 'beta', version: '1.1.0' },
+        { ...environment, MPGD_REVIEW_PASSWORD: ' padded ' },
+        ports,
+      ),
+      /MPGD_REVIEW_PASSWORD starts or ends with whitespace/u,
     );
     await assert.rejects(
       planAppStoreReleaseCommand({ game, profile: 'beta' }, environment, ports),

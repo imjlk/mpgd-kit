@@ -401,7 +401,14 @@ function readDemoAccount(
         `appStore.review.demoAccount names ${name}, which is not set: export the demo account there before planning.`,
       );
     }
-    return value.trim();
+    // asc trims the flag values it sends, so a value with surrounding spaces would
+    // reach App Review as another password: refuse it instead of changing it.
+    if (value.trim() !== value) {
+      throw new Error(
+        `${name} starts or ends with whitespace, which asc would strip before sending it to App Store Connect.`,
+      );
+    }
+    return value;
   };
   const account = { name: read(names.nameEnv), password: read(names.passwordEnv) };
   if ([...account.password].length > 100) {

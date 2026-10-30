@@ -77,7 +77,8 @@ holds only the **names** of two environment variables, never the values,
 the same way the deployment profile names the store credential. `plan` and
 `apply` read both variables and fail when one is unset; the values never go
 into a plan file (the plan keeps only a digest of the user name, to
-notice a change). The password is at most 100 characters.
+notice a change). The password is at most 100 characters; a value that starts or ends with
+whitespace is refused, because asc strips it before sending.
 
 `mpgd.targets.json`: the ios target's `metadata.iosDeviceFamily`. `universal`
 (and an unset value, the Capacitor iOS template's iPhone and iPad) makes the
@@ -143,7 +144,7 @@ refuses it, names every blocker, and writes nothing.
 | On App Store Connect | Plan |
 | --- | --- |
 | No iOS version with this version string, none in preparation | **create** it (with the release type; a scheduled release is created manual and gets its date on the next plan). Nothing else: the version needs its store page first. |
-| This version in preparation (`PREPARE_FOR_SUBMISSION`, `DEVELOPER_REJECTED`, `REJECTED`, `METADATA_REJECTED`, `INVALID_BINARY`) | **reuse** it |
+| This version in preparation (`PREPARE_FOR_SUBMISSION`, `DEVELOPER_REJECTED`, `REJECTED`, `METADATA_REJECTED`, `INVALID_BINARY`), or `READY_FOR_REVIEW` (in a submission that was not submitted, as after a failed apply) | **reuse** it |
 | Another version string in `PREPARE_FOR_SUBMISSION` or `DEVELOPER_REJECTED` | **rename** it to this version string (App Store Connect keeps one version in preparation) |
 | Another version string returned by App Review (`REJECTED`, `METADATA_REJECTED`) | blocked: resubmit or remove it in App Store Connect |
 | This version waiting for or in review | nothing to do: `already submitted` |
