@@ -103,8 +103,20 @@ import { readStoreCredential, runNativeDeployment } from './native-deploy-run.js
 import {
   isNativeDeployApproved,
   planRecordedAndroidSubmission,
+  readRecordedIosBuild,
   submitRecordedNativeTarget,
 } from './native-deploy-submission.js';
+import {
+  applyTestFlightDistribution,
+  parseTestFlightGroups,
+  planTestFlightDistribution,
+  readTestFlightBetaReviewFile,
+  readTestFlightBuildStatus,
+  readTestFlightWhatToTestFile,
+  type TestFlightBuildTarget,
+} from './testflight-distribution.js';
+import { openAscTestFlightDistributionSession } from './testflight-distribution-asc.js';
+import type { TestFlightDistributionPort } from './testflight-distribution-port.js';
 import {
   createPlayReleaseRequest,
   parsePlayUserFraction,
@@ -358,6 +370,19 @@ export {
   type IosTestFlightSubmissionInput,
   type IosTestFlightSubmissionResult,
 } from './testflight-submission.js';
+
+export {
+  applyTestFlightDistribution,
+  planTestFlightDistribution,
+  readTestFlightBuildStatus,
+  type TestFlightBetaReviewInput,
+  type TestFlightBetaReviewStatus,
+  type TestFlightBuildTarget,
+  type TestFlightDistributionReport,
+  type TestFlightDistributionRequest,
+  type TestFlightStatusReport,
+} from './testflight-distribution.js';
+export type { TestFlightDistributionPort } from './testflight-distribution-port.js';
 
 export {
   createBrowserGameplayE2EDriver,
@@ -1107,6 +1132,89 @@ const deployCommand = defineI18n({
           dryRun,
         });
         console.info(JSON.stringify(result, null, 2));
+      },
+    }),
+    testflight: defineI18n({
+      name: 'testflight',
+      description: 'Distribute a submitted iOS build to more TestFlight groups and read its App Review state.',
+      resource: commandResource({
+        en: 'Distribute a submitted iOS build to more TestFlight groups and read its App Review state.',
+        ko: '제출한 iOS 빌드를 다른 TestFlight 그룹에 배포하고 앱 심사 상태를 조회합니다.',
+      }),
+      subCommands: {
+        distribute: defineI18n({
+          name: 'distribute',
+          description: 'Add the build to TestFlight groups, set What to Test and submit external groups for TestFlight App Review.',
+          resource: commandResource({
+            en: 'Add the build to TestFlight groups, set What to Test and submit external groups for TestFlight App Review.',
+            ko: '빌드를 TestFlight 그룹에 추가하고 테스트 내용을 설정하며, 외부 그룹이면 TestFlight 앱 심사에 제출합니다.',
+          }),
+          args: {
+            plan: { type: 'string', required: true, description: 'Saved deployment plan JSON (bundle ID and credential).' },
+            game: { type: 'string', required: false, description: 'Current game directory if the plan moved.' },
+            'game-id': { type: 'string', required: true, description: 'Explicit release ledger game ID.' },
+            release: { type: 'string', required: true, description: 'Explicit release ID whose recorded iOS build is distributed.' },
+            groups: {
+              type: 'string', required: true,
+              description: 'Comma-separated TestFlight group IDs or exact names; external groups need TestFlight App Review.',
+            },
+            'what-to-test': {
+              type: 'string', required: false,
+              description: 'What to Test file, <en-US>…</en-US> blocks or JSON (the --release-notes format); required for a first external group.',
+            },
+            'beta-review': {
+              type: 'string', required: false,
+              description: 'TestFlight review details JSON: contact, notes and a demo account by environment variable names.',
+            },
+            approve: { type: 'boolean', required: false, description: 'Approve the group changes and the review submission.' },
+            'dry-run': { type: 'boolean', required: false, description: 'Read App Store Connect and print the planned changes; write nothing.' },
+          },
+          run: async (ctx) => {
+            const dryRun = ctx.values['dry-run'] === true;
+            if (!dryRun && ctx.values.approve !== true) {
+              throw new Error('TestFlight distribution requires --approve (or --dry-run to preview it).');
+            }
+            const groups = parseTestFlightGroups(readRequiredCliOption(ctx.values.groups, '--groups'));
+            const whatToTestFile = readOptionalString(ctx.values['what-to-test']);
+            const betaReviewFile = readOptionalString(ctx.values['beta-review']);
+            const betaReview = betaReviewFile === undefined
+              ? undefined
+              : readTestFlightBetaReviewFile(betaReviewFile, process.env);
+            const request = {
+              ...await readTestFlightCliTarget(ctx.values),
+              groups,
+              ...(whatToTestFile === undefined ? {} : { whatToTest: readTestFlightWhatToTestFile(whatToTestFile) }),
+              ...(betaReview === undefined ? {} : { betaReview }),
+            };
+            const secrets = betaReview?.demoAccount?.password === undefined ? [] : [betaReview.demoAccount.password];
+            const result = await withTestFlightCliPort(ctx.values, secrets, (port) => dryRun
+              ? planTestFlightDistribution(port, request)
+              : applyTestFlightDistribution(port, request));
+            console.info(JSON.stringify(result, null, 2));
+            if (!dryRun && result.betaReview.status === 'action-required') {
+              throw new Error(`TestFlight distribution needs action in App Store Connect: ${result.detail ?? ''}`);
+            }
+          },
+        }),
+        status: defineI18n({
+          name: 'status',
+          description: "Read the build's TestFlight groups and App Review state; never writes.",
+          resource: commandResource({
+            en: "Read the build's TestFlight groups and App Review state; never writes.",
+            ko: '빌드의 TestFlight 그룹과 앱 심사 상태를 조회합니다. 쓰지 않습니다.',
+          }),
+          args: {
+            plan: { type: 'string', required: true, description: 'Saved deployment plan JSON (bundle ID and credential).' },
+            game: { type: 'string', required: false, description: 'Current game directory if the plan moved.' },
+            'game-id': { type: 'string', required: true, description: 'Explicit release ledger game ID.' },
+            release: { type: 'string', required: true, description: 'Explicit release ID whose recorded iOS build is read.' },
+          },
+          run: async (ctx) => {
+            const target = await readTestFlightCliTarget(ctx.values);
+            const result = await withTestFlightCliPort(ctx.values, [], (port) => readTestFlightBuildStatus(port, target));
+            console.info(JSON.stringify(result, null, 2));
+          },
+        }),
       },
     }),
     run: defineI18n({
@@ -5769,6 +5877,53 @@ async function readPlayReleaseOptions(
       + 'apply only to an Android (Google Play) target.');
   }
   return createPlayReleaseRequest({ track, status, userFraction, releaseNotesFile, mappingFile });
+}
+
+/** The release's recorded iOS build and the App Store Connect app it belongs to. */
+async function readTestFlightCliTarget(values: Record<string, unknown>): Promise<TestFlightBuildTarget> {
+  const game = readOptionalString(values.game);
+  const plan = readNativeDeploymentPlan(
+    readRequiredCliOption(values.plan, '--plan'),
+    game === undefined ? undefined : path.resolve(game),
+  );
+  const recorded = await readRecordedIosBuild({
+    plan,
+    gameId: readRequiredCliOption(values['game-id'], '--game-id'),
+    releaseKey: readRequiredCliOption(values.release, '--release'),
+  });
+  const credential = readStoreCredential(plan, 'ios', process.env);
+  if (credential.target !== 'ios') {
+    throw new Error('TestFlight distribution needs the iOS submission credential.');
+  }
+  return {
+    appStoreAppId: credential.appStoreAppId,
+    bundleId: recorded.bundleId,
+    marketingVersion: recorded.marketingVersion,
+    buildNumber: recorded.buildNumber,
+    ...(recorded.buildId === undefined ? {} : { expectedBuildId: recorded.buildId }),
+  };
+}
+
+async function withTestFlightCliPort<T>(
+  values: Record<string, unknown>,
+  secretValues: readonly string[],
+  action: (port: TestFlightDistributionPort) => Promise<T>,
+): Promise<T> {
+  const game = readOptionalString(values.game);
+  const plan = readNativeDeploymentPlan(
+    readRequiredCliOption(values.plan, '--plan'),
+    game === undefined ? undefined : path.resolve(game),
+  );
+  const credential = readStoreCredential(plan, 'ios', process.env);
+  if (credential.target !== 'ios') {
+    throw new Error('TestFlight distribution needs the iOS submission credential.');
+  }
+  const session = await openAscTestFlightDistributionSession(credential, { secretValues });
+  try {
+    return await action(session.port);
+  } finally {
+    session.close();
+  }
 }
 
 function reportPlayDraftAppFallback(track: string): void {

@@ -301,7 +301,13 @@ pnpm exec mpgd deploy status --game . --game-id mygame --release beta-001
       ([draft apps](./GOOGLE_PLAY_RELEASES.md#draft-apps)).
 - [ ] iOS goes to an internal TestFlight group. The submission reports
       `action-required` while TestFlight waits for the export-compliance
-      answer ([TestFlight](./TESTFLIGHT_INTERNAL_SUBMISSION.md)).
+      answer ([TestFlight](./TESTFLIGHT_INTERNAL_SUBMISSION.md)). Once it is
+      `testflight-ready`, `mpgd deploy testflight distribute --groups
+      <ids or names> --what-to-test <file> --beta-review <file> --approve`
+      adds external groups, sets What to Test, and submits the build for
+      TestFlight App Review; `mpgd deploy testflight status` reports
+      `waiting-for-review`, `approved`, `rejected` or `not-needed`
+      ([external testing](./TESTFLIGHT_INTERNAL_SUBMISSION.md#external-testing-and-testflight-app-review)).
 - [ ] Push (shells with `--providers notifications`): the iOS store build
       reads the signed IPA's entitlements and fails unless `aps-environment`
       is `production`. The shell's entitlements file says `development`, and
@@ -356,6 +362,12 @@ App Store Connect:
       and first non-consumable to the app version for review, and sandbox
       testers.
 - [ ] Export compliance: answered by `ITSAppUsesNonExemptEncryption`.
+- [ ] TestFlight external testing: create the external groups and add
+      testers (or a public link), and fill the app's test information (beta
+      app description, feedback email). Distribution, What to Test, review
+      contact and notes, and the TestFlight App Review submission are
+      `mpgd deploy testflight distribute`
+      ([external testing](./TESTFLIGHT_INTERNAL_SUBMISSION.md#external-testing-and-testflight-app-review)).
 - [ ] Submit for review; choose manual or phased release.
 
 ## 9. Before you press release
@@ -363,6 +375,9 @@ App Store Connect:
 - [ ] One full run on real devices: install from the internal track and
       TestFlight, buy with a license tester and a sandbox account, see the
       grant from the ledger, restore on a second install, receive a push.
+      For iPhone and iPad QA outside the team, the build goes to the external
+      groups once `mpgd deploy testflight status` shows `approved` or
+      `not-needed`.
 - [ ] The [purchase device acceptance](./PURCHASE_DEVICE_ACCEPTANCE.md)
       checklist on a Play device, an iPhone and an iPad: cancel, complete,
       pending and Ask to Buy purchases, a sheet left up while backgrounded or
@@ -398,7 +413,7 @@ App Store Connect:
 - [Store product sync](./STORE_PRODUCT_SYNC.md)
 - [Purchase device acceptance](./PURCHASE_DEVICE_ACCEPTANCE.md)
 - [Store page sync](./STORE_PRESENCE_SYNC.md)
-- [TestFlight internal submission](./TESTFLIGHT_INTERNAL_SUBMISSION.md)
+- [TestFlight submission and external testing](./TESTFLIGHT_INTERNAL_SUBMISSION.md)
 - [Game services backend](./GAME_SERVICES_BACKEND.md)
 - [Store privacy disclosures](./STORE_PRIVACY_DISCLOSURES.md)
 - [Public release checklist](./PUBLIC_RELEASE_CHECKLIST.md) (publishing the kit itself)

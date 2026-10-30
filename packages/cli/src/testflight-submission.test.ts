@@ -109,17 +109,27 @@ function mock(overrides: Partial<MockState> = {}): { state: MockState; run: AscJ
       };
     }
     if (command.startsWith('testflight groups list')) {
-      const membership = args.includes('--build-id');
+      if (args.includes('--build-id')) {
+        // asc 5.5.0 prints its own membership result for --build-id.
+        return {
+          buildId: 'build-1',
+          appId,
+          complete: true,
+          lookupMethod: 'server_filter_with_inverse_all_builds',
+          groupCount: state.membership ? 1 : 0,
+          groups: state.membership
+            ? [{ id: groupId, name: 'QA', type: 'internal', membership: 'explicit' }]
+            : [],
+        };
+      }
       return {
-        data: membership && !state.membership
-          ? []
-          : [
-              {
-                type: 'betaGroups',
-                id: groupId,
-                attributes: { isInternalGroup: true },
-              },
-            ],
+        data: [
+          {
+            type: 'betaGroups',
+            id: groupId,
+            attributes: { isInternalGroup: true },
+          },
+        ],
       };
     }
     if (command.startsWith('builds uploads list')) {

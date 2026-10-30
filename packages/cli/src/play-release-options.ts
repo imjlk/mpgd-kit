@@ -205,14 +205,26 @@ export function assertPlayUserFraction(fraction: number): void {
 }
 
 export function readPlayReleaseNotesFile(file: string): PlayReleaseNote[] {
+  const notes = readLocalizedNotesFile(file);
+  assertPlayReleaseNoteLengths(notes);
+  return notes;
+}
+
+/**
+ * A per-language notes file in the release-notes format below, without a
+ * store's length limit; `label` names the notes in errors. TestFlight's
+ * "What to Test" (`mpgd deploy testflight distribute --what-to-test`) reads
+ * the same file format as Google Play release notes.
+ */
+export function readLocalizedNotesFile(file: string, label = 'Release notes'): PlayReleaseNote[] {
   const resolved = path.resolve(file);
   if (!existsSync(resolved) || !statSync(resolved).isFile()) {
-    throw new Error(`Release notes file is missing: ${resolved}`);
+    throw new Error(`${label} file is missing: ${resolved}`);
   }
   if (statSync(resolved).size > maximumReleaseNotesFileBytes) {
-    throw new Error('Release notes file is larger than 256 KiB.');
+    throw new Error(`${label} file is larger than 256 KiB.`);
   }
-  return parsePlayReleaseNotes(readFileSync(resolved, 'utf8'));
+  return parseLocalizedNotes(readFileSync(resolved, 'utf8'), label);
 }
 
 /**
@@ -225,10 +237,17 @@ export function readPlayReleaseNotesFile(file: string): PlayReleaseNote[] {
  * or JSON: `{ "en-US": "Bug fixes." }` or `[{ "language": "en-US", "text": "Bug fixes." }]`.
  */
 export function parsePlayReleaseNotes(source: string): PlayReleaseNote[] {
+  const notes = parseLocalizedNotes(source);
+  assertPlayReleaseNoteLengths(notes);
+  return notes;
+}
+
+/** `parsePlayReleaseNotes` without Google Play's length limit. */
+export function parseLocalizedNotes(source: string, label = 'Release notes'): PlayReleaseNote[] {
   const content = source.replace(/^﻿/u, '');
   const trimmed = content.trim();
   if (trimmed === '') {
-    throw new Error('Release notes file is empty.');
+    throw new Error(`${label} file is empty.`);
   }
   let notes: PlayReleaseNote[];
   if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
@@ -236,7 +255,7 @@ export function parsePlayReleaseNotes(source: string): PlayReleaseNote[] {
     try {
       parsed = JSON.parse(trimmed);
     } catch {
-      throw new Error('Release notes JSON is malformed.');
+      throw new Error(`${label} JSON is malformed.`);
     }
     notes = Array.isArray(parsed)
       ? parsed.map((entry) => {
@@ -244,7 +263,7 @@ export function parsePlayReleaseNotes(source: string): PlayReleaseNote[] {
           || typeof (entry as { language?: unknown }).language !== 'string'
           || typeof (entry as { text?: unknown }).text !== 'string'
           || Object.keys(entry).some((key) => key !== 'language' && key !== 'text')) {
-          throw new Error('Release notes JSON array entries need only string language and text.');
+          throw new Error(`${label} JSON array entries need only string language and text.`);
         }
         const { language, text } = entry as { language: string; text: string };
         return { language, text: text.trim() };
@@ -252,7 +271,7 @@ export function parsePlayReleaseNotes(source: string): PlayReleaseNote[] {
       : typeof parsed === 'object' && parsed !== null
         ? Object.entries(parsed).map(([language, text]) => {
           if (typeof text !== 'string') {
-            throw new Error(`Release notes for ${language} must be a string.`);
+            throw new Error(`${label} for ${language} must be a string.`);
           }
           return { language, text: text.trim() };
         })
@@ -263,36 +282,47 @@ export function parsePlayReleaseNotes(source: string): PlayReleaseNote[] {
     let consumed = 0;
     for (const match of content.matchAll(block)) {
       if (content.slice(consumed, match.index).trim() !== '') {
-        throw new Error('Release notes text must sit between <language> and </language> tags.');
+        throw new Error(`${label} text must sit between <language> and </language> tags.`);
       }
       notes.push({ language: match[1] ?? '', text: (match[2] ?? '').trim() });
       consumed = match.index + match[0].length;
     }
     if (content.slice(consumed).trim() !== '') {
-      throw new Error('Release notes text must sit between <language> and </language> tags.');
+      throw new Error(`${label} text must sit between <language> and </language> tags.`);
     }
   }
-  assertPlayReleaseNotes(notes);
+  assertLocalizedNotes(notes, label);
   return notes;
 }
 
 export function assertPlayReleaseNotes(notes: readonly PlayReleaseNote[]): void {
+  assertLocalizedNotes(notes, 'Release notes');
+  assertPlayReleaseNoteLengths(notes);
+}
+
+/** One non-empty text per BCP-47 language, each language once. */
+export function assertLocalizedNotes(notes: readonly PlayReleaseNote[], label: string): void {
   if (notes.length === 0) {
-    throw new Error('Release notes need at least one language.');
+    throw new Error(`${label} need at least one language.`);
   }
   const seen = new Set<string>();
   for (const note of notes) {
     if (!languageTagPattern.test(note.language)) {
-      throw new Error(`Release notes language is not a BCP-47 tag: ${note.language}`);
+      throw new Error(`${label} language is not a BCP-47 tag: ${note.language}`);
     }
     const key = note.language.toLowerCase();
     if (seen.has(key)) {
-      throw new Error(`Release notes repeat the language ${note.language}.`);
+      throw new Error(`${label} repeat the language ${note.language}.`);
     }
     seen.add(key);
     if (note.text.trim() === '') {
-      throw new Error(`Release notes for ${note.language} are empty.`);
+      throw new Error(`${label} for ${note.language} are empty.`);
     }
+  }
+}
+
+function assertPlayReleaseNoteLengths(notes: readonly PlayReleaseNote[]): void {
+  for (const note of notes) {
     const length = [...note.text].length;
     if (length > maximumPlayReleaseNoteCharacters) {
       throw new Error(

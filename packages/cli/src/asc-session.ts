@@ -31,10 +31,15 @@ const maxJsonBytes = 8 * 1024 * 1024;
 /** asc exit code for an App Store Connect 404 (`cmd/exit_codes.go`, 5.5.0). */
 export const ascExitNotFound = 4;
 
-/** Copy and verify the pinned binary into a private directory; `close` removes it. */
+/**
+ * Copy and verify the pinned binary into a private directory; `close` removes
+ * it. `extraSecretValues` are redacted from asc output like the API key (for
+ * example a TestFlight review demo account password).
+ */
 export async function openAscSession(
   credential: AscCredential,
   signal?: AbortSignal,
+  extraSecretValues: readonly string[] = [],
 ): Promise<{ readonly run: AscCommandRunner; close(): void }> {
   if (!path.isAbsolute(credential.ascBinary)) {
     throw new Error('asc binary must be an absolute file path.');
@@ -55,7 +60,12 @@ export async function openAscSession(
         timeoutMs,
         maxOutputBytes: maxJsonBytes,
         captureMachineStdout: true,
-        secretValues: [credential.apiKeyId, credential.apiIssuerId, credential.apiPrivateKeyBase64],
+        secretValues: [
+          credential.apiKeyId,
+          credential.apiIssuerId,
+          credential.apiPrivateKeyBase64,
+          ...extraSecretValues.filter((value) => value !== ''),
+        ],
         signal,
       });
       if (result.truncated || result.machineStdout === undefined) {
