@@ -9,7 +9,12 @@ import {
 } from './app-store-server-notifications.js';
 import {
   AppStoreDependencyUnavailableError,
+  createAppStoreGameServicesEvidenceVerifier,
+  createAppStoreSignedTransactionEvidence,
   createAppStoreVerificationId,
+  createInMemoryAppStoreRevocationRegistry,
+  type AppStoreRevocationRecorder,
+  type AppStoreRevocationRegistry,
   type AppStoreTransactionPayload,
 } from './app-store-verifier.js';
 import { listActiveEntitlementTransactions } from './commerce-ledger.js';
@@ -99,16 +104,20 @@ async function grantFor(
 function handle(
   store: GameServicesStore,
   verifier: AppStoreServerNotificationVerifier,
-  input: { readonly body: unknown } = { body: { signedPayload: 'signed-payload' } },
+  input: {
+    readonly body?: unknown;
+    readonly revocations?: AppStoreRevocationRecorder;
+  } = {},
 ) {
   return handleAppStoreServerNotification({
     store,
     verifier,
-    body: input.body,
+    body: 'body' in input ? input.body : { signedPayload: 'signed-payload' },
     environment: 'Production',
     bundleId,
     signal: new AbortController().signal,
     now: () => '2026-10-24T12:00:00.000Z',
+    ...(input.revocations === undefined ? {} : { revocations: input.revocations }),
   });
 }
 
@@ -739,6 +748,269 @@ function handle(
     'retry',
     'the largest window is accepted',
   );
+}
+
+// Revocation registry: every REFUND and REVOKE of the customer's own
+// purchase is recorded before the ledger is read, granted or not.
+function lookupOf(registry: AppStoreRevocationRegistry, transaction: AppStoreTransactionPayload) {
+  return registry.findRevocation({
+    verificationId: createAppStoreVerificationId({
+      environment: transaction.environment,
+      bundleId: transaction.bundleId,
+      transactionId: transaction.type === 'Non-Consumable'
+        ? transaction.originalTransactionId
+        : transaction.transactionId,
+    }),
+    environment: transaction.environment,
+    bundleId: transaction.bundleId,
+    transactionId: transaction.transactionId,
+    originalTransactionId: transaction.originalTransactionId,
+    signal: new AbortController().signal,
+  });
+}
+
+{
+  // No grant, refunded long enough ago to be acknowledged: the refund used to
+  // leave no trace; it is now kept for the offline-only verifier.
+  const store = createInMemoryGameServicesStore();
+  const registry = createInMemoryAppStoreRevocationRegistry();
+  const refund = verifierOf(notification({ notificationUUID: 'uuid-before-grant' }));
+  const outcome = await handle(store, refund, { revocations: registry });
+  assert.deepEqual(outcome, {
+    status: 'ignored',
+    reason: 'APP_STORE_NOTIFICATION_GRANT_NOT_FOUND',
+    notificationUUID: 'uuid-before-grant',
+  });
+  assert.deepEqual(await lookupOf(registry, consumable), {
+    verificationId: createAppStoreVerificationId({
+      environment: 'Production',
+      bundleId,
+      transactionId: consumable.transactionId,
+    }),
+    environment: 'Production',
+    bundleId,
+    transactionId: consumable.transactionId,
+    originalTransactionId: consumable.originalTransactionId,
+    productId: consumable.productId,
+    reason: 'refund',
+    revokedAt: '2026-10-23T00:00:00.000Z',
+    notificationType: 'REFUND',
+    notificationUUID: 'uuid-before-grant',
+  });
+  assert.equal(
+    (await handle(store, refund, { revocations: registry })).status,
+    'ignored',
+    'a redelivery records nothing new and answers as before',
+  );
+
+  // A recent refund with no grant is still retried, and recorded at once.
+  const recentRegistry = createInMemoryAppStoreRevocationRegistry();
+  const recent = verifierOf(
+    notification({
+      notificationUUID: 'uuid-recent',
+      transaction: { ...consumable, revocationDate: Date.parse('2026-10-24T11:30:00.000Z') },
+    }),
+  );
+  assert.equal((await handle(store, recent, { revocations: recentRegistry })).status, 'retry');
+  assert.equal(
+    (await lookupOf(recentRegistry, consumable))?.revokedAt,
+    '2026-10-24T11:30:00.000Z',
+    'a refund still retried is recorded on its first delivery',
+  );
+
+  // Without a revocationDate the notification's signedDate is kept.
+  const undated = createInMemoryAppStoreRevocationRegistry();
+  const { revocationDate: _revocationDate, ...withoutRevocationDate } = consumable;
+  await handle(store, verifierOf(notification({ transaction: withoutRevocationDate })), {
+    revocations: undated,
+  });
+  assert.equal((await lookupOf(undated, consumable))?.revokedAt, '2026-10-24T00:00:00.000Z');
+
+  // A granted purchase is recorded and revoked; a REVOKE is `voided`.
+  const grantedStore = createInMemoryGameServicesStore();
+  await grantFor(grantedStore, nonConsumable);
+  const grantedRegistry = createInMemoryAppStoreRevocationRegistry();
+  const revoked = await handle(
+    grantedStore,
+    verifierOf(
+      notification({
+        notificationType: 'REVOKE',
+        notificationUUID: 'uuid-revoke',
+        transaction: nonConsumable,
+      }),
+    ),
+    { revocations: grantedRegistry },
+  );
+  assert.equal(revoked.status, 'revoked');
+  const nonConsumableRecord = await lookupOf(grantedRegistry, nonConsumable);
+  assert.equal(nonConsumableRecord?.reason, 'voided');
+  assert.equal(
+    nonConsumableRecord?.verificationId,
+    createAppStoreVerificationId({
+      environment: 'Production',
+      bundleId,
+      transactionId: nonConsumable.originalTransactionId,
+    }),
+    'a non-consumable is keyed by its original transaction, as its grant is',
+  );
+
+  // Nothing is recorded for what is not the customer's own refund or revocation.
+  const untouched = createInMemoryAppStoreRevocationRegistry();
+  for (const event of [
+    notification({ notificationType: 'REFUND_REVERSED', notificationUUID: 'uuid-reversed' }),
+    notification({ notificationType: 'REFUND_DECLINED', notificationUUID: 'uuid-declined' }),
+    notification({ notificationType: 'CONSUMPTION_REQUEST', notificationUUID: 'uuid-consumption' }),
+    notification({
+      notificationType: 'REVOKE',
+      notificationUUID: 'uuid-family',
+      transaction: { ...nonConsumable, inAppOwnershipType: 'FAMILY_SHARED' },
+    }),
+    notification({
+      notificationUUID: 'uuid-other-bundle',
+      transaction: { ...consumable, bundleId: 'com.example.other' },
+    }),
+  ]) {
+    await handle(store, verifierOf(event), { revocations: untouched });
+  }
+  assert.equal(await lookupOf(untouched, consumable), undefined);
+  assert.equal(
+    await lookupOf(untouched, nonConsumable),
+    undefined,
+    'a family member’s revocation never refuses the purchaser',
+  );
+
+  // A recorder outage asks Apple to redeliver before the ledger is touched.
+  const outageStore = createInMemoryGameServicesStore();
+  const outageGrant = await grantFor(outageStore, consumable);
+  const outage = await handle(outageStore, verifierOf(notification()), {
+    revocations: {
+      async recordRevocation() {
+        throw new AppStoreDependencyUnavailableError('registry down');
+      },
+    },
+  });
+  assert.deepEqual(outage, {
+    status: 'retry',
+    reason: 'APP_STORE_REVOCATION_REGISTRY_UNAVAILABLE',
+    notificationUUID: 'uuid-refund-1',
+  });
+  assert.equal(appStoreServerNotificationHttpStatus(outage), 503);
+  assert.equal(
+    (await outageStore.findEntitlementRevocations({
+      ledgerEntryIds: [outageGrant.ledgerEntryId],
+    })).length,
+    0,
+    'the ledger is untouched until the refund is recorded',
+  );
+  await assert.rejects(
+    handle(outageStore, verifierOf(notification()), {
+      revocations: {
+        async recordRevocation() {
+          throw new Error('registry bug');
+        },
+      },
+    }),
+    /registry bug/u,
+    'any other recorder error propagates, for a 5xx',
+  );
+}
+
+// RF1 left this gap: a consumable refunded before its first grant, while the
+// client still holds a JWS signed before the refund. Server API mode reads the
+// refund from Apple; offline-only now reads it from the recorded notification.
+{
+  const preRefund: AppStoreTransactionPayload = {
+    transactionId: '2000000000000777',
+    originalTransactionId: '2000000000000777',
+    bundleId,
+    productId: consumable.productId,
+    purchaseDate: Date.parse('2026-10-24T10:00:00.000Z'),
+    signedDate: Date.parse('2026-10-24T10:00:01.000Z'),
+    environment: 'Production',
+    type: 'Consumable',
+    appAccountToken: 'f15f2ed7-f92a-4c5a-90e1-15d26cd729f2',
+  };
+  function createOfflineBackend(registry: AppStoreRevocationRegistry) {
+    const store = createInMemoryGameServicesStore();
+    const backend = createGameServicesBackend({
+      catalog: {
+        version: 'offline-only',
+        products: [{
+          id: 'COINS_100',
+          type: 'consumable',
+          grant: { type: 'currency', currency: 'coin', amount: 100 },
+          platformProductIds: { ios: consumable.productId },
+        }],
+      },
+      placements: { version: 'offline-only', placements: [] },
+      store,
+      evidenceVerifier: createAppStoreGameServicesEvidenceVerifier({
+        bundleId,
+        environment: 'Production',
+        serverApi: {
+          async getTransactionInfo() {
+            throw new Error('offline-only never calls the Server API');
+          },
+        },
+        signedTransactionVerifier: {
+          async verifyAndDecode(input) {
+            assert.equal(input.signedTransaction, 'pre-refund-jws');
+            return { status: 'verified', payload: preRefund };
+          },
+        },
+        resolveAppAccountToken: () => preRefund.appAccountToken ?? '',
+        now: () => '2026-10-24T13:00:00.000Z',
+        signedTransactionEvidence: {
+          mode: 'offline-only',
+          // The pre-refund JWS (signed at 10:00) is well inside the window.
+          maxSignedAgeMs: 24 * 60 * 60 * 1000,
+          revocations: registry,
+        },
+      }),
+    });
+    return { store, backend };
+  }
+  const request = {
+    target: 'ios',
+    playerId: 'player-refunded',
+    productId: 'COINS_100',
+    platformTransactionId: preRefund.transactionId,
+    idempotencyKey: 'checkout-refunded',
+    purchasedAt: '2026-10-24T10:00:00.000Z',
+    evidence: createAppStoreSignedTransactionEvidence({
+      signedTransaction: 'pre-refund-jws',
+      transactionId: preRefund.transactionId,
+    }),
+  } as const;
+
+  // The refund reaches the backend first: no grant exists, so the ledger
+  // has nothing to reverse, and the notification is acknowledged.
+  const registry = createInMemoryAppStoreRevocationRegistry();
+  const { store, backend } = createOfflineBackend(registry);
+  const refund = await handle(
+    store,
+    verifierOf(
+      notification({
+        notificationUUID: 'uuid-refund-before-grant',
+        transaction: { ...preRefund, revocationDate: Date.parse('2026-10-24T10:30:00.000Z') },
+      }),
+    ),
+    { revocations: registry },
+  );
+  assert.equal(refund.status, 'ignored', 'the refund finds no grant to reverse');
+
+  const refused = await backend.purchases.verifyPurchase(request);
+  assert.equal(refused.verified, false, 'the pre-refund JWS within the window is refused');
+  assert.equal(refused.reason, 'APP_STORE_TRANSACTION_REVOKED');
+  assert.equal(
+    (await store.listEntitlementTransactions()).length,
+    0,
+    'no grant is written, so no grant stands without a reversal behind it',
+  );
+
+  // Without the recorded refund the same JWS would grant: the gap this closes.
+  const control = createOfflineBackend(createInMemoryAppStoreRevocationRegistry());
+  assert.equal((await control.backend.purchases.verifyPurchase(request)).verified, true);
 }
 
 console.log('App Store Server Notifications handler tests passed.');

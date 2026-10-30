@@ -121,7 +121,9 @@ where `signedTransaction` is the same JWS as `StorePurchase.token`.
 its `signedTransactionVerifier` (authenticity and transaction id binding)
 and then, by default, decides the grant on the transaction's current status
 from the App Store Server API, so a JWS retained from before a refund never
-grants; see the backend guide for the opt-in offline-only mode. Subscription
+grants; see the backend guide for the opt-in offline-only mode, which instead
+refuses a refund the backend recorded from App Store Server Notifications
+(its `revocations` registry is required). Subscription
 mappings are rejected at construction. `getAppAccountToken` also filters
 recovery and finishing to the current player, so it must keep answering
 while sales are paused: pause new sales with the optional `purchaseGate`
