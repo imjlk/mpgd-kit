@@ -1773,6 +1773,8 @@ assertEqual(
 
   // Offline-only decides on the client JWS: no Server API call at all.
   const offlineCalls: string[] = [];
+  const sandboxRegistry = createInMemoryAppStoreRevocationRegistry();
+  const sandboxLookups: string[] = [];
   const offlineSandbox = createAppStoreGameServicesEvidenceVerifier({
     ...base,
     serverApi: recordingApi(offlineCalls, 'found'),
@@ -1784,14 +1786,19 @@ assertEqual(
     signedTransactionEvidence: {
       mode: 'offline-only',
       maxSignedAgeMs: 24 * 60 * 60 * 1000,
-      revocations: createInMemoryAppStoreRevocationRegistry(),
+      revocations: {
+        async findRevocation(input) {
+          sandboxLookups.push(`${input.environment}|${input.verificationId}`);
+          return sandboxRegistry.findRevocation(input);
+        },
+      },
     },
     sandboxPurchases: {
       mode: 'grant',
       signedTransactionVerifier: permissiveVerifier(sandboxTransaction),
     },
   });
-  const offlineDecision = await offlineSandbox.verifyPurchase({
+  const offlineSandboxInput = {
     ...baseInput,
     request: {
       ...baseInput.request,
@@ -1800,13 +1807,61 @@ assertEqual(
         transactionId: baseInput.request.platformTransactionId,
       }),
     },
-  });
+  };
+  const offlineDecision = await offlineSandbox.verifyPurchase(offlineSandboxInput);
   assertEqual(
     offlineDecision.status,
     'verified',
     'offline-only verifies a sandbox JWS in the sandbox',
   );
   assertEqual(offlineCalls.length, 0, 'offline-only makes no Server API call');
+  const sandboxVerificationId = createAppStoreVerificationId({
+    environment: 'Sandbox',
+    bundleId: sandboxTransaction.bundleId,
+    transactionId: sandboxTransaction.transactionId,
+  });
+  assertEqual(
+    sandboxLookups.join(','),
+    `Sandbox|${sandboxVerificationId}`,
+    'a sandbox JWS is looked up under its sandbox grant identity',
+  );
+  const sandboxRevocation = {
+    verificationId: createAppStoreVerificationId({
+      environment: 'Production',
+      bundleId: sandboxTransaction.bundleId,
+      transactionId: sandboxTransaction.transactionId,
+    }),
+    environment: 'Production' as const,
+    bundleId: sandboxTransaction.bundleId,
+    transactionId: sandboxTransaction.transactionId,
+    originalTransactionId: sandboxTransaction.originalTransactionId,
+    productId: sandboxTransaction.productId,
+    reason: 'refund' as const,
+    revokedAt: '2026-07-16T12:30:00.000Z',
+    notificationType: 'REFUND',
+    notificationUUID: 'uuid-production-refund',
+  };
+  await sandboxRegistry.recordRevocation({ record: sandboxRevocation, signal: controller.signal });
+  assertEqual(
+    (await offlineSandbox.verifyPurchase(offlineSandboxInput)).status,
+    'verified',
+    'a production refund of the same id never refuses a sandbox transaction',
+  );
+  await sandboxRegistry.recordRevocation({
+    record: {
+      ...sandboxRevocation,
+      verificationId: sandboxVerificationId,
+      environment: 'Sandbox',
+      notificationUUID: 'uuid-sandbox-refund',
+    },
+    signal: controller.signal,
+  });
+  assertDecision(
+    await offlineSandbox.verifyPurchase(offlineSandboxInput),
+    'rejected',
+    'APP_STORE_TRANSACTION_REVOKED',
+    'a recorded sandbox refund refuses the sandbox JWS',
+  );
 
   // A client JWS verified in production keeps a production miss pending.
   const lagCalls: string[] = [];

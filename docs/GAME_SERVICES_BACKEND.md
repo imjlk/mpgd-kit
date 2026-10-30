@@ -1077,9 +1077,18 @@ the purchase verifier, one per environment.
   pre-refund JWS is refused even when the refund arrived before any grant.
   A recorder outage (`AppStoreDependencyUnavailableError`) is `retry` (503,
   `APP_STORE_REVOCATION_REGISTRY_UNAVAILABLE`) before the ledger is touched;
-  any other recorder error is thrown. `REFUND_REVERSED` leaves the record in
-  place, as it leaves a reversed grant reversed: the game re-grants on its
-  own terms. A `FAMILY_SHARED` revocation is never recorded.
+  any other recorder error is thrown. A `FAMILY_SHARED` revocation is never
+  recorded. A record's `revokedAt` is the ledger's: Apple's `revocationDate`,
+  else the handling time. A record may be dropped once `revokedAt` is older
+  than the verifier's `maxSignedAgeMs` plus `clockSkewMs`, since every JWS
+  signed before it is then stale and one signed after it carries its own
+  `revocationDate`.
+- `REFUND_REVERSED` leaves the record in place, as it leaves a reversed
+  grant reversed. That includes a refund reversed before any grant: the
+  offline-only verifier keeps refusing that purchase (a Server API verifier
+  would grant it), and the notification is `ignored`
+  (`APP_STORE_NOTIFICATION_GRANT_NOT_FOUND`) with no ledger note. Support
+  re-grants such a purchase on the game's own terms, as after any reversal.
 - `REFUND` reverses the grant with reason `refund`, keyed
   `app-store:notification:<notificationUUID>`. Non-consumables are found by
   their original transaction id, consumables by their own. `REVOKE` is

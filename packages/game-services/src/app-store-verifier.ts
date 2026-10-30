@@ -205,7 +205,13 @@ export interface AppStoreRevocationRecord {
   readonly originalTransactionId: string;
   readonly productId: string;
   readonly reason: AppStoreRevocationReason;
-  /** When Apple revoked it: the transaction's `revocationDate`, else the notification's `signedDate`. */
+  /**
+   * When Apple revoked it: the transaction's `revocationDate`, else when the
+   * notification was handled (the ledger `revoke` entry's `revokedAt`). A
+   * record may be dropped once `revokedAt` is older than the verifier's
+   * `maxSignedAgeMs` plus `clockSkewMs`: every JWS signed before it is then
+   * stale, and one signed after it carries its own `revocationDate`.
+   */
   readonly revokedAt: string;
   readonly notificationType: string;
   readonly notificationUUID: string;

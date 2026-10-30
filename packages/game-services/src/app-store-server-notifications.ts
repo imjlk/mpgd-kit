@@ -265,6 +265,7 @@ export async function handleAppStoreServerNotification(
       : transaction.transactionId,
   });
   const now = input.now ?? (() => new Date().toISOString());
+  const revokedAt = readTimestamp(transaction.revocationDate) ?? now();
   if (reason !== undefined && input.revocations !== undefined) {
     // Recorded before the ledger is read, so a grant that does not exist
     // yet is refused by an offline-only verifier instead of only retried.
@@ -278,7 +279,7 @@ export async function handleAppStoreServerNotification(
           originalTransactionId: transaction.originalTransactionId,
           productId: transaction.productId,
           reason,
-          revokedAt: readTimestamp(transaction.revocationDate ?? notification.signedDate) ?? now(),
+          revokedAt,
           notificationType: notification.notificationType,
           notificationUUID,
         },
@@ -337,7 +338,6 @@ export async function handleAppStoreServerNotification(
       },
     });
   }
-  const revokedAt = readTimestamp(transaction.revocationDate) ?? now();
   const result = await revokeEntitlementGrant(input.store, {
     playerId: grant.playerId,
     revokesLedgerEntryId: grant.ledgerEntryId,
