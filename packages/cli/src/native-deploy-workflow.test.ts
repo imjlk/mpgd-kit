@@ -35,6 +35,8 @@ try {
   assert.match(workflow, /deploy_android:/u);
   assert.match(workflow, /deploy_ios:/u);
   assert.match(workflow, /runs-on: macos-26/u);
+  assert.equal(workflow.match(/runs-on: ubuntu-24\.04$/gmu)?.length, 2);
+  assert.doesNotMatch(workflow, /ubuntu-latest/u);
   assert.match(workflow, /contents: write/u);
   assert.match(workflow, /actions: read/u);
   assert.match(workflow, /actions\/download-artifact@v7/u);
