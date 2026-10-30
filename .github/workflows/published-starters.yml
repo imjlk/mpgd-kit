@@ -33,7 +33,7 @@ concurrency:
 jobs:
   source:
     if: ${{ github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -108,7 +108,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-24.04, windows-latest]
         template: [phaser, lite]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
@@ -208,7 +208,7 @@ jobs:
   published-starters-required:
     if: ${{ always() && (github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository)) }}
     needs: [source, consumer, native]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:
       RESULTS: ${{ toJSON(needs) }}
