@@ -1,5 +1,28 @@
 # @mpgd/game-services
 
+## 0.33.0 — 2026-10-30
+
+### Changed
+
+- [93af15c9](https://github.com/imjlk/mpgd-kit/commit/93af15c98cd10e9e2f45f9b7b2fafa618d549e37) The App Store verifier's `offline-only` mode no longer grants a transaction the backend already knows was refunded or revoked. A client can keep a JWS signed before a refund, and a refund that reaches the backend before the first grant left no ledger grant to reverse, so a pre-refund JWS inside `maxSignedAgeMs` was granted with no reversal behind it.
+  
+  - `handleAppStoreServerNotification` takes an optional `revocations` recorder (`AppStoreRevocationRecorder`). Every `REFUND` and `REVOKE` of the customer's own one-time purchase is recorded there before the ledger is read, whether or not a grant exists, keyed by the grant's verification id; the registry keeps the latest revocation per key (a purchase refunded, reversed, and revoked again is refused for any JWS signed before the last revocation), and a redelivery changes nothing. A recorder outage (`AppStoreDependencyUnavailableError`) answers `retry` (`APP_STORE_REVOCATION_REGISTRY_UNAVAILABLE`) before the ledger is touched. `FAMILY_SHARED` revocations, `REFUND_REVERSED`, and other types record nothing.
+  - In `offline-only` mode, before a `verified`, `restorable`, or another-account answer (so a recorded refund refuses every presenter), the verifier looks the grant identity up in `signedTransactionEvidence.revocations` (`AppStoreRevocationLookup`) and refuses a JWS signed at or before a recorded refund or revocation (its `revokedAt` plus `clockSkewMs`; a `revokedAt` that does not parse refuses every JWS) with `APP_STORE_TRANSACTION_REVOKED`, the refusal the commerce reconciler finishes a refunded consumable on. A JWS signed later without a `revocationDate` shows that Apple reversed the refund and is granted, as the Server API mode grants it; one with a `revocationDate` is refused by the existing payload check. A lookup outage is `pending` (`APP_STORE_REVOCATION_LOOKUP_UNAVAILABLE`).
+  - New exports: `AppStoreRevocationRecord`, `AppStoreRevocationReason`, `AppStoreRevocationLookup`, `AppStoreRevocationRecorder`, `AppStoreRevocationRegistry`, and `createInMemoryAppStoreRevocationRegistry` (tests and single-process hosts only; a deployment needs a durable registry that both the notification handler and every purchase verifier instance read).
+  
+  **Breaking for `offline-only` deployments:** `{ mode: 'offline-only', maxSignedAgeMs }` now also requires `revocations`, and construction throws without it. Pass a durable registry, and pass the same registry's recorder to `handleAppStoreServerNotification({ revocations })`. The `server-api` (default) and `ignore` modes are unchanged. — Thanks @imjlk!
+- [cd6b9ceb](https://github.com/imjlk/mpgd-kit/commit/cd6b9ceb313bdd9b9db4a459587f8d073ba35596) The commerce reconciler finishes a consumable the store reports revoked (refunded while it was still unfinished), with `revoked: true`, only on a `client`-finish provider that declares `acceptsRevokedFinish`, once per session (a transport failure is asked again after the retry interval):
+  - once this player's record holds the backend's answer for the refund: `revoked` (the ledger reversed the grant, read through `getPurchaseLedgerStatus`; the finish names the reversed grant), or `rejected` with `APP_STORE_TRANSACTION_REVOKED` or `LEDGER_GRANT_REVERSED` (no ledger entry). A refusal for any other reason keeps the transaction unfinished;
+  - at once, without a verify and without journaling anything, when this player holds no record of it and the store binds it to this player's own account (the reconciler's `accountBinding` must read and match). Verifying it could grant from a signed transaction saved before the refund.
+  
+  A refusal is reported and not counted as asked, so the next report asks again. A refund notice of a consumable whose record already finished is not noted, and a revoked report is never attached to an open attempt (it may be another purchase in flight, such as an Ask to Buy). Every such finish is reported with a new `revoked-finish` reconciler event. Nothing is granted, re-granted, or verified, and no record is rewritten. While the grant stands the transaction stays unfinished, as before. A revoked report is now matched only to this player's record of the same transaction, so it no longer reads open attempts. `commerceRevokedRejectionReasons` lists the refusals that answer for a refund.
+  
+  `CommerceReconcilerEvent` gains the `revoked-finish` variant, which carries no `record`: a subscriber that reads `event.record` after excluding only `failure` must also exclude `revoked-finish`. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/analytics@0.5.8, @mpgd/catalog@0.14.2, @mpgd/platform@0.35.0
+
 ## 0.32.0 — 2026-10-29
 
 ### Added

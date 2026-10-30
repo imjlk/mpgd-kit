@@ -1,5 +1,15 @@
 # @mpgd/target-config
 
+## 0.24.6 — 2026-10-30
+
+### Fixed
+
+- [cd6b9ceb](https://github.com/imjlk/mpgd-kit/commit/cd6b9ceb313bdd9b9db4a459587f8d073ba35596) The commerce provider `withTargetAvailability` builds now keeps the source provider's `acceptsFinishRetry` and `acceptsRevokedFinish`. It forwarded `finishTransaction` unchanged but dropped both declarations, so a reconciler behind it never sent the retried-finish hint or the revoked finish of a refunded, still-unfinished StoreKit consumable. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/catalog@0.14.2, @mpgd/i18n@0.6.29, @mpgd/platform@0.35.0
+
 ## 0.24.5 — 2026-10-29
 
 ### Fixed

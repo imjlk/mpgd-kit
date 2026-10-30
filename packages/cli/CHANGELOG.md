@@ -1,5 +1,16 @@
 # @mpgd/cli
 
+## 0.67.0 — 2026-10-30
+
+### Changed
+
+- [ac6100c6](https://github.com/imjlk/mpgd-kit/commit/ac6100c6aa3a15fbc4d4c6815857acd961407d20) The Phaser template's `PlayScene` follows `runtime.actions.subscribeAvailability`: while any purchase (one from the shop included) or ad holds the screen its rewarded-ad hint reads `rewardNotReady` without a key press (`rewardReconciling` while an earlier result awaits confirmation, `rewardHistoryFull` once the action history is full, which lasts until the runtime is recreated), and it returns to the hint once they are ready. The scene's own request does not show it, and a result or error text is never replaced by the hint. The key-press check of `getAvailability()` stays as the guard. — Thanks @imjlk!
+- [a302a3af](https://github.com/imjlk/mpgd-kit/commit/a302a3aff68b7224418be6c94d6094ff98da10cc) `mpgd deploy workflow init` now writes `runs-on: ubuntu-24.04` for the PR validation and Android deployment jobs instead of `ubuntu-latest`, so a GitHub `ubuntu-latest` roll-over no longer moves a game's release builds to a new Ubuntu release, with different preinstalled toolchains, without a workflow change. The iOS job keeps `macos-26`. Workflows generated earlier are not rewritten; edit their `runs-on:` lines to adopt the pin. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/adapter-ait@0.21.8, @mpgd/adapter-browser@0.12.4, @mpgd/adapter-capacitor@0.19.0, @mpgd/adapter-devvit@0.14.10, @mpgd/adapter-verse8@0.7.19, @mpgd/analytics@0.5.8, @mpgd/bridge@0.18.1, @mpgd/capacitor-play-billing@0.6.1, @mpgd/capacitor-storekit@0.7.0, @mpgd/catalog@0.14.2, @mpgd/game-runtime@0.10.0, @mpgd/game-services@0.33.0, @mpgd/i18n@0.6.29, @mpgd/platform@0.35.0, @mpgd/target-config@0.24.6
+
 ## 0.66.0 — 2026-10-29
 
 ### Fixed
