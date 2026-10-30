@@ -234,6 +234,8 @@ try {
 
     const applied = await applyTestFlightDistribution(port, external);
     assert.equal(applied.dryRun, false);
+    // The report shows the state after the submission, not the planned one.
+    assert.equal(applied.externalBuildState, 'WAITING_FOR_BETA_REVIEW');
     assert.deepEqual(applied.betaReview, {
       status: 'waiting-for-review',
       submit: true,
@@ -350,6 +352,9 @@ try {
     assert.deepEqual(result.betaReview, { status: 'not-needed', submit: false });
     // Nothing was written to the review details, so the report lists none.
     assert.deepEqual(result.reviewDetailFields, []);
+    // The report shows the state read after the groups were added.
+    assert.equal(planned.externalBuildState, 'READY_FOR_BETA_SUBMISSION');
+    assert.equal(result.externalBuildState, 'READY_FOR_BETA_TESTING');
     assert.equal(state.writes.includes('submit'), false);
     assert.equal(
       state.writes.some((write) => write.startsWith('review-details')),
@@ -382,6 +387,19 @@ try {
     assert.equal(status.buildIdRecorded, false);
     assert.equal(status.buildId, buildId);
     assert.equal((await readTestFlightBuildStatus(port, target)).buildIdRecorded, true);
+  }
+
+  // Review notes over App Store Connect's limit fail before any write, without the file parser.
+  {
+    const { state, port } = fake();
+    await assert.rejects(
+      applyTestFlightDistribution(port, {
+        ...external,
+        betaReview: { ...review, notes: 'x'.repeat(4001) },
+      }),
+      /TestFlight review notes allow 4000 characters/u,
+    );
+    assert.deepEqual(state.writes, []);
   }
 
   // What to Test notes are validated before any write, without the file parser.

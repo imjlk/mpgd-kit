@@ -237,11 +237,15 @@ export async function applyTestFlightDistribution(
   let betaReview = plan.betaReview;
   let detail = plan.detail;
   let submit = plan.submit;
+  // The build's TestFlight states as the report shows them: re-read after the
+  // writes that can change them.
+  let state = plan.state;
   if (submit) {
     // Adding the external group may have changed the review state; submit
     // only a build that still waits for its first submission.
+    state = await port.readBuildBetaState(plan.build.id);
     const after = classifyExternalReview(
-      (await port.readBuildBetaState(plan.build.id)).externalBuildState,
+      state.externalBuildState,
       latestSubmission(await port.listBetaReviewSubmissions(plan.build.id)),
     );
     if (after.kind !== 'status' || after.status !== 'not-submitted') {
@@ -265,6 +269,11 @@ export async function applyTestFlightDistribution(
       status: classifySubmissionState(submission.betaReviewState) ?? 'waiting-for-review',
       submissionId: submission.id,
     };
+    try {
+      state = await port.readBuildBetaState(plan.build.id);
+    } catch {
+      // The submission is done; a failed read keeps the state read just before it.
+    }
   }
   // Review details are written only with a submission; when the recheck
   // cancelled it, none were written.
@@ -279,6 +288,7 @@ export async function applyTestFlightDistribution(
       groups: plan.groups.map((group) =>
         group.membership === 'add' ? { ...group, membership: 'added' } : group,
       ),
+      state,
       betaReview,
       submit,
       ...(detail === undefined ? {} : { detail }),
@@ -743,6 +753,12 @@ function planReviewDetail(
       changes[key] = wanted;
     }
     effective[key] = wanted ?? current;
+  }
+  const notes = input?.notes;
+  if (notes !== undefined && [...notes.trim()].length > maximumBetaReviewNotesCharacters) {
+    throw new Error(
+      `TestFlight review notes allow ${maximumBetaReviewNotesCharacters} characters.`,
+    );
   }
   const demo = input?.demoAccount;
   const demoRequired = demo?.required ?? detail.demoAccountRequired;
