@@ -216,8 +216,8 @@ export interface CommerceConformanceFinishCall {
   /** Absent on a revoked finish of a purchase never granted. */
   readonly ledgerEntryId?: string;
   readonly isConsumable: boolean;
-  /** A revoked finish (`FinishTransactionInput.revoked`). */
-  readonly revoked?: true;
+  /** A revoked finish (`FinishTransactionInput.revoked`); the store records only `true`. */
+  readonly revoked?: boolean;
   readonly result: 'finished' | 'unfinished' | CommerceErrorCode;
 }
 
@@ -1365,10 +1365,18 @@ export function createCommerceConformanceRuntime(
         transactionId: purchase.transactionId,
         token: purchase.token,
       }));
-      record = derived?.playerId === playerId
-        && derived.purchase?.transactionId === purchase.transactionId
-        ? remember(derived)
-        : undefined;
+      if (derived !== undefined) {
+        if (
+          derived.playerId !== playerId
+          || derived.purchase?.transactionId !== purchase.transactionId
+        ) {
+          // Another player's record holds the key, or this player's key names
+          // another purchase: not this player's to finish, as the
+          // `@mpgd/game-services` reconciler answers.
+          return;
+        }
+        record = remember(derived);
+      }
     }
     if (record === undefined) {
       // No record: only a revoked consumable bound to this player's own account.

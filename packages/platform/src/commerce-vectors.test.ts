@@ -80,6 +80,29 @@ describe('commerce conformance vectors', () => {
     expect(vector.profile.adaptive).toBeUndefined();
   });
 
+  it('requires the ledger entry on every finish expectation except a revoked one', () => {
+    const base = assertCommerceConformanceVector(
+      readVector('revoked-unfinished-after-grant.json', reconcilerVectorsDir),
+    );
+    const withFinishCalls = (finishCalls: unknown): unknown => ({
+      ...base,
+      expect: { ...base.expect, finishCalls },
+    });
+    const call = { by: 'client', transactionId: 'tx-1', isConsumable: true, result: 'finished' };
+    // An ordinary finish always names the grant's ledger entry.
+    expect(isCommerceConformanceVector(withFinishCalls([call]))).toBe(false);
+    expect(isCommerceConformanceVector(withFinishCalls([{ ...call, revoked: false }]))).toBe(false);
+    expect(isCommerceConformanceVector(withFinishCalls([{ ...call, ledgerEntryId: 'le-1' }]))).toBe(true);
+    // A revoked finish names the reversed grant, or none when nothing was granted.
+    expect(isCommerceConformanceVector(withFinishCalls([{ ...call, revoked: true }]))).toBe(true);
+    expect(isCommerceConformanceVector(withFinishCalls([
+      { ...call, revoked: true, ledgerEntryId: 'le-1' },
+    ]))).toBe(true);
+    expect(isCommerceConformanceVector(withFinishCalls([
+      { ...call, revoked: true, ledgerEntryId: '' },
+    ]))).toBe(false);
+  });
+
   it('rejects malformed another-account decisions and steps', () => {
     const base = assertCommerceConformanceVector(
       readVector('another-account-http-parks.json', reconcilerVectorsDir),

@@ -281,14 +281,34 @@ export interface CommerceConformanceLedgerEntryExpectation {
   readonly reason?: NonEmptyString;
 }
 
-export interface CommerceConformanceFinishCallExpectation {
+/**
+ * One expected `finishTransaction` call: an ordinary finish, which always
+ * names the grant's ledger entry, or a revoked finish
+ * (`FinishTransactionInput.revoked`), which names the reversed grant when
+ * there was one and none when nothing was granted.
+ */
+export type CommerceConformanceFinishCallExpectation =
+  | CommerceConformanceGrantedFinishCallExpectation
+  | CommerceConformanceRevokedFinishCallExpectation;
+
+export interface CommerceConformanceGrantedFinishCallExpectation {
   readonly by: 'client' | 'host';
   readonly transactionId: NonEmptyString;
-  /** The grant's ledger entry; a revoked finish of a purchase never granted names none. */
+  /** The grant's ledger entry. */
+  readonly ledgerEntryId: NonEmptyString;
+  readonly isConsumable: boolean;
+  readonly revoked?: false;
+  readonly result: 'finished' | 'unfinished' | CommerceErrorCode;
+}
+
+export interface CommerceConformanceRevokedFinishCallExpectation {
+  readonly by: 'client' | 'host';
+  readonly transactionId: NonEmptyString;
+  /** The reversed grant's ledger entry; absent when nothing was granted. */
   readonly ledgerEntryId?: NonEmptyString;
   readonly isConsumable: boolean;
   /** A revoked finish (`FinishTransactionInput.revoked`). */
-  readonly revoked?: true;
+  readonly revoked: true;
   readonly result: 'finished' | 'unfinished' | CommerceErrorCode;
 }
 
