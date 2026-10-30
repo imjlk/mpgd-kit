@@ -75,10 +75,12 @@ Nothing new to learn: the release reads files the game already has.
 guest flow): App Review then sees "sign-in not required". With it, the file
 holds only the **names** of two environment variables, never the values,
 the same way the deployment profile names the store credential. `plan` and
-`apply` read both variables and fail when one is unset; the values never go
-into a plan file (the plan keeps only a digest of the user name, to
-notice a change). The password is at most 100 characters; a value that starts or ends with
-whitespace is refused, because asc strips it before sending.
+`apply` read both variables. An unset variable, a password over 100
+characters, or a value that starts or ends with whitespace (asc strips it
+before sending) is a blocker, so a plan can be made and reviewed where the
+secrets are not set; `apply` refuses it, and a plan made later with the
+variables set is a new plan. The values never go into a plan file (the plan
+keeps only a digest of the user name, to notice a change).
 
 `mpgd.targets.json`: the ios target's `metadata.iosDeviceFamily`. `universal`
 (and an unset value, the Capacitor iOS template's iPhone and iPad) makes the
@@ -240,8 +242,18 @@ version). Subscriptions are not part of the release.
 
 The plan reuses the open iOS review submission (`READY_FOR_REVIEW`) or
 creates one, adds the version (`appStoreVersions`) and the purchases, then
-submits it. Items already in the submission are not added again; items the
-plan did not add block it, so nothing unexpected is submitted along.
+submits it. Items already in the submission are not added again. Other
+in-app purchase items in it (added by hand) are noted and submitted with the
+version; any other item blocks the plan, so nothing unexpected is submitted
+along.
+
+Adding a purchase as an `inAppPurchaseVersions` item follows Apple's
+`ReviewSubmissionItemCreateRequest` (its `inAppPurchaseVersion` relationship)
+and asc 5.5.0's item type, but has not run against a live account yet. If App
+Store Connect refuses it, re-running the same plan would fail at the same step,
+so the error says what to do instead: add the named purchases to the version
+by hand in App Store Connect (or leave them for a later version), then plan
+again with `--skip-iap <ids>` and apply that plan to submit.
 
 ## Apply, re-runs and partial failures
 
@@ -262,7 +274,9 @@ items) and lists only what is left, then `apply` that plan.
 ## Status, publish and phased release
 
 `status` reads the version (the named one, else the newest), its build, the
-newest review submission that holds it with each item's state, and its
+review submission that holds it with each item's state (it reads every open
+submission, then at most the 5 newest completed ones submitted since the
+version was created, one asc call each, and says so when none matched), and its
 phased release, and prints one sentence: in preparation (with what to run),
 waiting for review since when, in review, returned by App Review, approved
 and waiting for `publish`, or released (with the phased release day).
@@ -307,7 +321,10 @@ a real App Store Connect account and correct the kit if Apple disagrees:
       is `READY_TO_SUBMIT` has exactly one version in a submittable state.
 - [ ] Adding the first consumable and first non-consumable as
       `inAppPurchaseVersions` items to the version's submission is accepted
-      and reviewed with the version.
+      and reviewed with the version. If App Store Connect refuses it, check
+      that the error names the purchases and the `--skip-iap` way out, add
+      them by hand on the version page, and confirm the next plan submits
+      the version with them.
 - [ ] The age rating declaration of an app that never answered the
       questionnaire has no content descriptor set.
 

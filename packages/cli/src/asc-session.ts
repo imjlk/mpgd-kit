@@ -33,12 +33,13 @@ export const ascExitNotFound = 4;
 
 /**
  * Copy and verify the pinned binary into a private directory; `close` removes
- * it. `secretValues` are redacted from the captured output with the API key.
+ * it. `extraSecretValues` are redacted from asc output like the API key (for
+ * example a TestFlight review demo account password).
  */
 export async function openAscSession(
   credential: AscCredential,
   signal?: AbortSignal,
-  secretValues: readonly string[] = [],
+  extraSecretValues: readonly string[] = [],
 ): Promise<{ readonly run: AscCommandRunner; close(): void }> {
   if (!path.isAbsolute(credential.ascBinary)) {
     throw new Error('asc binary must be an absolute file path.');
@@ -63,7 +64,7 @@ export async function openAscSession(
           credential.apiKeyId,
           credential.apiIssuerId,
           credential.apiPrivateKeyBase64,
-          ...secretValues,
+          ...extraSecretValues.filter((value) => value !== ''),
         ],
         signal,
       });

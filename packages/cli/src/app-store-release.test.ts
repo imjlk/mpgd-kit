@@ -36,6 +36,7 @@ import {
   AppStoreReleaseApplyError,
   formatAppStoreReleasePlan,
   planAppStoreRelease,
+  readAppStoreReleaseStatus,
   type AppStoreReleasePlanInput,
   type AppStoreReleaseRequest,
 } from './app-store-release.js';
@@ -586,7 +587,9 @@ try {
         && error.definitive
         && error.written.includes('create review submission')
         && /nothing from this step landed/u.test(error.message)
-        && /add in-app purchase no_ads/u.test(error.message),
+        && /add in-app purchase no_ads/u.test(error.message)
+        && /the same plan would fail here again\. Add no_ads to version 1\.1\.0 by hand/u.test(error.message)
+        && /--skip-iap no_ads/u.test(error.message),
     );
     await assert.rejects(
       applyAppStoreRelease({ saved: plan, plan: input(), ports: asc.ports, approved: true }),
@@ -622,6 +625,54 @@ try {
       `submit ${String(done.submissionId)}`,
     ]);
     assert.equal(asc.state.submissions.length, 1, 'no second submission');
+  }
+
+  // A refused in-app purchase item: skip it, optionally add it by hand, and submit the rest.
+  {
+    const asc = fakeAsc();
+    const plan = await planAppStoreRelease(input(), asc.ports);
+    asc.failOn = 'item inAppPurchaseVersions iv-coins';
+    asc.failWith = new ReleaseProcessError('exit', 'ENTITY_ERROR.RELATIONSHIP.INVALID', 19);
+    await assert.rejects(
+      applyAppStoreRelease({ saved: plan, plan: input(), ports: asc.ports, approved: true }),
+      (error: unknown) => error instanceof AppStoreReleaseApplyError
+        && /Add coins_100, no_ads to version 1\.1\.0 by hand/u.test(error.message)
+        && /--skip-iap coins_100,no_ads/u.test(error.message)
+        && !/Run "mpgd store release plan" again: it reads/u.test(error.message),
+    );
+    // An unknown result (a timeout) keeps the usual "plan again".
+    const timedOut = fakeAsc();
+    const timeoutPlan = await planAppStoreRelease(input(), timedOut.ports);
+    timedOut.failOn = 'item inAppPurchaseVersions iv-coins';
+    timedOut.failWith = new ReleaseProcessError('timeout', '');
+    await assert.rejects(
+      applyAppStoreRelease({ saved: timeoutPlan, plan: input(), ports: timedOut.ports, approved: true }),
+      (error: unknown) => error instanceof AppStoreReleaseApplyError && !error.definitive
+        && /Run "mpgd store release plan" again/u.test(error.message),
+    );
+    // The developer adds no_ads by hand, then skips both purchases: the plan submits what is there.
+    const submissionId = String(asc.state.submissions[0]?.id);
+    asc.state.items.get(submissionId)?.push({
+      id: 'item-by-hand',
+      state: 'READY_FOR_REVIEW',
+      inAppPurchaseVersionId: 'iv-noads',
+    });
+    const skipping = input({ request: request({ skipIaps: ['coins_100', 'no_ads'] }) });
+    const skipped = await planAppStoreRelease(skipping, asc.ports);
+    assert.deepEqual(skipped.blockers, []);
+    assert.deepEqual(skipped.operations, ['submit for App Review']);
+    assert.ok(
+      skipped.notes.some((note) =>
+        /1 in-app purchase item\(s\) the plan did not add \(item-by-hand\)/u.test(note),
+      ),
+    );
+    const submitted = await applyAppStoreRelease({
+      saved: skipped,
+      plan: skipping,
+      ports: asc.ports,
+      approved: true,
+    });
+    assert.equal(submitted.status, 'submitted');
 
     // A lost answer leaves the result unknown.
     const unsure = fakeAsc();
@@ -989,10 +1040,19 @@ try {
     const file = presenceFile({
       review: { contact, demoAccount: { nameEnv: 'DEMO_NAME', passwordEnv: 'DEMO_PASSWORD' } },
     });
-    await assert.rejects(
-      planAppStoreRelease(input({ presence: file }), asc.ports),
-      /from the environment/u,
+    const unset = await planAppStoreRelease(
+      input({
+        presence: file,
+        demoAccountProblems: ['appStore.review.demoAccount names DEMO_PASSWORD, which is not set'],
+      }),
+      asc.ports,
     );
+    assert.deepEqual(unset.blockers, [
+      'appStore.review.demoAccount names DEMO_PASSWORD, which is not set',
+    ]);
+    assert.equal(unset.reviewDetail.action, 'unchanged');
+    const noReason = await planAppStoreRelease(input({ presence: file }), asc.ports);
+    assert.match(noReason.blockers.join('\n'), /Set DEMO_NAME and DEMO_PASSWORD/u);
     const demoAccount = { name: 'reviewer@example.com', password: 'sup3r-secret' };
     const plan = await planAppStoreRelease(input({ presence: file, demoAccount }), asc.ports);
     assert.deepEqual(plan.reviewDetail.fields, [
@@ -1458,6 +1518,61 @@ try {
     );
   }
 
+  // Status reads the open submissions and only the newest completed ones since the version was created.
+  {
+    const asc = fakeAsc();
+    Object.assign(asc.state.versions[1] as AscReleaseVersion, {
+      createdDate: '2026-10-01T00:00:00Z',
+    });
+    const day = (n: number): string => `2026-${n < 10 ? '09' : '10'}-${String(n < 10 ? 20 + n : n).padStart(2, '0')}T00:00:00Z`;
+    asc.state.submissions = [
+      { id: 'sub-open', state: 'READY_FOR_REVIEW' },
+      ...Array.from({ length: 8 }, (_, index) => ({
+        id: `sub-new-${index}`,
+        state: 'COMPLETE',
+        submittedDate: day(10 + index),
+      })),
+      ...Array.from({ length: 3 }, (_, index) => ({ id: `sub-old-${index}`, state: 'COMPLETE', submittedDate: day(index) })),
+    ];
+    const read: string[] = [];
+    const port: AscReleasePort = {
+      ...asc.ports.release,
+      async listReviewSubmissionItems(submissionId) {
+        read.push(submissionId);
+        return asc.ports.release.listReviewSubmissionItems(submissionId);
+      },
+    };
+    const missing = await readAppStoreReleaseStatus(
+      { appId, bundleId, marketingVersion: '1.1.0' },
+      port,
+    );
+    assert.deepEqual(read, [
+      'sub-open',
+      'sub-new-7',
+      'sub-new-6',
+      'sub-new-5',
+      'sub-new-4',
+      'sub-new-3',
+    ]);
+    assert.equal(missing.submission, undefined);
+    assert.match(
+      missing.summary,
+      /among the open ones and the 5 newest completed ones since it was created; 6 older submission\(s\) were not read/u,
+    );
+    // A match stops the search.
+    asc.state.items.set('sub-new-6', [
+      { id: 'item-v', state: 'APPROVED', appStoreVersionId: 'v2' },
+    ]);
+    read.length = 0;
+    const found = await readAppStoreReleaseStatus(
+      { appId, bundleId, marketingVersion: '1.1.0' },
+      port,
+    );
+    assert.deepEqual(read, ['sub-open', 'sub-new-7', 'sub-new-6']);
+    assert.equal(found.submission?.id, 'sub-new-6');
+    assert.doesNotMatch(found.summary, /were not read/u);
+  }
+
   // The commands: profile, credential, presence and targets files, saved plan, status, publish, phased.
   {
     const game = path.join(root, 'game');
@@ -1537,22 +1652,37 @@ try {
       ),
       /recorded no App Store Connect build ID for its iOS build \(the TestFlight submission is unknown\)/u,
     );
-    await assert.rejects(
-      planAppStoreReleaseCommand(
-        { game, profile: 'beta', version: '1.1.0' },
-        withoutPassword,
-        ports,
-      ),
+    // Without the secrets the plan is still made, blocked on them, and apply refuses it.
+    const unsetPlan = await planAppStoreReleaseCommand(
+      { game, profile: 'beta', version: '1.1.0' },
+      withoutPassword,
+      ports,
+    );
+    assert.match(
+      unsetPlan.plan.blockers.join('\n'),
       /names MPGD_REVIEW_PASSWORD, which is not set/u,
     );
+    const unsetFile = path.join(root, 'unset-plan.json');
+    saveAppStoreReleasePlan(unsetFile, unsetPlan);
     await assert.rejects(
-      planAppStoreReleaseCommand(
-        { game, profile: 'beta', version: '1.1.0' },
-        { ...environment, MPGD_REVIEW_PASSWORD: ' padded ' },
-        ports,
-      ),
+      applyAppStoreReleaseCommand({ planFile: unsetFile, approved: true }, withoutPassword, ports),
+      /blocker\(s\); fix them and plan again/u,
+    );
+    // With the secrets set later, the reviewed plan no longer matches (the demo name is part of it).
+    await assert.rejects(
+      applyAppStoreReleaseCommand({ planFile: unsetFile, approved: true }, environment, ports),
+      StorePlanStaleError,
+    );
+    const padded = await planAppStoreReleaseCommand(
+      { game, profile: 'beta', version: '1.1.0' },
+      { ...environment, MPGD_REVIEW_PASSWORD: ' padded ' },
+      ports,
+    );
+    assert.match(
+      padded.plan.blockers.join('\n'),
       /MPGD_REVIEW_PASSWORD starts or ends with whitespace/u,
     );
+    assert.equal(asc.writes.length, 0);
     await assert.rejects(
       planAppStoreReleaseCommand({ game, profile: 'beta' }, environment, ports),
       /Name the version with --marketing-version/u,

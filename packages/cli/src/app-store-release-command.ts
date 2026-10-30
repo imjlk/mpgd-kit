@@ -109,14 +109,15 @@ export async function planAppStoreReleaseCommand(
     environment,
     ports,
     options.signal,
-    (session, app, demoAccount) =>
+    (session, app, demo) =>
       planAppStoreRelease(
         {
           appId: app.appId,
           bundleId: app.bundleId,
           presence: source.presence,
           request,
-          ...(demoAccount === undefined ? {} : { demoAccount }),
+          ...(demo.account === undefined ? {} : { demoAccount: demo.account }),
+          demoAccountProblems: demo.problems,
           now: ports.now,
         },
         session,
@@ -173,14 +174,15 @@ export async function applyAppStoreReleaseCommand(
     environment,
     ports,
     options.signal,
-    (session, app, demoAccount) => applyAppStoreRelease({
+    (session, app, demo) => applyAppStoreRelease({
       saved: saved.plan,
       plan: {
         appId: app.appId,
         bundleId: app.bundleId,
         presence: source.presence,
         request,
-        ...(demoAccount === undefined ? {} : { demoAccount }),
+        ...(demo.account === undefined ? {} : { demoAccount: demo.account }),
+        demoAccountProblems: demo.problems,
         now: ports.now,
       } satisfies AppStoreReleasePlanInput,
       ports: session,
@@ -392,38 +394,48 @@ async function resolveRequest(
   };
 }
 
-/** The demo account values from the variables the presence file names. */
+/**
+ * The demo account values from the variables the presence file names. A
+ * variable that is unset or unusable is a problem the plan reports as a
+ * blocker, so a plan can be reviewed without the secrets.
+ */
 function readDemoAccount(
   presence: StorePresence | undefined,
   environment: NodeJS.ProcessEnv,
-): AppStoreReleaseDemoAccount | undefined {
+): { readonly account?: AppStoreReleaseDemoAccount; readonly problems: readonly string[] } {
   const names = presence?.appStore?.review?.demoAccount;
   if (names === undefined) {
-    return undefined;
+    return { problems: [] };
   }
-  const read = (name: string): string => {
+  const problems: string[] = [];
+  const read = (name: string): string | undefined => {
     const value = environment[name];
     if (value === undefined || value.trim() === '') {
-      throw new Error(
-        `appStore.review.demoAccount names ${name}, which is not set: export the demo account there before planning.`,
+      problems.push(
+        `appStore.review.demoAccount names ${name}, which is not set: export the demo account there, then plan again.`,
       );
+      return undefined;
     }
     // asc trims the flag values it sends, so a value with surrounding spaces would
     // reach App Review as another password: refuse it instead of changing it.
     if (value.trim() !== value) {
-      throw new Error(
+      problems.push(
         `${name} starts or ends with whitespace, which asc would strip before sending it to App Store Connect.`,
       );
+      return undefined;
     }
     return value;
   };
-  const account = { name: read(names.nameEnv), password: read(names.passwordEnv) };
-  if ([...account.password].length > 100) {
-    throw new Error(
+  const name = read(names.nameEnv);
+  const password = read(names.passwordEnv);
+  if (password !== undefined && [...password].length > 100) {
+    problems.push(
       `${names.passwordEnv} is longer than the 100 characters App Store Connect takes.`,
     );
   }
-  return account;
+  return name === undefined || password === undefined || problems.length > 0
+    ? { problems }
+    : { account: { name, password }, problems };
 }
 
 /** One asc session per command, with the demo account redacted from its output. */
@@ -436,10 +448,11 @@ async function withSession<T>(
   action: (
     session: AscReleaseSession,
     app: { readonly appId: string; readonly bundleId: string },
-    demoAccount: AppStoreReleaseDemoAccount | undefined,
+    demoAccount: { readonly account?: AppStoreReleaseDemoAccount; readonly problems: readonly string[] },
   ) => Promise<T>,
 ): Promise<T> {
-  const demoAccount = readDemoAccount(presence, environment);
+  const demo = readDemoAccount(presence, environment);
+  const demoAccount = demo.account;
   const app = resolveStoreSyncApp({ ...options, store: 'app-store' }, environment);
   if (app.store !== 'app-store') {
     throw new Error('The deployment profile has no App Store app.');
@@ -452,7 +465,7 @@ async function withSession<T>(
       : [...secretForms(demoAccount.password), ...(demoAccount.name.length >= 4 ? secretForms(demoAccount.name) : [])],
   });
   try {
-    return await action(session, { appId: app.appId, bundleId: app.bundleId }, demoAccount);
+    return await action(session, { appId: app.appId, bundleId: app.bundleId }, demo);
   } finally {
     session.close();
   }

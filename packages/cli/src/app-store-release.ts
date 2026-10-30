@@ -77,6 +77,11 @@ export interface AppStoreReleasePlanInput {
   readonly request: AppStoreReleaseRequest;
   /** Resolved from `appStore.review.demoAccount`; never saved. */
   readonly demoAccount?: AppStoreReleaseDemoAccount;
+  /**
+   * Why the demo account could not be read (an unset variable, say). The plan
+   * is still made, with these as blockers, so it can be reviewed without the secrets.
+   */
+  readonly demoAccountProblems?: readonly string[];
   readonly now?: () => Date;
 }
 
@@ -558,6 +563,7 @@ async function planWithWrites(
     appStore.review,
     reviewDetail,
     input.demoAccount,
+    input.demoAccountProblems ?? [],
     request,
     blockers,
     notes,
@@ -580,6 +586,7 @@ async function planWithWrites(
     items,
     iaps: plannedIaps,
     blockers,
+    notes,
   });
   const iapsWithItems = plannedIaps.map((iap): PlannedReleaseIap =>
     iap.action === 'attach' && iap.versionId !== undefined && submission.attachedIapVersions.has(iap.versionId)
@@ -778,6 +785,7 @@ function planReviewDetail(
   review: AppStorePresenceReview | undefined,
   remote: AscReviewDetail | undefined,
   demoAccount: AppStoreReleaseDemoAccount | undefined,
+  demoAccountProblems: readonly string[],
   request: AppStoreReleaseRequest,
   blockers: string[],
   notes: string[],
@@ -807,9 +815,14 @@ function planReviewDetail(
     };
   }
   if (review.demoAccount !== undefined && demoAccount === undefined) {
-    throw new Error(
-      'appStore.review.demoAccount needs its user name and password from the environment.',
-    );
+    // Nothing of the review detail is planned without the account: the demo
+    // name decides what changes, and apply refuses a plan with blockers anyway.
+    blockers.push(...(demoAccountProblems.length > 0
+      ? demoAccountProblems
+      : [`Set ${review.demoAccount.nameEnv} and ${review.demoAccount.passwordEnv} (appStore.review.demoAccount) in the environment, then plan again.`]));
+    return {
+      plan: { action: 'unchanged', ...(remote === undefined ? {} : { id: remote.id }), fields: [] },
+    };
   }
   const desired: Record<string, string | boolean> = {
     contactFirstName: review.contact.firstName,
@@ -970,6 +983,7 @@ function planSubmission(input: {
   readonly items: ReadonlyMap<string, readonly AscReviewSubmissionItem[]>;
   readonly iaps: readonly PlannedReleaseIap[];
   readonly blockers: string[];
+  readonly notes: string[];
 }): { readonly plan: AppStoreReleasePlan['submission']; readonly attachedIapVersions: ReadonlySet<string> } {
   const live = (submissionId: string): AscReviewSubmissionItem[] =>
     [...(input.items.get(submissionId) ?? [])].filter((item) => item.state !== 'REMOVED');
@@ -1006,8 +1020,18 @@ function planSubmission(input: {
     );
   }
   const items = live(draft.id);
+  // In-app purchase items belong to this app's version review even when the plan
+  // did not add them (added by hand after a refused add, say); anything else does not.
   const unrelated = items.filter((item) => item.appStoreVersionId !== input.versionId
-    && (item.inAppPurchaseVersionId === undefined || !plannedIapVersions.has(item.inAppPurchaseVersionId)));
+    && item.inAppPurchaseVersionId === undefined);
+  const byHand = items.filter((item) => item.inAppPurchaseVersionId !== undefined
+    && !plannedIapVersions.has(item.inAppPurchaseVersionId));
+  if (byHand.length > 0) {
+    input.notes.push(
+      `Review submission ${draft.id} also holds ${byHand.length} in-app purchase item(s) the plan did not add (${
+        byHand.map((item) => item.id).join(', ')}); they are submitted with the version.`,
+    );
+  }
   if (unrelated.length > 0 && draft.state === 'READY_FOR_REVIEW') {
     input.blockers.push(
       `Review submission ${draft.id} already holds ${unrelated.length} other item(s) (${
@@ -1191,12 +1215,14 @@ export class AppStoreReleaseApplyError extends Error {
     cause: unknown,
     /** App Store Connect refused the step (asc exited with a 4xx-class code): nothing from it landed. */
     readonly definitive = false,
+    /** What to do instead of re-running the same plan, when re-running cannot help. */
+    readonly detail?: string,
   ) {
     super(
       `App Store Connect ${stage} ${definitive ? 'failed; nothing from this step landed' : 'failed or its result is unknown'} (${
         cause instanceof Error ? cause.message : String(cause)}). Written before it: ${
-        written.join('; ') || 'nothing'}. Run "${appStoreReleasePlanCommand}" again: it reads App Store `
-      + 'Connect, finds what already landed (the version, its build, an open submission) and lists what is left.',
+        written.join('; ') || 'nothing'}. ${detail ?? `Run "${appStoreReleasePlanCommand}" again: it reads App Store `
+      + 'Connect, finds what already landed (the version, its build, an open submission) and lists what is left.'}`,
       { cause },
     );
     this.name = 'AppStoreReleaseApplyError';
@@ -1363,15 +1389,40 @@ export async function applyAppStoreRelease(input: {
         }),
       );
     }
-    for (const iap of current.iaps) {
-      if (iap.action === 'attach' && iap.versionId !== undefined) {
-        const iapVersionId = iap.versionId;
+    // An `inAppPurchaseVersions` item: ReviewSubmissionItemCreateRequest.Data.Relationships
+    // has `inAppPurchaseVersion` (App Store Connect API, read 2026-10-31), and asc 5.5.0
+    // names the type ReviewSubmissionItemTypeInAppPurchaseVersion in
+    // internal/asc/review_submission_items.go (`iap versions submit` posts the same item).
+    // Not yet run against a live account: a refusal here would recur on every re-plan,
+    // so it names the way out instead of "plan again".
+    const attaching = current.iaps.filter(
+      (iap) => iap.action === 'attach' && iap.versionId !== undefined,
+    );
+    for (const [index, iap] of attaching.entries()) {
+      const iapVersionId = String(iap.versionId);
+      try {
         await step(`add in-app purchase ${iap.productId} to submission ${id}`, () =>
           ports.release.addReviewSubmissionItem({
             submissionId: id,
             type: 'inAppPurchaseVersions',
             id: iapVersionId,
           }),
+        );
+      } catch (error) {
+        if (!isDefinitiveAscFailure(error)) {
+          throw error;
+        }
+        const left = attaching.slice(index).map((entry) => entry.productId);
+        throw new AppStoreReleaseApplyError(
+          stage,
+          steps,
+          error,
+          true,
+          `App Store Connect refused the in-app purchase item, so the same plan would fail here again. Add ${
+            left.join(', ')} to version ${current.marketingVersion} by hand in App Store Connect (the version `
+          + 'page, In-App Purchases and Subscriptions), or leave them for a later version; then run '
+          + `"${appStoreReleasePlanCommand} --skip-iap ${left.join(',')}" and apply it to submit the version with `
+          + 'what is already in the submission.',
         );
       }
     }
@@ -1387,6 +1438,9 @@ export async function applyAppStoreRelease(input: {
       next: ['Follow the review with "mpgd store release status".'],
     };
   } catch (error) {
+    if (error instanceof AppStoreReleaseApplyError) {
+      throw error;
+    }
     throw new AppStoreReleaseApplyError(stage, steps, error, isDefinitiveAscFailure(error));
   }
 }
@@ -1495,12 +1549,20 @@ export async function readAppStoreReleaseStatus(
     port.readPhasedRelease(version.id),
     port.listReviewSubmissions(input.appId),
   ]);
-  // The newest submission holding this version: open ones first, then by date, until one matches.
+  // The submission holding this version: every open one, then the newest
+  // completed ones, at most `statusCompletedSubmissions` of them and none
+  // submitted before the version was created (one asc call per submission).
   let submission: AppStoreReleaseStatus['submission'];
-  const ordered = [...submissions].sort((left, right) =>
-    Number(left.state === 'COMPLETE') - Number(right.state === 'COMPLETE')
-    || String(right.submittedDate ?? '').localeCompare(String(left.submittedDate ?? '')));
-  for (const candidate of ordered) {
+  const open = submissions.filter((candidate) => candidate.state !== 'COMPLETE');
+  const completed = submissions
+    .filter((candidate) => candidate.state === 'COMPLETE')
+    .sort((left, right) => String(right.submittedDate ?? '').localeCompare(String(left.submittedDate ?? '')));
+  const createdAt = Date.parse(version.createdDate ?? '');
+  const recent = completed.filter((candidate) => !Number.isFinite(createdAt)
+    || !Number.isFinite(Date.parse(candidate.submittedDate ?? ''))
+    || Date.parse(candidate.submittedDate ?? '') >= createdAt);
+  const searched = [...open, ...recent.slice(0, statusCompletedSubmissions)];
+  for (const candidate of searched) {
     const items = await port.listReviewSubmissionItems(candidate.id);
     if (items.some((item) => item.appStoreVersionId === version.id)) {
       submission = {
@@ -1512,6 +1574,7 @@ export async function readAppStoreReleaseStatus(
       break;
     }
   }
+  const unsearched = submissions.length - searched.length;
   const state = versionState(version);
   return {
     appId: input.appId,
@@ -1525,9 +1588,16 @@ export async function readAppStoreReleaseStatus(
     },
     ...(submission === undefined ? {} : { submission }),
     ...(phased === undefined ? {} : { phasedRelease: phased }),
-    summary: summarize(version, state, submission, phased),
+    summary: `${summarize(version, state, submission, phased)}${
+      submission === undefined && unsearched > 0
+        ? ` No review submission holding it among the open ones and the ${statusCompletedSubmissions} newest `
+          + `completed ones since it was created; ${unsearched} older submission(s) were not read.`
+        : ''}`,
   };
 }
+
+/** Completed review submissions `status` reads at most, newest first. */
+const statusCompletedSubmissions = 5;
 
 function summarize(
   version: AscReleaseVersion,
