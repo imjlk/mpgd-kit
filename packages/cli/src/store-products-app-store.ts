@@ -248,9 +248,9 @@ export async function planAppStoreProducts(
     .sort();
   if (products.some((product) => product.action !== 'unchanged' || product.state !== 'APPROVED')) {
     manual.push(
-      'Submit the in-app purchases for App Review in App Store Connect. The first consumable and the '
-      + 'first non-consumable must each go with a new app version (version page > In-App Purchases); '
-      + 'the sync never submits.',
+      'Submit the in-app purchases for App Review with "mpgd store release": it adds every purchase that is '
+      + "READY_TO_SUBMIT to the app version's review submission (the first consumable and the first "
+      + 'non-consumable must each go with a new app version). The sync never submits.',
     );
   }
   return {

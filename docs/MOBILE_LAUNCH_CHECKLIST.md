@@ -339,24 +339,46 @@ Google Play Console:
 
 App Store Connect:
 
+- [ ] Create the version and submit it: `mpgd store release plan
+      --marketing-version <x.y.z> --out <plan>` (or `--game-id <id>
+      --release <release>` for the build `deploy run` recorded) and
+      `apply --plan <plan> --approve`. A version that does not exist yet is
+      created alone; the next plan, after
+      the store page below, attaches the processed build, writes What's New,
+      the copyright line and App Review information (contact, notes, a demo
+      account read from the environment variables the file names), sets
+      manual / after-approval / scheduled release and phased release, adds
+      every in-app purchase that is ready to submit (the first consumable and
+      first non-consumable must go with a version) and submits for review.
+      The plan refuses until the build is processed with export compliance
+      answered, every locale is on the version, the iPhone and (universal
+      app) 13-inch iPad screenshots exist and the age rating is answered
+      ([App Store releases](./APP_STORE_RELEASES.md)).
 - [ ] Name, subtitle, privacy policy URL, description, keywords, support and
       marketing URLs (the legal site) and screenshots (the iPhone sets App
       Store Connect asks for and, for a universal app, the 13-inch iPad set):
       `mpgd store presence plan --store app-store --out <plan>` and
       `apply --plan <plan> --approve` write them from
       `mpgd.store-presence.json` to the version in preparation
-      ([store page sync](./STORE_PRESENCE_SYNC.md)); create that version
-      first.
-- [ ] Age rating questionnaire, App Privacy answers, App Review notes and a
-      demo account if a sign-in gates content.
+      ([store page sync](./STORE_PRESENCE_SYNC.md)), after `store release`
+      created it.
 - [ ] In-app purchases: `mpgd store products apply --store app-store`
       creates and prices them, with localizations, availability and review
-      screenshots ([store product sync](./STORE_PRODUCT_SYNC.md)). Still by
-      hand: the review notes the plan lists, attaching the first consumable
-      and first non-consumable to the app version for review, and sandbox
-      testers.
+      screenshots ([store product sync](./STORE_PRODUCT_SYNC.md));
+      `store release` submits them with the version.
 - [ ] Export compliance: answered by `ITSAppUsesNonExemptEncryption`.
-- [ ] Submit for review; choose manual or phased release.
+- [ ] After approval: `mpgd store release status` reports where the review
+      stands, `mpgd store release publish --marketing-version <x.y.z>
+      --approve` releases a manually released version, and `mpgd store
+      release phased --action pause|resume|complete` changes a phased
+      release.
+- [ ] Still by hand in App Store Connect: the age rating questionnaire (the
+      plan only checks that it was answered), the App Privacy answers (the
+      public App Store Connect API has no resource for them, so the kit
+      cannot check them either), sandbox testers, the review notes of each
+      in-app purchase (the products plan lists them), the app's price,
+      availability, category and content rights, and replying to App Review
+      and resubmitting a version it returned.
 
 ## 9. Before you press release
 
@@ -398,7 +420,8 @@ App Store Connect:
 - [Store product sync](./STORE_PRODUCT_SYNC.md)
 - [Purchase device acceptance](./PURCHASE_DEVICE_ACCEPTANCE.md)
 - [Store page sync](./STORE_PRESENCE_SYNC.md)
-- [TestFlight internal submission](./TESTFLIGHT_INTERNAL_SUBMISSION.md)
+- [TestFlight internal submission](./TESTFLIGHT_INTERNAL_SUBMISSION.md) and
+  [App Store releases](./APP_STORE_RELEASES.md)
 - [Game services backend](./GAME_SERVICES_BACKEND.md)
 - [Store privacy disclosures](./STORE_PRIVACY_DISCLOSURES.md)
 - [Public release checklist](./PUBLIC_RELEASE_CHECKLIST.md) (publishing the kit itself)
