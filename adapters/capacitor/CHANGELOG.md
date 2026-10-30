@@ -1,5 +1,15 @@
 # @mpgd/adapter-capacitor
 
+## 0.19.0 — 2026-10-30
+
+### Added
+
+- [cd6b9ceb](https://github.com/imjlk/mpgd-kit/commit/cd6b9ceb313bdd9b9db4a459587f8d073ba35596) `FinishTransactionInput` (and the `commerce.v2.finishTransaction` bridge payload) is now a union: `GrantedFinishTransactionInput`, the finish after a ledger grant (unchanged; `revoked` absent or false), or `RevokedFinishTransactionInput` (`revoked: true`, `isConsumable: true`, `ledgerEntryId` optional): finish a consumable the store revoked (refunded) while it was still unfinished, without any grant. The ledger entry names the reversed grant when there was one and is absent when nothing was granted. `CommerceProvider.acceptsRevokedFinish` gates it the way `acceptsFinishRetry` gates `retry`. A provider that reads `ledgerEntryId` narrows on `revoked` first. `createStoreCommerceProvider` declares the flag, forwards the revoked finish, and keeps the SDK's revoked consumables of the catalog in `getAvailablePurchases` (state `revoked`) only for a `StoreSdk` that declares `acceptsRevokedFinish`; `StoreSdkFinishTransactionInput` is the same union. A revoked finish sent to any other SDK answers `{ finished: false }` without calling it. The conformance vector format gains `profile.revokedFinish` and `finishCalls[].revoked` (with `ledgerEntryId` optional and an `unfinished` result), and the reference reconciler and fixture store implement the revoked finish. A bridge host on an earlier `@mpgd/platform` rejects the new shape, so update the host and the webview together. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/bridge@0.18.1, @mpgd/capacitor-game-services@0.9.6, @mpgd/game-runtime@0.10.0, @mpgd/game-services@0.33.0, @mpgd/platform@0.35.0, @mpgd/target-config@0.24.6
+
 ## 0.18.0 — 2026-10-29
 
 ### Added

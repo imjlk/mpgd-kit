@@ -1,5 +1,19 @@
 # @mpgd/capacitor-storekit
 
+## 0.7.0 — 2026-10-30
+
+### Fixed
+
+- [cd6b9ceb](https://github.com/imjlk/mpgd-kit/commit/cd6b9ceb313bdd9b9db4a459587f8d073ba35596) A consumable the App Store refunded while it was still unfinished is no longer redelivered at every launch forever. The StoreKit SDK declares `acceptsRevokedFinish`, keeps such a transaction listed as `revoked`, and `finishTransaction` with `revoked: true` finishes it, granting nothing, only when the native list carries it as a revoked consumable of a SKU the catalog declares consumable, bound to the session app account token; the native plugin applies the same gate (`StoreKitTransactionPolicy.finishableRevoked`) over `Transaction.unfinished`. A revoked finish may name no ledger entry; the native method requires the field, so the SDK then sends `revokedLedgerEntryIdPrefix` plus the transaction id, which names no ledger entry. A transaction that is not revoked, a durable, another or no token, a malformed entry, and a transaction the list does not carry (already finished, or not listed yet) stay refused, and an ordinary finish of a revoked transaction is still refused. Rebuild the iOS app (`cap sync ios`) to get the native gate: a native build from before it ignores the flag and leaves the transaction unfinished, as before. — Thanks @imjlk!
+
+### Added
+
+- [f9ebae53](https://github.com/imjlk/mpgd-kit/commit/f9ebae53c77e9c12e6e7edeb3ab7377dbb1b14ab) A durable still unfinished and bound to no `appAccountToken` (an offer code or another purchase made outside the app, then restored and granted by the backend's restore sharing) is now finished once this player's grant is journaled, instead of leaving its record `finishing` and retried on every pass. The native plugin gains an explicit no-token finish match, `finishTransaction({ transactionId, ledgerEntryId, withoutAppAccountToken: true })` with no `appAccountToken` field, which finishes only a verified, non-revoked non-consumable bound to no token; a call without a token and without the flag is still refused with `STOREKIT_FINISH_REQUIRES_GRANT`, so a missing token is never a wildcard. The new native method `getFinishSupport()` declares it (`{ withoutAppAccountToken: 1 }`); new types `StoreKitFinishSupport` and `StoreKitFinishTransactionInput`, and `CapacitorStoreKitStoreSdkPlugin` includes the optional `getFinishSupport`. The StoreKit SDK sends the no-token finish only for a listed, non-revoked `non_consumable` whose SKU the catalog declares durable, for a record the reconciler holds a ledger grant for, and only when the native build declares the match (the native match itself checks only the transaction); with an app binary built from an earlier native plugin (`UNIMPLEMENTED`) it answers `{ finished: false }` as before, so rebuild the app to finish such records. Finishing a durable takes nothing from any player: StoreKit keeps it in `Transaction.currentEntitlements`. Consumables and subscriptions bound to no token are still never finished. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/adapter-capacitor@0.19.0, @mpgd/bridge@0.18.1, @mpgd/game-services@0.33.0, @mpgd/platform@0.35.0
+
 ## 0.6.0 — 2026-10-29
 
 ### Added
