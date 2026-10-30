@@ -131,8 +131,8 @@ function createFakeProvider(input: {
    * Declares `acceptsRevokedFinish` (defaults to false) and then, as the
    * StoreKit provider does, keeps unfinished revoked purchases listed. An
    * unscripted revoked finish finishes only a listed revoked purchase (one
-   * the list no longer carries has nothing left to finish); an unscripted
-   * ordinary finish of a listed revoked purchase is refused.
+   * the list does not carry is refused); an unscripted ordinary finish of a
+   * listed revoked purchase is refused.
    */
   readonly acceptsRevokedFinish?: boolean;
 } = {}): FakeProvider {
@@ -233,7 +233,7 @@ function createFakeProvider(input: {
             const listed = available.find((entry) => entry.transactionId === request.transactionId);
             const queued = finishQueue.shift() ?? {
               finished: request.revoked === true
-                ? listed === undefined || listed.state === 'revoked'
+                ? listed?.state === 'revoked'
                 : listed?.state !== 'revoked',
             };
             if ('throws' in queued) {
@@ -4675,8 +4675,9 @@ function createDroppingJournal(): {
 
 // 57c. Across launches: the revoked transaction is found in the store's list at start (its
 // launch-time event may come before any listener). A refusal (a native build from before the
-// revoked finish) is reported and not asked again this session; a transport failure is asked
-// again on a later pass; the next launch asks again from the journal.
+// revoked finish, or a list that does not carry it yet) is reported and not counted as asked: the
+// next report asks again; a transport failure is asked again on a later pass; the next launch
+// asks again from the journal.
 {
   const store = createInMemoryMonetizationOperationStore();
   const backend = createFakeBackend();
@@ -4703,10 +4704,17 @@ function createDroppingJournal(): {
   await second.reconciler.reconcile();
   assertEqual(
     second.provider.finishCalls,
-    [{ transactionId: 'tx-57c', isConsumable: true, revoked: true }],
-    'the listed revoked transaction of a rejected record is asked once',
+    [
+      { transactionId: 'tx-57c', isConsumable: true, revoked: true },
+      { transactionId: 'tx-57c', isConsumable: true, revoked: true },
+    ],
+    'the refusal is not counted as asked: the next report asks again, and it finishes',
   );
   assertEqual(second.failures, [`finish(${key})`], 'the refusal is reported');
+  assertEqual(second.provider.available, [], 'the store no longer lists it');
+  second.provider.report(purchaseOf({ transactionId: 'tx-57c', state: 'revoked' }));
+  await second.reconciler.reconcile();
+  assertEqual(second.provider.finishCalls.length, 2, 'a finished one is asked once per session');
   await second.reconciler.stop();
 
   const third = createHarness({
@@ -4970,6 +4978,90 @@ function createDroppingJournal(): {
   await second.reconciler.start();
   assertEqual(second.provider.finishCalls, [], 'the refused record keeps it unfinished');
   await second.reconciler.stop();
+}
+
+// 57g. A refund notice of a consumable whose record already finished (`Transaction.updates`
+// delivers it for a finished transaction too) is not noted: nothing is left unfinished, and
+// step 5 still revokes the record when the ledger reversed it. A revoked report never attaches to
+// the player's open attempt for the product (it may be another purchase still in flight, such as
+// an Ask to Buy): an own-account refunded consumable without a record is finished as unrecorded
+// and the attempt stays `launched`. A noted, unrecorded report the store delivers again before
+// its finish is not looked up in the journal again.
+{
+  const ownBinding = { kind: 'obfuscated-account-id', value: 'player-1' } as const;
+  const backend = createFakeBackend({ withLedgerStatus: true });
+  const provider = createFakeProvider({ acceptsRevokedFinish: true });
+  let reads = 0;
+  const store = createInMemoryMonetizationOperationStore();
+  const counted: MonetizationOperationStore = {
+    ...store,
+    async read(key) {
+      reads += 1;
+      return store.read(key);
+    },
+  };
+  const h = createHarness({
+    store: counted,
+    backend,
+    provider,
+    overrides: { accountBinding: () => ownBinding },
+  });
+  backend.queue({ status: 'granted', ledgerEntryId: 'le-57g' });
+  await h.reconciler.start();
+  await h.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-57g',
+    source: 'shop',
+  });
+  provider.report(purchaseOf({ transactionId: 'tx-57g', accountBinding: ownBinding }));
+  await h.reconciler.runUntilIdle();
+  assertEqual(h.history('op-57g').at(-1), 'finished', 'granted and finished');
+  backend.reverse('le-57g', 'le-57gr');
+  provider.report(
+    purchaseOf({ transactionId: 'tx-57g', state: 'revoked', accountBinding: ownBinding }),
+  );
+  await h.reconciler.reconcile();
+  assertEqual(h.history('op-57g').at(-1), 'revoked', 'step 5 still revokes the record');
+  assertEqual(
+    provider.finishCalls.filter((call) => call.revoked === true),
+    [],
+    'the refund notice of a finished consumable asks no revoked finish',
+  );
+
+  // An Ask to Buy attempt waits; an unrelated refunded consumable of the product arrives.
+  await h.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-57g-ask',
+    source: 'shop',
+  });
+  provider.queueFinish({ throws: new Error('bridge closed') });
+  provider.report(
+    purchaseOf({ transactionId: 'tx-57g-old', state: 'revoked', accountBinding: ownBinding }),
+  );
+  await h.reconciler.runUntilIdle();
+  const readsAfterFirst = reads;
+  provider.report(
+    purchaseOf({ transactionId: 'tx-57g-old', state: 'revoked', accountBinding: ownBinding }),
+  );
+  await h.reconciler.runUntilIdle();
+  assertEqual(reads, readsAfterFirst, 'a redelivered, still-noted report reads no journal key');
+  await h.reconciler.reconcile();
+  assertEqual(
+    provider.finishCalls.filter((call) => call.revoked === true).map((call) => call.transactionId),
+    ['tx-57g-old', 'tx-57g-old'],
+    'the refunded consumable is finished as unrecorded (after a transport failure)',
+  );
+  assertEqual(
+    h.history('op-57g-ask'),
+    ['requested', 'launched'],
+    'the open attempt stays launched',
+  );
+  assertEqual(
+    (await h.reconciler.read('op-57g-ask'))?.purchase,
+    undefined,
+    'and the refunded transaction is never attached to it',
+  );
+  await h.reconciler.stop();
 }
 
 console.info('commerce reconciler tests passed');

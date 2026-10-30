@@ -331,10 +331,12 @@ ledger entry and which the native code never reads. The SDK and the native
 plugin (`StoreKitTransactionPolicy.finishableRevoked`, over
 `Transaction.unfinished` only) finish only a revoked consumable bound to the
 session token; a transaction still paid, a durable, another or no token,
-and a malformed entry stay refused, and one the list no longer carries
-answers finished with no native call (an entry the native read skipped as
-unverifiable looks the same; StoreKit lists it again on a later launch and
-the reconciler asks again). OpenIAP's finish takes the transaction by id and
+and a malformed entry stay refused. So does one the list does not carry
+(`finished: false`, no native call): the list cannot tell a consumable
+already finished from one an early read does not carry yet, or from an
+entry the native read skipped as unverifiable. The reconciler does not
+count that answer as asked, so the next report asks again. Only revoked
+consumables of the catalog are listed; a refunded durable is not. OpenIAP's finish takes the transaction by id and
 does not check the revocation date. While the grant stands (a backend
 without the ledger status read, or a refund not recorded yet) the
 transaction stays unfinished, as before, and so does one the backend

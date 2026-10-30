@@ -114,8 +114,9 @@ the one finish that follows no standing grant. StoreKit keeps such a
 transaction in `Transaction.unfinished` and redelivers it at every launch
 until `finish()`, and the ordinary finish gate refuses a revoked
 transaction. On a provider that declares `acceptsRevokedFinish` (the
-StoreKit provider) the store lists it as `revoked`, and the reconciler calls
-`finishTransaction` with `revoked: true` and `isConsumable: true`:
+StoreKit provider) the store lists its revoked consumables as `revoked`, and
+the reconciler calls `finishTransaction` with `revoked: true` and
+`isConsumable: true`:
 
 - for this player's record of it once the backend has answered for the
   refund: `revoked` (the ledger reversed its grant, for example after an App
@@ -129,7 +130,14 @@ StoreKit provider) the store lists it as `revoked`, and the reconciler calls
   `ledgerEntryId`, and nothing journaled. A refunded consumable gives nobody
   anything, and a verify could grant from a signed transaction saved before
   the refund; the backend learns of the refund from the store's server
-  notifications.
+  notifications. A revoked report is never attached to the player's open
+  (`launched`) attempt for the product: that attempt may be another
+  purchase still in flight (an Ask to Buy), so it keeps waiting for its own
+  purchase report or its expiry.
+
+A refund notice of a consumable whose record already `finished` is not
+noted: nothing is left unfinished (StoreKit reports refunds of finished
+transactions too), and step 5 still revokes the record.
 
 Every such finish is reported with a `revoked-finish` event (with the
 record's `idempotencyKey`, or none). Nothing is granted, re-granted, or
@@ -141,8 +149,10 @@ bound to the session account: a paid purchase, a durable, and another
 guest's revoked consumable are never finished this way. It is asked once
 per session; a transport failure is asked again after the retry interval
 (at once on `reconcile()`), and a refusal (a native build from before the
-revoked finish) is reported as a `finish` failure and asked again on the
-next launch. `REFUND_REVERSED` never re-grants automatically.
+revoked finish, or a store list that does not carry the transaction, which
+it cannot tell from one already finished) is reported as a `finish`
+failure and not counted as asked, so the next report of the transaction
+asks again. `REFUND_REVERSED` never re-grants automatically.
 
 The durable store rules above apply to the new record kind: `listRecoverable`
 returns a `commerce-purchase` record while its `state` is not terminal

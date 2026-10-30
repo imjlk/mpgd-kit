@@ -225,8 +225,8 @@ export interface CommerceProvider {
   /** Accepts `retry`; a caller sends it only to a provider declaring this. */
   readonly acceptsFinishRetry?: boolean;
   /**
-   * Accepts `revoked`, and lists the store's unfinished revoked purchases (as
-   * `revoked`) in `getAvailablePurchases`; a caller sends it only to a
+   * Accepts `revoked`, and lists the store's unfinished revoked consumables
+   * (as `revoked`) in `getAvailablePurchases`; a caller sends it only to a
    * provider declaring this.
    */
   readonly acceptsRevokedFinish?: boolean;
@@ -515,9 +515,14 @@ One pass:
      a verify and no `ledgerEntryId`, and nothing is journaled. A verify could
      grant from a signed transaction saved before the refund, and the backend
      learns of the refund from the store's server notifications.
-   The store finishes only a consumable it still lists as revoked. Nothing is
-   granted or verified and no record is rewritten. A revoked report never
-   revokes, verifies, or journals anything on its own.
+   The store finishes only a consumable it still lists as revoked; a
+   refusal (`finished: false`) is not counted as asked, so the next report
+   asks again. A report whose record is already `finished` is not noted
+   (the refund notice of a finished consumable). A revoked report is matched
+   only by transaction, never to an open attempt, which may be another
+   purchase in flight. Nothing is granted or verified and no record is
+   rewritten. A revoked report never revokes, verifies, or journals anything
+   on its own.
 
 The runtime serializes purchases per player, store, and logical product: a
 second `requestPurchase` while a record for the same product is `launched` or
@@ -1331,7 +1336,7 @@ reconciler (`packages/platform/src/commerce-conformance.test.ts` and the dist
 smoke) and the `@mpgd/game-services` reconciler
 (`packages/game-services/src/commerce-reconciler-conformance.test.ts`) run all
 nine; a revoked-finish vector declares the store capability with
-`profile.revokedFinish`, and the fixture store then lists revoked purchases,
+`profile.revokedFinish`, and the fixture store then lists revoked consumables,
 refuses an ordinary finish of one, and finishes a revoked consumable only on
 a revoked finish. The game-services adapter answers an `another-account` decision in the
 wire shape it names: the HTTP client's 409 error, the oRPC error, or the

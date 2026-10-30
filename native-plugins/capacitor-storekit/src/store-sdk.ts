@@ -525,18 +525,21 @@ export function createCapacitorStoreKitStoreSdk(
    * consumable, bound to the session token. A transaction that is not
    * revoked (still a paid purchase), a durable, or a consumable of another
    * or no token stays refused, as does an entry of the id in a malformed
-   * shape. One the list no longer carries has nothing left to finish
-   * (a refund of a finished consumable is reported too), so it answers
-   * finished with no native call.
+   * shape. One the list does not carry is refused too (`finished: false`,
+   * no native call): the list cannot tell a consumable already finished
+   * (a refund of a finished consumable is reported as well) from one a read
+   * early in the launch does not carry yet, and answering finished would
+   * report a finish that never happened. The reconciler does not count that
+   * answer as asked, so a later report of the transaction asks again.
    */
   const revokedFinishPermitted = async (
     transactionId: string,
     appAccountToken: string,
-  ): Promise<'finish' | 'finished' | 'refused'> => {
+  ): Promise<'finish' | 'refused'> => {
     const entries = await listedEntries(transactionId);
     const transaction = entries.find(isValidStoreKitTransaction);
     if (transaction === undefined) {
-      return entries.length === 0 ? 'finished' : 'refused';
+      return 'refused';
     }
     return transaction.revokedAt !== undefined
       && transaction.type === 'consumable'
@@ -718,9 +721,8 @@ export function createCapacitorStoreKitStoreSdk(
           if (request.isConsumable !== true) {
             return { finished: false };
           }
-          const verdict = await revokedFinishPermitted(transactionId, appAccountToken);
-          if (verdict !== 'finish') {
-            return { finished: verdict === 'finished' };
+          if (await revokedFinishPermitted(transactionId, appAccountToken) !== 'finish') {
+            return { finished: false };
           }
           // A native build from before the flag ignores it and applies its
           // ordinary gate, which refuses a revoked transaction: `finished: false`.

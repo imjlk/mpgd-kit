@@ -656,10 +656,13 @@ export function createStoreCommerceProvider(
         // A revoked purchase is not recoverable, and a pending one is listed
         // only on request; both still reach the reconciler through events.
         // An SDK that finishes revoked transactions keeps its unfinished
-        // revoked ones listed: the reconciler finishes them once the backend
-        // answered for them, and verifies or grants none of them.
+        // revoked consumables listed (the only kind a revoked finish takes):
+        // the reconciler finishes them once the backend answered for them,
+        // and verifies or grants none of them. A revoked purchase of another
+        // kind, or of a SKU the catalog does not map, stays filtered.
         if (
-          (purchase.state === 'revoked' && !revokedFinish)
+          (purchase.state === 'revoked'
+            && !(revokedFinish && bySku.get(candidate.sku)?.kind === 'consumable'))
           || (purchase.state === 'pending' && !includePending)
         ) {
           continue;

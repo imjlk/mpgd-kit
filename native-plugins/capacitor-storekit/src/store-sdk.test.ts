@@ -898,8 +898,8 @@ async function settled(): Promise<void> {
 // launch until `finish()`. With `revoked`, and only then, the SDK finishes a
 // listed, revoked consumable of the session token, granting nothing. A
 // transaction still paid, a durable, another token's consumable, a SKU the
-// catalog does not declare consumable, and a malformed entry stay refused; a
-// transaction the list no longer carries has nothing left to finish.
+// catalog does not declare consumable, and a malformed entry stay refused, and
+// so does a transaction the list does not carry (finished, or not listed yet).
 {
   const refunded = '2026-07-18T00:00:00Z';
   const otherAccount = crypto.randomUUID();
@@ -1048,10 +1048,14 @@ async function settled(): Promise<void> {
       ledgerEntryId: 'le-50',
       revoked: true,
     }),
-    { finished: true },
-    'a transaction the list no longer carries has nothing left to finish',
+    { finished: false },
+    'a transaction the list does not carry is not reported finished (already finished, or not listed yet)',
   );
-  assertEqual(plugin.calls.slice(callsBeforeMissing), ['getTransactions'], 'without a native call');
+  assertEqual(
+    plugin.calls.slice(callsBeforeMissing),
+    ['getTransactions'],
+    'and reaches no native call',
+  );
 
   // A native build from before the flag ignores it and applies its ordinary
   // gate, which refuses a revoked transaction: today's behaviour.

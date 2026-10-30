@@ -392,6 +392,11 @@ describe('createStoreCommerceProvider', () => {
     const revokedSdk = createFakeStoreSdk({ revokedFinish: true });
     revokedSdk.upsert(fakePurchase({ transactionId: 'tx-1' }));
     revokedSdk.upsert(fakePurchase({ transactionId: 'tx-3', state: 'revoked' }));
+    // Only a revoked consumable is kept: a revoked durable, and a revoked
+    // purchase of a SKU the catalog does not map, are never finished as
+    // revoked, so they stay filtered.
+    revokedSdk.upsert(fakePurchase({ transactionId: 'tx-6', sku: 'remove.ads', state: 'revoked' }));
+    revokedSdk.upsert(fakePurchase({ transactionId: 'tx-7', sku: 'legacy.sku', state: 'revoked' }));
     expect((await createProvider(revokedSdk).getAvailablePurchases())
       .map((purchase) => [purchase.transactionId, purchase.state])).toEqual([
       ['tx-1', 'purchased'],

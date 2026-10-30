@@ -327,6 +327,9 @@ export interface CommerceProvider {
    * The provider accepts `FinishTransactionInput.revoked`. A caller sends
    * `revoked` only to a provider that declares this: one built on an earlier
    * contract would refuse the field, or read the call as an ordinary finish.
+   * Such a provider also lists the store's unfinished revoked consumables
+   * (state `revoked`) in `getAvailablePurchases`, so a later launch finds
+   * them; nothing is verified or granted from them.
    */
   readonly acceptsRevokedFinish?: boolean;
   /** Asks the store to resynchronize, for example `AppStore.sync`. */

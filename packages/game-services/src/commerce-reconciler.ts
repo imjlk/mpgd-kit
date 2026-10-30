@@ -1287,6 +1287,12 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     if (
       record.purchase === undefined
       || !samePurchase(record.purchase, purchase)
+      // A `finished` record's transaction was finished: the report is the
+      // store's refund notice of a finished consumable (`Transaction.updates`),
+      // with nothing left unfinished. Step 5 revokes the record if the
+      // ledger reversed it; a later report of a still-unfinished one is
+      // noted then.
+      || record.state === 'finished'
       || !revokedFinishApplies(record.productKind ?? kind, record.purchase.transactionId)
     ) {
       return;
@@ -1334,7 +1340,12 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     purchase: StorePurchase,
     kind: PurchaseKind | undefined,
   ): Promise<void> => {
-    if (!revokedFinishApplies(kind, purchase.transactionId)) {
+    if (
+      !revokedFinishApplies(kind, purchase.transactionId)
+      // Already noted this session (the store redelivers it): no second
+      // derived-key hash and journal read.
+      || revokedReports.has(purchase.transactionId)
+    ) {
       return;
     }
     const idempotencyKey = await createDerivedPurchaseIdempotencyKey({
@@ -1415,6 +1426,10 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
           finished,
         });
         if (!finished) {
+          // Not counted as asked: the store could not finish it now (a native
+          // build from before the revoked finish, or a list that does not
+          // carry it yet). The next report of the transaction asks again.
+          revokedFinishAsked.delete(transactionId);
           fail(
             'finish',
             new Error(`The store did not finish the revoked transaction ${transactionId}.`),
@@ -1569,7 +1584,13 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
       // A revoked store state never revokes or verifies anything on its own:
       // only the ledger revokes (step 5). It is matched only to this
       // player's record of the same transaction, for a finish without a
-      // grant once the backend has answered for it.
+      // grant once the backend has answered for it. It is never attached to
+      // the player's open (`launched`) attempt for the product: the store
+      // reported no purchase for that attempt, and the open attempt may be
+      // another purchase still in flight (an Ask to Buy waiting for approval),
+      // which this refund must not end. Finishing the refunded transaction
+      // as unrecorded grants nothing, and the attempt keeps waiting for its
+      // own purchase report or its expiry, as before.
       if (record !== undefined) {
         noteRevoked(record, purchase, product.kind);
       } else {

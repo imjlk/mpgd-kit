@@ -1,7 +1,7 @@
 {
   "vector": "revoked-without-record",
   "protocol": "2.0.0-draft.1",
-  "summary": "A refunded consumable of the player's own account that the journal holds no record of is finished with revoked: true and no ledger entry, without a verify; nothing is journaled or granted. A refunded durable is left alone.",
+  "summary": "A refunded consumable of the player's own account that the journal holds no record of is finished with revoked: true and no ledger entry, without a verify; nothing is journaled or granted. A refunded durable is left alone and is not listed.",
   "profile": {
     "store": "fixture.client-token",
     "purchase": {
@@ -74,11 +74,6 @@
         "result": "finished"
       }
     ],
-    "available": [
-      {
-        "transactionId": "tx-5",
-        "state": "revoked"
-      }
-    ]
+    "available": []
   }
 }

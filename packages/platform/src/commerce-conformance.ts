@@ -266,9 +266,10 @@ export type CreateCommerceConformanceStoreInput = CommerceConformanceFixtureCont
  * `{ finished: true }` unless a `queueFinish` entry is queued, lists reported
  * purchases until they are finished, and buffers events emitted before the
  * first listener with `createCommerceEventBuffer`. With `profile.revokedFinish`
- * it declares `acceptsRevokedFinish`, lists its revoked purchases, refuses an
- * ordinary finish of one (`unfinished`), and finishes a revoked consumable
- * only on a revoked finish; one it no longer lists has nothing left to finish.
+ * it declares `acceptsRevokedFinish`, lists its revoked consumables, refuses
+ * an ordinary finish of a revoked purchase (`unfinished`), and finishes a
+ * revoked consumable only on a revoked finish; one it does not list stays
+ * `unfinished` (the store cannot tell finished from not listed yet).
  */
 export function createCommerceConformanceStore(
   input: CreateCommerceConformanceStoreInput,
@@ -363,7 +364,10 @@ export function createCommerceConformanceStore(
       // the event path only, unless the store finishes revoked purchases.
       return purchases.filter(
         (purchase) =>
-          (purchase.state !== 'revoked' || revokedFinish)
+          (purchase.state !== 'revoked'
+            || (revokedFinish
+              && input.catalog.find((entry) => entry.storeSku === purchase.storeSku)?.kind
+                === 'consumable'))
           && (includePending || purchase.state !== 'pending'),
       );
     },
@@ -382,7 +386,7 @@ export function createCommerceConformanceStore(
       const unscripted = !revokedFinish
         ? { finished: request.revoked !== true }
         : request.revoked === true
-          ? { finished: listed === undefined || (listed.state === 'revoked' && request.isConsumable) }
+          ? { finished: listed?.state === 'revoked' && request.isConsumable }
           : { finished: listed?.state !== 'revoked' };
       const queued = finishQueue.shift() ?? unscripted;
       if ('error' in queued) {
@@ -1349,6 +1353,10 @@ export function createCommerceConformanceRuntime(
     ) {
       return;
     }
+    if (known?.state === 'finished') {
+      // The refund notice of a finished consumable: nothing left unfinished.
+      return;
+    }
     let record = known;
     if (record === undefined) {
       // A record this runtime does not hold in memory, under its derived key.
@@ -1399,12 +1407,16 @@ export function createCommerceConformanceRuntime(
       revokedReports.delete(transactionId);
       revokedFinishAsked.add(transactionId);
       try {
-        await provider.finishTransaction?.({
+        const answer = await provider.finishTransaction?.({
           transactionId,
           ...(record?.ledgerEntryId === undefined ? {} : { ledgerEntryId: record.ledgerEntryId }),
           isConsumable: true,
           revoked: true,
         });
+        if (answer?.finished !== true) {
+          // Not counted as asked: the next report asks again.
+          revokedFinishAsked.delete(transactionId);
+        }
       } catch (error) {
         if (error instanceof CommerceConformanceScriptError) {
           throw error;
