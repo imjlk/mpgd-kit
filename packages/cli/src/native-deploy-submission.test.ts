@@ -8,6 +8,7 @@ import type { NativeDeploymentPlan } from './deploy-planning.js';
 import {
   assertSettledAndroidReleaseOptions,
   isNativeDeployApproved,
+  readRecordedIosBuild,
   submitRecordedNativeTargetWithPorts,
   verifyRecordedReleaseManifest,
   type NativeSubmissionPorts,
@@ -503,6 +504,25 @@ try {
     (error: unknown) => error instanceof AggregateError
       && error.message.includes('upload upload-1')
       && error.errors[0] instanceof IosSubmissionUncertainError,
+  );
+  // `mpgd deploy testflight` reads the recorded build without its IPA.
+  const recordedIos = {
+    ...ios,
+    artifactLocation: 'missing.ipa',
+    platformVersion: { marketingVersion: '1.4.0', buildNumber: 42 },
+  };
+  const recordedStatus = async (): Promise<NativeReleaseStatus> => ({
+    ...(await ports.readStatus({ gameRoot, gameId: 'game', releaseKey: 'beta-01' })),
+    builds: { android, ios: recordedIos as ImmutableNativeBuildRecord },
+    submissions: { ios: { remoteBuildId: 'build-1' } as NativeSubmissionCheckpoint },
+  });
+  assert.deepEqual(
+    await readRecordedIosBuild({ plan, gameId: 'game', releaseKey: 'beta-01' }, recordedStatus),
+    { bundleId: 'dev.mpgd.test', marketingVersion: '1.4.0', buildNumber: '42', buildId: 'build-1' },
+  );
+  await assert.rejects(
+    readRecordedIosBuild({ plan, gameId: 'other-game', releaseKey: 'beta-01' }, recordedStatus),
+    /differs from the reserved release/u,
   );
   console.info('Resumable recorded native submissions passed.');
 } finally {

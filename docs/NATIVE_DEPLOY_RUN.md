@@ -1,6 +1,6 @@
 # Resumable native test deployment
 
-`mpgd deploy` uses the game-owned Capacitor shells and the packaged Kit builder. It does not create a second native build engine. The default destinations are Google Play internal testing and an App Store Connect internal TestFlight group; `--track`, `--status`, `--user-fraction`, `--release-notes` and `--confirm-production` send the Android build to another Play track or as a staged rollout, and `mpgd deploy rollout` changes a rollout ([Google Play releases](GOOGLE_PLAY_RELEASES.md)).
+`mpgd deploy` uses the game-owned Capacitor shells and the packaged Kit builder. It does not create a second native build engine. The default destinations are Google Play internal testing and an App Store Connect internal TestFlight group; `--track`, `--status`, `--user-fraction`, `--release-notes` and `--confirm-production` send the Android build to another Play track or as a staged rollout, and `mpgd deploy rollout` changes a rollout ([Google Play releases](GOOGLE_PLAY_RELEASES.md)). After the internal TestFlight group, `mpgd deploy testflight distribute` adds external groups and submits the build for TestFlight App Review ([external testing](TESTFLIGHT_INTERNAL_SUBMISSION.md#external-testing-and-testflight-app-review)).
 
 ## Prepare the game
 

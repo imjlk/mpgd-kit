@@ -366,7 +366,8 @@ async function submitVerifiedIosBuildResolved(
       ['testflight', 'groups', 'list', '--build-id', build.id, '--internal'],
       lookupTimeoutMs,
     );
-    if (findInternalGroup(memberships, input.internalGroupId)) {
+    if (readBuildGroupMembership(memberships, build.id).some((group) => group.id === input.internalGroupId
+      && group.type === 'internal')) {
       return { ...base, status: 'testflight-ready', ...uploadReference, buildId: build.id };
     }
   } catch (error) {
@@ -523,6 +524,28 @@ function findInternalGroup(response: unknown, groupId: string): boolean {
   return readDataArray(response, 'TestFlight groups list').some((value) => isRecord(value)
     && value.type === 'betaGroups' && value.id === groupId
     && isRecord(value.attributes) && value.attributes.isInternalGroup === true);
+}
+
+/**
+ * asc 5.5.0 prints `testflight groups list --build-id` as its own membership
+ * result, not as App Store Connect resources:
+ * `{ buildId, appId, complete, groups: [{ id, name, type, membership }] }`
+ * (`internal/cli/testflight/build_group_membership.go`). An incomplete lookup
+ * is never read as "not a member".
+ */
+export function readBuildGroupMembership(
+  response: unknown,
+  buildId: string,
+): readonly { readonly id: string; readonly type: string }[] {
+  if (!isRecord(response) || response.buildId !== buildId || !Array.isArray(response.groups)
+    || response.groups.some((group) => !isRecord(group) || typeof group.id !== 'string'
+      || group.id === '' || typeof group.type !== 'string')) {
+    throw new Error('asc testflight groups list --build-id returned an invalid membership result.');
+  }
+  if (response.complete !== true) {
+    throw new Error('asc could not read every TestFlight group of the build.');
+  }
+  return response.groups as readonly { readonly id: string; readonly type: string }[];
 }
 
 function readDataArray(response: unknown, command: string): readonly unknown[] {

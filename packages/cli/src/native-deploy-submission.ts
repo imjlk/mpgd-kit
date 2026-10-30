@@ -186,6 +186,52 @@ async function readRecordedSubmission(
   readonly artifactFile: string;
   readonly status: Awaited<ReturnType<typeof readNativeReleaseStatus>>;
 }> {
+  const recorded = await readRecordedBuild(input, target, readStatus);
+  const artifactFile = resolveRecordedArtifact(
+    input.plan.gameRoot,
+    recorded.record.artifactLocation,
+  );
+  return { ...recorded, artifactFile };
+}
+
+/**
+ * The recorded iOS build of a release as App Store Connect knows it, for
+ * `mpgd deploy testflight`: bundle ID, marketing version, build number and,
+ * once the submission found it, the build ID. The IPA itself is not needed.
+ */
+export async function readRecordedIosBuild(
+  input: Pick<SubmitRecordedNativeTargetInput, 'plan' | 'gameId' | 'releaseKey' | 'environment' | 'signal'>,
+  readStatus: typeof readNativeReleaseStatus = readNativeReleaseStatus,
+): Promise<{
+  readonly bundleId: string;
+  readonly marketingVersion: string;
+  readonly buildNumber: string;
+  readonly buildId?: string;
+}> {
+  const { planned, record, status } = await readRecordedBuild(input, 'ios', readStatus);
+  const { marketingVersion, buildNumber } = record.platformVersion;
+  if (typeof marketingVersion !== 'string' || !/^\d+(?:\.\d+){0,2}$/u.test(marketingVersion)
+    || !/^[1-9]\d*$/u.test(String(buildNumber))) {
+    throw new Error('The recorded iOS build has no valid marketing version and build number.');
+  }
+  const buildId = status.submissions.ios?.remoteBuildId;
+  return {
+    bundleId: planned.appId,
+    marketingVersion,
+    buildNumber: String(buildNumber),
+    ...(buildId === undefined ? {} : { buildId }),
+  };
+}
+
+async function readRecordedBuild(
+  input: Pick<SubmitRecordedNativeTargetInput, 'plan' | 'gameId' | 'releaseKey' | 'environment' | 'signal'>,
+  target: 'android' | 'ios',
+  readStatus: typeof readNativeReleaseStatus,
+): Promise<{
+  readonly planned: NativeDeploymentPlan['targets'][number];
+  readonly record: ImmutableNativeBuildRecord;
+  readonly status: Awaited<ReturnType<typeof readNativeReleaseStatus>>;
+}> {
   const planned = input.plan.targets.find((entry) => entry.target === target);
   if (planned === undefined) {
     throw new Error('Native store submission requires a planned target and explicit approval.');
@@ -211,8 +257,7 @@ async function readRecordedSubmission(
     || record.internalTestGroupId !== planned.testGroup) {
     throw new Error('Store submission requires a matching immutable native build record.');
   }
-  const artifactFile = resolveRecordedArtifact(input.plan.gameRoot, record.artifactLocation);
-  return { planned, record, artifactFile, status };
+  return { planned, record, status };
 }
 
 export async function submitRecordedNativeTargetWithPorts(
