@@ -388,4 +388,63 @@ assert.throws(
   /not a BCP-47 language tag/u,
 );
 
+// App Review information and the copyright line (`mpgd store release`).
+const withReview = (appStore: Record<string, unknown>): unknown => ({
+  version: '1',
+  appStore: { localizations: valid.appStore?.localizations, ...appStore },
+});
+const contact = {
+  firstName: 'Dev',
+  lastName: 'Support',
+  email: 'dev@example.com',
+  phone: '+82 10 1234 5678',
+};
+const reviewed = assertStorePresence(
+  withReview({
+    copyright: '2026 Block Party Studio',
+    review: {
+      contact,
+      notes: 'Tap Play as guest.\nNo sign-in needed.',
+      demoAccount: { nameEnv: 'MPGD_REVIEW_DEMO_NAME', passwordEnv: 'MPGD_REVIEW_DEMO_PASSWORD' },
+    },
+  }),
+);
+assert.equal(reviewed.appStore?.review?.contact.phone, '+82 10 1234 5678');
+assert.equal(reviewed.appStore?.copyright, '2026 Block Party Studio');
+assert.throws(
+  () =>
+    assertStorePresence(withReview({ review: { contact: { ...contact, phone: '010 1234 5678' } } })),
+  /country code/u,
+);
+assert.throws(
+  () => assertStorePresence(withReview({ review: { contact: { ...contact, email: 'nobody' } } })),
+  /contact\.email is not an email address/u,
+);
+assert.throws(
+  () => assertStorePresence(withReview({ review: { contact, notes: 'x'.repeat(4001) } })),
+  /review\.notes is longer than 4000/u,
+);
+assert.throws(
+  () =>
+    assertStorePresence(
+      withReview({
+        review: {
+          contact,
+          demoAccount: { nameEnv: 'reviewer@example.com', passwordEnv: 'MPGD_PW' },
+        },
+      }),
+    ),
+  /must name an environment variable/u,
+);
+assert.throws(
+  () =>
+    assertStorePresence(
+      withReview({
+        review: { contact, demoAccount: { nameEnv: 'MPGD_SAME', passwordEnv: 'MPGD_SAME' } },
+      }),
+    ),
+  /same variable twice/u,
+);
+assert.throws(() => assertStorePresence(withReview({ copyright: ' 2026' })), /trimmed/u);
+
 console.info('Store presence schema tests passed.');

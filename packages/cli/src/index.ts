@@ -129,6 +129,16 @@ import {
 } from './store-presence-command.js';
 import { formatPlayPresencePlan } from './store-presence-play.js';
 import { formatAppStorePresencePlan } from './store-presence-app-store.js';
+import {
+  applyAppStoreReleaseCommand,
+  changeAppStorePhasedReleaseCommand,
+  planAppStoreReleaseCommand,
+  publishAppStoreVersionCommand,
+  readAppStoreReleaseStatusCommand,
+  saveAppStoreReleasePlan,
+  type ReleaseTypeOption,
+} from './app-store-release-command.js';
+import { formatAppStoreReleasePlan } from './app-store-release.js';
 import { changePlayRollout, type PlayRolloutAction } from './play-release-rollout.js';
 import { readNativeReleaseStatus as readNativeReleaseStatusForCli } from './release-state.js';
 import { uploadRecordedCrashSymbols } from './crash-symbols-upload.js';
@@ -316,6 +326,39 @@ export {
   type PlannedAppStoreLocale,
   type PlannedAscScreenshotSet,
 } from './store-presence-app-store.js';
+
+export {
+  applyAppStoreReleaseCommand,
+  changeAppStorePhasedReleaseCommand,
+  planAppStoreReleaseCommand,
+  publishAppStoreVersionCommand,
+  readAppStoreReleaseStatusCommand,
+  saveAppStoreReleasePlan,
+  type AppStoreReleaseApplyOptions,
+  type AppStoreReleaseCommandPorts,
+  type AppStoreReleasePlanFile,
+  type AppStoreReleasePlanOptions,
+  type AppStoreReleaseVersionOptions,
+  type ReleaseTypeOption,
+} from './app-store-release-command.js';
+
+export {
+  applyAppStoreRelease,
+  AppStoreReleaseApplyError,
+  changeAppStorePhasedRelease,
+  formatAppStoreReleasePlan,
+  planAppStoreRelease,
+  publishAppStoreVersion,
+  readAppStoreReleaseStatus,
+  type AppStoreReleaseApplyResult,
+  type AppStoreReleasePlan,
+  type AppStoreReleasePlanInput,
+  type AppStoreReleaseRequest,
+  type AppStoreReleaseStatus,
+  type PhasedReleaseAction,
+} from './app-store-release.js';
+
+export type { AscReleasePort } from './app-store-release-port.js';
 
 export type {
   AscAppInfo,
@@ -1348,9 +1391,169 @@ const storeCommand = defineI18n({
         }),
       },
     }),
+    release: defineI18n({
+      name: 'release',
+      description: 'App Store: prepare an iOS version, submit it for review, and release it.',
+      resource: commandResource({
+        en: 'App Store: prepare an iOS version, submit it for review, and release it.',
+        ko: 'App Store: iOS 버전을 준비해 심사에 제출하고 출시합니다.',
+      }),
+      subCommands: {
+        plan: defineI18n({
+          name: 'plan',
+          description: 'Read App Store Connect and print the release plan; never writes to the store.',
+          resource: commandResource({
+            en: 'Read App Store Connect and print the release plan; never writes to the store.',
+            ko: 'App Store Connect를 읽고 출시 계획을 출력합니다. 스토어에 쓰지 않습니다.',
+          }),
+          args: {
+            game: { type: 'string', required: false, description: 'Game project directory.' },
+            profile: { type: 'string', required: false, description: 'Deployment profile naming the app and credential; defaults to beta.' },
+            presence: { type: 'string', required: false, description: 'Store presence file path, relative to the current directory; defaults to mpgd.store-presence.json in the game.' },
+            'marketing-version': { type: 'string', required: false, description: 'Marketing version to submit, for example 1.0.1.' },
+            'build-number': { type: 'string', required: false, description: 'Build number to submit; defaults to the newest build of the version.' },
+            'game-id': { type: 'string', required: false, description: 'Release ledger game ID of the build deploy run recorded (with --release).' },
+            release: { type: 'string', required: false, description: 'Release ID of the build deploy run recorded (with --game-id).' },
+            'release-type': { type: 'string', required: false, description: 'manual (default), after-approval or scheduled.' },
+            'release-date': { type: 'string', required: false, description: 'Earliest release date for scheduled, ISO 8601 with time and offset.' },
+            'phased-release': { type: 'boolean', required: false, description: 'Release over 7 days (phased release); off by default.' },
+            'skip-iap': { type: 'string', required: false, description: 'Comma-separated in-app purchase product IDs to leave out of this submission.' },
+            'rotate-demo-password': { type: 'boolean', required: false, description: 'Send the demo account password again even when App Store Connect has one.' },
+            out: { type: 'string', required: false, description: 'New plan JSON path for apply; existing files are not overwritten.' },
+          },
+          run: async (ctx) => {
+            const optional = (key: string): string | undefined => readOptionalString((ctx.values as Record<string, unknown>)[key]);
+            const skipIaps = optional('skip-iap')?.split(',').map((entry) => entry.trim()).filter((entry) => entry !== '');
+            const presence = optional('presence');
+            const version = optional('marketing-version');
+            const buildNumber = optional('build-number');
+            const gameId = optional('game-id');
+            const release = optional('release');
+            const releaseType = optional('release-type');
+            const releaseDate = optional('release-date');
+            const result = await planAppStoreReleaseCommand({
+              game: optional('game') ?? '.',
+              profile: optional('profile') ?? 'beta',
+              ...(presence === undefined ? {} : { presenceFile: presence }),
+              ...(version === undefined ? {} : { version }),
+              ...(buildNumber === undefined ? {} : { buildNumber }),
+              ...(gameId === undefined ? {} : { gameId }),
+              ...(release === undefined ? {} : { release }),
+              ...(releaseType === undefined ? {} : { releaseType: releaseType as ReleaseTypeOption }),
+              ...(releaseDate === undefined ? {} : { releaseDate }),
+              ...(ctx.values['phased-release'] === true ? { phasedRelease: true } : {}),
+              ...(skipIaps === undefined ? {} : { skipIaps }),
+              ...(ctx.values['rotate-demo-password'] === true ? { rotateDemoPassword: true } : {}),
+            });
+            console.info(formatAppStoreReleasePlan(result.plan));
+            const out = optional('out');
+            if (out !== undefined) {
+              console.info(`Wrote store release plan: ${saveAppStoreReleasePlan(out, result)}`);
+            }
+          },
+        }),
+        apply: defineI18n({
+          name: 'apply',
+          description: 'Perform the reviewed release plan; refuses when App Store Connect or the files changed since.',
+          resource: commandResource({
+            en: 'Perform the reviewed release plan; refuses when App Store Connect or the files changed since.',
+            ko: '검토한 출시 계획을 수행합니다. 이후 App Store Connect나 파일이 바뀌었으면 거부합니다.',
+          }),
+          args: {
+            plan: { type: 'string', required: true, description: 'Plan JSON written by "store release plan --out".' },
+            game: { type: 'string', required: false, description: 'Current game directory if the game moved.' },
+            approve: { type: 'boolean', required: false, description: 'Approve the App Store Connect writes and the review submission.' },
+            'dry-run': { type: 'boolean', required: false, description: 'Re-check the plan against App Store Connect and print the writes; write nothing.' },
+          },
+          run: async (ctx) => {
+            const game = readOptionalString(ctx.values.game);
+            const result = await applyAppStoreReleaseCommand({
+              planFile: readRequiredCliOption(ctx.values.plan, '--plan'),
+              ...(game === undefined ? {} : { game }),
+              approved: ctx.values.approve === true,
+              ...(ctx.values['dry-run'] === true ? { dryRun: true } : {}),
+            });
+            console.info(JSON.stringify(result, null, 2));
+          },
+        }),
+        status: defineI18n({
+          name: 'status',
+          description: 'Report where the iOS version and its review submission stand; reads only.',
+          resource: commandResource({
+            en: 'Report where the iOS version and its review submission stand; reads only.',
+            ko: 'iOS 버전과 심사 제출 상태를 보고합니다. 읽기만 합니다.',
+          }),
+          args: {
+            game: { type: 'string', required: false, description: 'Game project directory.' },
+            profile: { type: 'string', required: false, description: 'Deployment profile naming the app and credential; defaults to beta.' },
+            'marketing-version': { type: 'string', required: false, description: 'Marketing version; defaults to the newest iOS version.' },
+          },
+          run: async (ctx) => {
+            const version = readOptionalString(ctx.values['marketing-version']);
+            const result = await readAppStoreReleaseStatusCommand({
+              game: readOptionalString(ctx.values.game) ?? '.',
+              profile: readOptionalString(ctx.values.profile) ?? 'beta',
+              ...(version === undefined ? {} : { version }),
+            });
+            console.info(result.summary);
+            console.info(JSON.stringify(result, null, 2));
+          },
+        }),
+        publish: defineI18n({
+          name: 'publish',
+          description: 'Release an approved version that waits for a manual release.',
+          resource: commandResource({
+            en: 'Release an approved version that waits for a manual release.',
+            ko: '수동 출시를 기다리는 승인된 버전을 출시합니다.',
+          }),
+          args: {
+            game: { type: 'string', required: false, description: 'Game project directory.' },
+            profile: { type: 'string', required: false, description: 'Deployment profile naming the app and credential; defaults to beta.' },
+            'marketing-version': { type: 'string', required: true, description: 'Marketing version to release.' },
+            approve: { type: 'boolean', required: false, description: 'Approve releasing the version to players.' },
+          },
+          run: async (ctx) => {
+            const result = await publishAppStoreVersionCommand({
+              game: readOptionalString(ctx.values.game) ?? '.',
+              profile: readOptionalString(ctx.values.profile) ?? 'beta',
+              version: readRequiredCliOption(ctx.values['marketing-version'], '--marketing-version'),
+              approved: ctx.values.approve === true,
+            });
+            console.info(JSON.stringify(result, null, 2));
+          },
+        }),
+        phased: defineI18n({
+          name: 'phased',
+          description: 'Pause, resume or complete the phased release of a released version.',
+          resource: commandResource({
+            en: 'Pause, resume or complete the phased release of a released version.',
+            ko: '출시된 버전의 단계적 출시를 일시 중지, 재개 또는 완료합니다.',
+          }),
+          args: {
+            game: { type: 'string', required: false, description: 'Game project directory.' },
+            profile: { type: 'string', required: false, description: 'Deployment profile naming the app and credential; defaults to beta.' },
+            'marketing-version': { type: 'string', required: true, description: 'Marketing version of the phased release.' },
+            action: { type: 'string', required: true, description: 'pause, resume or complete.' },
+            approve: { type: 'boolean', required: false, description: 'Approve the phased release change.' },
+          },
+          run: async (ctx) => {
+            const result = await changeAppStorePhasedReleaseCommand({
+              game: readOptionalString(ctx.values.game) ?? '.',
+              profile: readOptionalString(ctx.values.profile) ?? 'beta',
+              version: readRequiredCliOption(ctx.values['marketing-version'], '--marketing-version'),
+              action: readRequiredCliOption(ctx.values.action, '--action'),
+              approved: ctx.values.approve === true,
+            });
+            console.info(JSON.stringify(result, null, 2));
+          },
+        }),
+      },
+    }),
   },
   run: () => {
-    console.info('Use "mpgd store products plan|apply" or "mpgd store presence plan|apply".');
+    console.info(
+      'Use "mpgd store products plan|apply", "mpgd store presence plan|apply" or "mpgd store release plan|apply|status".',
+    );
   },
 });
 
