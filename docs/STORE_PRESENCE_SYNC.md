@@ -231,10 +231,12 @@ The App Store page has two parts with different lifetimes:
   `DEVELOPER_REJECTED`, `REJECTED`, `METADATA_REJECTED`).
 
 The sync never creates a version, never submits for review, and never
-touches pricing, availability or release settings. When nothing is
+touches pricing, availability or release settings; `mpgd store release`
+does the version, its build, App Review information and the submission
+([App Store releases](./APP_STORE_RELEASES.md)). When nothing is
 editable, `plan` marks the parts `blocked`, shows what would change, and
-prints the step as `manual` (create the next version in App Store Connect,
-then plan again); the plan header counts the blocked parts. A locale that is
+prints the step as `manual` (create the next version with `mpgd store
+release`, then plan again); the plan header counts the blocked parts. A locale that is
 not on App Store Connect yet waits whole while no app information record is
 editable, so it is never half added without a name. App Store Connect takes
 what's new only once a version of the app has been released
@@ -294,8 +296,10 @@ subtitle or promotional text stays manual. App previews (videos) are not
 synced.
 
 What stays manual in App Store Connect (printed by `plan`): App Privacy
-answers, the age rating, App Review notes and demo account, pricing,
-availability, release settings, and submitting for review.
+answers, the age rating, pricing and availability. App Review information,
+release settings and submitting for review are `mpgd store release`, which
+reads `appStore.copyright` and `appStore.review` from this file
+([App Store releases](./APP_STORE_RELEASES.md#the-game-files)).
 
 ### App Store Connect references
 

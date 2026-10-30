@@ -97,9 +97,42 @@ export interface AppStorePresenceLocalization {
   readonly screenshots?: AppStorePresenceScreenshots;
 }
 
+/** The person App Review contacts about a submission (App Store Connect "App Review Information"). */
+export interface AppStorePresenceReviewContact {
+  readonly firstName: string & tags.MinLength<1>;
+  readonly lastName: string & tags.MinLength<1>;
+  readonly email: string & tags.MinLength<3>;
+  /** With the country code, for example `+82 10 1234 5678`. */
+  readonly phone: string & tags.MinLength<3>;
+}
+
+/**
+ * The sign-in App Review uses when content sits behind an account. The file
+ * names the environment variables that hold the user name and password,
+ * never the values: they are read when `mpgd store release` plans and
+ * applies, and never written to a plan file.
+ */
+export interface AppStorePresenceDemoAccount {
+  readonly nameEnv: string & tags.MinLength<1>;
+  readonly passwordEnv: string & tags.MinLength<1>;
+}
+
+/** App Review information of the version `mpgd store release` submits. */
+export interface AppStorePresenceReview {
+  readonly contact: AppStorePresenceReviewContact;
+  /** At most 4,000 characters. */
+  readonly notes?: string & tags.MinLength<1>;
+  /** Only when App Review needs to sign in; leave it out when the notes are enough. */
+  readonly demoAccount?: AppStorePresenceDemoAccount;
+}
+
 export interface AppStorePresence {
   /** Keyed by App Store Connect locale, for example `en-US`, `ko` or `zh-Hans`. */
   readonly localizations: Readonly<Record<string, AppStorePresenceLocalization>>;
+  /** The version's copyright line, for example `2026 Block Party Studio` (`mpgd store release`). */
+  readonly copyright?: string & tags.MinLength<1>;
+  /** App Review contact, notes and demo account (`mpgd store release`). */
+  readonly review?: AppStorePresenceReview;
 }
 
 export interface StorePresence {
@@ -175,6 +208,8 @@ export const appStorePresenceLimits = Object.freeze({
   promotionalText: 170,
   whatsNew: 4000,
   screenshots: 10,
+  /** App Review notes. */
+  reviewNotes: 4000,
 });
 
 /** Accepted pixel sizes per App Store display (portrait; landscape is the same pair swapped). */
@@ -323,6 +358,41 @@ function assertAppStore(appStore: AppStorePresence): void {
       if (set !== undefined) {
         assertImageSet(set, `${field}.screenshots.${display}`, appStorePresenceLimits.screenshots);
       }
+    }
+  }
+  if (appStore.copyright !== undefined) {
+    assertText(appStore.copyright, 'appStore.copyright', Number.POSITIVE_INFINITY);
+  }
+  if (appStore.review !== undefined) {
+    assertAppStoreReview(appStore.review);
+  }
+}
+
+function assertAppStoreReview(review: AppStorePresenceReview): void {
+  const { contact } = review;
+  assertText(contact.firstName, 'appStore.review.contact.firstName', Number.POSITIVE_INFINITY);
+  assertText(contact.lastName, 'appStore.review.contact.lastName', Number.POSITIVE_INFINITY);
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(contact.email)) {
+    throw new Error('Store presence appStore.review.contact.email is not an email address.');
+  }
+  if (!/^\+[0-9][0-9 ()-]{2,}$/u.test(contact.phone)) {
+    throw new Error(
+      'Store presence appStore.review.contact.phone must be a telephone number with its country code (+...).',
+    );
+  }
+  if (review.notes !== undefined) {
+    assertText(review.notes, 'appStore.review.notes', appStorePresenceLimits.reviewNotes, true);
+  }
+  if (review.demoAccount !== undefined) {
+    for (const key of ['nameEnv', 'passwordEnv'] as const) {
+      if (!/^[A-Z_][A-Z0-9_]*$/u.test(review.demoAccount[key])) {
+        throw new Error(
+          `Store presence appStore.review.demoAccount.${key} must name an environment variable (A-Z, 0-9, _), not hold the value.`,
+        );
+      }
+    }
+    if (review.demoAccount.nameEnv === review.demoAccount.passwordEnv) {
+      throw new Error('Store presence appStore.review.demoAccount names the same variable twice.');
     }
   }
 }

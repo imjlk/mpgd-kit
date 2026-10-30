@@ -259,8 +259,9 @@ async function planWithLocal(
     releasedVersionStates.has(String(candidate.state)) || releasedVersionStates.has(String(candidate.appStoreState)));
   if (version === undefined) {
     manual.push(
-      'No iOS version is editable (PREPARE_FOR_SUBMISSION or rejected): create the next version in App Store '
-      + 'Connect, then plan again. The sync never creates or submits a version.',
+      'No iOS version is editable (PREPARE_FOR_SUBMISSION or rejected): create the next version with '
+      + '"mpgd store release plan" and apply (or in App Store Connect), then plan again. The sync never creates or '
+      + 'submits a version.',
     );
   }
   const versionLocalizations = version === undefined
@@ -310,8 +311,9 @@ async function planWithLocal(
     .filter((locale) => !named.has(locale.toLowerCase()))
     .sort();
   manual.push(
-    'App Privacy answers, the age rating, App Review notes and demo account, pricing, availability, release '
-    + 'settings and submitting for review stay in App Store Connect.',
+    'App Privacy answers, the age rating, pricing and availability stay in App Store Connect; creating the '
+    + 'version, its build, App Review information, release settings and submitting for review are '
+    + '"mpgd store release".',
   );
   const imageRemovals = planned.reduce(
     (sum, locale) => sum + locale.screenshots.reduce(

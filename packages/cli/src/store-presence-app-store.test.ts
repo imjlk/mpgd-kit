@@ -322,7 +322,7 @@ try {
     assert.match(printed, /replace +ipad13 \(APP_IPAD_PRO_3GEN_129\) complete set/u);
     assert.match(printed, /- old-ipad aaaaaaaaaaaa/u);
     assert.match(printed, /IMAGE REMOVAL: 1 screenshot/u);
-    assert.match(printed, /submitting for review stay in App Store Connect/u);
+    assert.match(printed, /submitting for review are "mpgd store release"/u);
 
     await assert.rejects(
       applyAppStorePresence({ saved: plan, plan: input(fullFile), port: asc.port, approved: true }),
