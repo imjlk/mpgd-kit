@@ -930,6 +930,16 @@ function lookupOf(registry: AppStoreRevocationRegistry, transaction: AppStoreTra
     type: 'Consumable',
     appAccountToken: 'f15f2ed7-f92a-4c5a-90e1-15d26cd729f2',
   };
+  // Apple reversed the refund: StoreKit then signs the transaction again,
+  // after the refund and without a revocationDate.
+  const postReversal: AppStoreTransactionPayload = {
+    ...preRefund,
+    signedDate: Date.parse('2026-10-24T12:00:00.000Z'),
+  };
+  const signedPayloads: Readonly<Record<string, AppStoreTransactionPayload>> = {
+    'pre-refund-jws': preRefund,
+    'post-reversal-jws': postReversal,
+  };
   function createOfflineBackend(registry: AppStoreRevocationRegistry) {
     const store = createInMemoryGameServicesStore();
     const backend = createGameServicesBackend({
@@ -954,8 +964,9 @@ function lookupOf(registry: AppStoreRevocationRegistry, transaction: AppStoreTra
         },
         signedTransactionVerifier: {
           async verifyAndDecode(input) {
-            assert.equal(input.signedTransaction, 'pre-refund-jws');
-            return { status: 'verified', payload: preRefund };
+            const payload = signedPayloads[input.signedTransaction];
+            assert.ok(payload, `unexpected JWS ${input.signedTransaction}`);
+            return { status: 'verified', payload };
           },
         },
         resolveAppAccountToken: () => preRefund.appAccountToken ?? '',
@@ -1007,6 +1018,37 @@ function lookupOf(registry: AppStoreRevocationRegistry, transaction: AppStoreTra
     0,
     'no grant is written, so no grant stands without a reversal behind it',
   );
+
+  // Apple reverses the refund. The record stays, but it refuses only a JWS
+  // signed before the refund: the fresh JWS is granted, as the Server API
+  // mode would grant the transaction's current status.
+  const reversal = await handle(
+    store,
+    verifierOf(
+      notification({
+        notificationType: 'REFUND_REVERSED',
+        notificationUUID: 'uuid-refund-reversed',
+        transaction: postReversal,
+      }),
+    ),
+    { revocations: registry },
+  );
+  assert.equal(reversal.status, 'ignored', 'the reversal finds no grant to note');
+  assert.equal(
+    (await backend.purchases.verifyPurchase(request)).verified,
+    false,
+    'the pre-refund JWS stays refused after the reversal',
+  );
+  const regranted = await backend.purchases.verifyPurchase({
+    ...request,
+    idempotencyKey: 'checkout-after-reversal',
+    evidence: createAppStoreSignedTransactionEvidence({
+      signedTransaction: 'post-reversal-jws',
+      transactionId: preRefund.transactionId,
+    }),
+  });
+  assert.equal(regranted.verified, true, 'a post-reversal JWS is granted');
+  assert.equal((await store.listEntitlementTransactions()).length, 1);
 
   // Without the recorded refund the same JWS would grant: the gap this closes.
   const control = createOfflineBackend(createInMemoryAppStoreRevocationRegistry());

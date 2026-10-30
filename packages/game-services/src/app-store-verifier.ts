@@ -5,6 +5,11 @@ import type {
   GameServicesEvidenceVerifier,
   VerifyPurchaseEvidenceInput,
 } from './evidence-verification.js';
+import {
+  createAppStoreGrantVerificationId,
+  createAppStoreVerificationId,
+  encodeVerificationIdSegment,
+} from './app-store-verification-id.js';
 
 export type AppStoreEnvironment = 'Production' | 'Sandbox';
 
@@ -130,9 +135,11 @@ export interface CreateAppStoreEvidenceVerifierOptions {
    * after it was signed still reads as purchased. Before a grant it therefore
    * asks `revocations`, the store of refunds and revocations App Store Server
    * Notifications recorded (`handleAppStoreServerNotification({ revocations })`),
-   * and refuses one found there with `APP_STORE_TRANSACTION_REVOKED`. A refund
-   * Apple has not notified yet is still accepted until `signedDate` falls out
-   * of the window; the notification then reverses the grant. `{ mode:
+   * and refuses a JWS signed at or before a revocation found there (plus
+   * `clockSkewMs`) with `APP_STORE_TRANSACTION_REVOKED`; a JWS signed later
+   * without a `revocationDate` shows a refund Apple reversed and passes. A
+   * refund Apple has not notified yet is still accepted until `signedDate`
+   * falls out of the window; the notification then reverses the grant. `{ mode:
    * 'ignore' }` fetches by id for every request.
    */
   readonly signedTransactionEvidence?: AppStoreSignedTransactionEvidencePolicy;
@@ -178,7 +185,10 @@ export type AppStoreSignedTransactionEvidencePolicy =
        * Required. The revocations this backend learned from App Store Server
        * Notifications, read before every offline-only grant: a client can keep
        * a JWS signed before a refund, and a refund that reached the backend
-       * before the first grant has no ledger grant to reverse. It must read
+       * before the first grant has no ledger grant to reverse. A record
+       * refuses only a JWS signed at or before its `revokedAt` plus
+       * `clockSkewMs`, so a refund Apple later reversed grants again from a
+       * fresh JWS. It must read
        * the durable store the notification handler's `revocations` recorder
        * writes, across every instance that verifies purchases.
        */
@@ -209,8 +219,8 @@ export interface AppStoreRevocationRecord {
    * When Apple revoked it: the transaction's `revocationDate`, else when the
    * notification was handled (the ledger `revoke` entry's `revokedAt`). A
    * record may be dropped once `revokedAt` is older than the verifier's
-   * `maxSignedAgeMs` plus `clockSkewMs`: every JWS signed before it is then
-   * stale, and one signed after it carries its own `revocationDate`.
+   * `maxSignedAgeMs` plus `clockSkewMs`: every JWS the record refuses
+   * (signed at or before `revokedAt` plus `clockSkewMs`) is then stale.
    */
   readonly revokedAt: string;
   readonly notificationType: string;
@@ -643,16 +653,19 @@ async function verifyAppStorePurchase(
       : { status: 'rejected', reason: 'APP_STORE_ACCOUNT_TOKEN_MISMATCH', anotherAccount: true };
   }
 
-  const verificationId = createVerificationId(transaction);
+  const verificationId = createAppStoreGrantVerificationId(transaction);
   if (offlineTransaction !== undefined && policy.mode === 'offline-only') {
     // The client JWS cannot show a refund after it was signed: a refund the
-    // backend already heard of refuses the grant, as a fresh Server API
-    // status would. A refund before the first grant has no ledger grant to
-    // reverse, so without this check it would grant with nothing behind it.
+    // backend already heard of refuses a JWS signed before it, as a fresh
+    // Server API status would. A refund before the first grant has no ledger
+    // grant to reverse, so without this check it would grant with nothing
+    // behind it. A JWS signed after it without a `revocationDate` shows that
+    // Apple reversed the refund, and passes.
     const revocation = await findRecordedRevocation(
       policy.revocations,
       verificationId,
       transaction,
+      clockSkewMs,
       input.signal,
     );
     if (revocation !== undefined) {
@@ -691,13 +704,18 @@ const defaultSignedTransactionEvidencePolicy: AppStoreSignedTransactionEvidenceP
 
 /**
  * The offline-only refusal for a revocation the backend recorded, or
- * `undefined` when none is. Any answer other than `undefined` refuses: a
- * malformed record still says the registry holds something for this grant.
+ * `undefined` when none applies. A record refuses a JWS signed at or before
+ * its `revokedAt` (widened by `clockSkewMs`, so skew errs toward refusing):
+ * that JWS is a snapshot from before the refund. A JWS signed later already
+ * shows the revocation in its own `revocationDate` (refused by the payload
+ * checks), unless Apple reversed the refund, so it passes. A record whose
+ * `revokedAt` does not parse refuses every JWS.
  */
 async function findRecordedRevocation(
   revocations: AppStoreRevocationLookup,
   verificationId: string,
   transaction: AppStoreTransactionPayload,
+  clockSkewMs: number,
   signal: AbortSignal,
 ): Promise<EvidenceVerificationDecision | undefined> {
   let record: AppStoreRevocationRecord | undefined;
@@ -716,9 +734,14 @@ async function findRecordedRevocation(
     }
     return { status: 'pending', reason: 'APP_STORE_REVOCATION_LOOKUP_UNAVAILABLE' };
   }
-  return record === undefined
-    ? undefined
-    : { status: 'rejected', reason: 'APP_STORE_TRANSACTION_REVOKED' };
+  if (record === undefined) {
+    return undefined;
+  }
+  const revokedAtMs = typeof record.revokedAt === 'string' ? Date.parse(record.revokedAt) : NaN;
+  if (Number.isFinite(revokedAtMs) && transaction.signedDate > revokedAtMs + clockSkewMs) {
+    return undefined;
+  }
+  return { status: 'rejected', reason: 'APP_STORE_TRANSACTION_REVOKED' };
 }
 
 type AppStoreSandboxGrantPolicy = Extract<AppStoreSandboxPurchasePolicy, { readonly mode: 'grant' }>;
@@ -998,29 +1021,7 @@ function validateTransaction(
   return undefined;
 }
 
-function createVerificationId(transaction: AppStoreTransactionPayload): string {
-  const grantTransactionId = transaction.type === 'Non-Consumable'
-    ? transaction.originalTransactionId
-    : transaction.transactionId;
-  return createAppStoreVerificationId({
-    environment: transaction.environment,
-    bundleId: transaction.bundleId,
-    transactionId: grantTransactionId,
-  });
-}
-
-export function createAppStoreVerificationId(input: {
-  readonly environment: AppStoreEnvironment;
-  readonly bundleId: string;
-  readonly transactionId: string;
-}): string {
-  return [
-    'app-store',
-    input.environment,
-    input.bundleId,
-    input.transactionId,
-  ].map(encodeVerificationIdSegment).join(':');
-}
+export { createAppStoreVerificationId };
 
 /** Identify IDs emitted by this verifier without duplicating its encoding format. */
 export function isAppStoreVerificationId(verificationId: string): boolean {
@@ -1051,10 +1052,6 @@ export function isAppStoreVerificationId(verificationId: string): boolean {
     && (values[1] === 'Production' || values[1] === 'Sandbox')
     && typeof values[2] === 'string' && values[2].length > 0
     && typeof values[3] === 'string' && /^[1-9][0-9]{0,19}$/u.test(values[3]);
-}
-
-function encodeVerificationIdSegment(value: string): string {
-  return `${value.length}:${encodeURIComponent(value)}`;
 }
 
 function toCatalogProductType(type: AppStoreInAppPurchaseType): ProductType {

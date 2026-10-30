@@ -1303,6 +1303,56 @@ assertEqual(
     'a consumable refund refuses only its own transaction',
   );
 
+  // The record refuses only a JWS signed at or before the revocation (plus
+  // the default 5-minute clock skew, which widens the refusal). A JWS signed
+  // later without a revocationDate shows that Apple reversed the refund.
+  const recordedRevokedAtMs = Date.parse(revocationOf(baseTransaction).revokedAt);
+  const defaultClockSkewMs = 5 * 60 * 1000;
+  assertDecision(
+    await createOfflineHarness({
+      policy: offlinePolicy(2 * 60 * 60 * 1000, refundRegistry),
+      client: { ...baseTransaction, signedDate: recordedRevokedAtMs + defaultClockSkewMs },
+    }).verifier.verifyPurchase(evidenceInput),
+    'rejected',
+    'APP_STORE_TRANSACTION_REVOKED',
+    'a JWS signed within the clock skew after the revocation is still refused',
+  );
+  assertEqual(
+    (await createOfflineHarness({
+      policy: offlinePolicy(2 * 60 * 60 * 1000, refundRegistry),
+      client: { ...baseTransaction, signedDate: recordedRevokedAtMs + defaultClockSkewMs + 1 },
+    }).verifier.verifyPurchase(evidenceInput)).status,
+    'verified',
+    'a JWS signed after the recorded refund without a revocationDate (a reversed refund) is granted',
+  );
+  assertDecision(
+    await createOfflineHarness({
+      policy: offlinePolicy(2 * 60 * 60 * 1000, refundRegistry),
+      client: {
+        ...baseTransaction,
+        signedDate: recordedRevokedAtMs + defaultClockSkewMs + 1,
+        revocationDate: recordedRevokedAtMs,
+      },
+    }).verifier.verifyPurchase(evidenceInput),
+    'rejected',
+    'APP_STORE_TRANSACTION_REVOKED',
+    'a JWS signed after the refund that carries it is refused by the payload check',
+  );
+  const unparseableRegistry = createInMemoryAppStoreRevocationRegistry();
+  await unparseableRegistry.recordRevocation({
+    record: { ...revocationOf(baseTransaction), revokedAt: 'not-a-time' },
+    signal: controller.signal,
+  });
+  assertDecision(
+    await createOfflineHarness({
+      policy: offlinePolicy(2 * 60 * 60 * 1000, unparseableRegistry),
+      client: { ...baseTransaction, signedDate: recordedRevokedAtMs + 60 * 60 * 1000 },
+    }).verifier.verifyPurchase(evidenceInput),
+    'rejected',
+    'APP_STORE_TRANSACTION_REVOKED',
+    'a record whose revokedAt does not parse refuses every JWS',
+  );
+
   // A non-consumable is keyed by its original transaction: a restore of a
   // refunded purchase (a new transaction id) is refused too.
   const nonConsumableTransaction: AppStoreTransactionPayload = {

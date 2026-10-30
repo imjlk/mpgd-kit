@@ -151,9 +151,14 @@ current status, selected by `signedTransactionEvidence`:
   before the first grant leaves no ledger grant to reverse, so this mode
   requires `revocations`, an `AppStoreRevocationLookup` (construction throws
   without it). Before a grant (or a `restorable` answer) the verifier looks
-  the grant identity up there and refuses a recorded refund or revocation
-  with `APP_STORE_TRANSACTION_REVOKED`, the reason the commerce reconciler
-  finishes a refunded consumable on; a lookup outage
+  the grant identity up there and, when a refund or revocation is recorded,
+  refuses a JWS signed at or before its `revokedAt` plus `clockSkewMs` (the
+  skew widens the refusal) with `APP_STORE_TRANSACTION_REVOKED`, the reason
+  the commerce reconciler finishes a refunded consumable on. A record whose
+  `revokedAt` does not parse refuses every JWS. A JWS signed later carries
+  its own `revocationDate` while the refund stands (refused by the payload
+  checks); one without it shows that Apple reversed the refund, and passes,
+  as a Server API verifier would grant it. A lookup outage
   (`AppStoreDependencyUnavailableError`) is `pending`
   (`APP_STORE_REVOCATION_LOOKUP_UNAVAILABLE`). The registry is filled by
   `handleAppStoreServerNotification({ revocations })` (below), so it must be
@@ -1081,14 +1086,12 @@ the purchase verifier, one per environment.
   recorded. A record's `revokedAt` is the ledger's: Apple's `revocationDate`,
   else the handling time. A record may be dropped once `revokedAt` is older
   than the verifier's `maxSignedAgeMs` plus `clockSkewMs`, since every JWS
-  signed before it is then stale and one signed after it carries its own
-  `revocationDate`.
-- `REFUND_REVERSED` leaves the record in place, as it leaves a reversed
-  grant reversed. That includes a refund reversed before any grant: the
-  offline-only verifier keeps refusing that purchase (a Server API verifier
-  would grant it), and the notification is `ignored`
-  (`APP_STORE_NOTIFICATION_GRANT_NOT_FOUND`) with no ledger note. Support
-  re-grants such a purchase on the game's own terms, as after any reversal.
+  it refuses (signed at or before that time) is then stale.
+- `REFUND_REVERSED` records nothing and leaves the record in place: the
+  record refuses only a JWS signed before the refund, so after a refund
+  reversed before any grant the client's fresh JWS (no `revocationDate`)
+  is granted by the offline-only verifier, as the Server API mode grants
+  it. A grant the ledger already reversed stays reversed (below).
 - `REFUND` reverses the grant with reason `refund`, keyed
   `app-store:notification:<notificationUUID>`. Non-consumables are found by
   their original transaction id, consumables by their own. `REVOKE` is

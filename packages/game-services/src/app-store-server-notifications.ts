@@ -3,9 +3,9 @@ import {
   findPurchaseGrantByEvidenceVerificationId,
   revokeEntitlementGrant,
 } from './commerce-ledger.js';
+import { createAppStoreGrantVerificationId } from './app-store-verification-id.js';
 import {
   AppStoreDependencyUnavailableError,
-  createAppStoreVerificationId,
   type AppStoreEnvironment,
   type AppStoreRevocationReason,
   type AppStoreRevocationRecorder,
@@ -257,13 +257,7 @@ export async function handleAppStoreServerNotification(
 
   // The grant's identity is the one the purchase verifier recorded:
   // non-consumables by their original transaction, consumables by their own.
-  const grantVerificationId = createAppStoreVerificationId({
-    environment: transaction.environment,
-    bundleId: transaction.bundleId,
-    transactionId: transaction.type === 'Non-Consumable'
-      ? transaction.originalTransactionId
-      : transaction.transactionId,
-  });
+  const grantVerificationId = createAppStoreGrantVerificationId(transaction);
   const now = input.now ?? (() => new Date().toISOString());
   const revokedAt = readTimestamp(transaction.revocationDate) ?? now();
   if (reason !== undefined && input.revocations !== undefined) {
