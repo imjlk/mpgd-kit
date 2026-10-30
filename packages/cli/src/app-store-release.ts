@@ -43,7 +43,7 @@ import { stableSha256, StorePlanStaleError } from './store-sync.js';
 
 export const appStoreReleasePlanCommand = 'mpgd store release plan';
 
-export type AppStoreReleaseStage = 'create-version' | 'prepare' | 'submitted' | 'approved';
+export type AppStoreReleaseStage = 'create-version' | 'prepare' | 'submitted' | 'approved' | 'released';
 
 export interface AppStoreReleaseRequest {
   /** The marketing version (`CFBundleShortVersionString`) to submit. */
@@ -257,7 +257,7 @@ async function planWithWrites(
 ): Promise<{ readonly plan: AppStoreReleasePlan; readonly writes: PlannedWrites }> {
   const appStore = requireAppStore(input.presence);
   const { request } = input;
-  assertRequest(request, input.now?.() ?? new Date());
+  assertRequest(request);
   const app = await ports.release.readApp(input.appId);
   if (app.bundleId !== input.bundleId) {
     throw new Error(
@@ -284,15 +284,23 @@ async function planWithWrites(
     marketingVersion: request.marketingVersion,
   };
 
-  // A version that is submitted, approved or released has nothing left to prepare.
+  // A version that is submitted, approved or released has nothing left to prepare;
+  // re-applying the plan that got it there is a no-op.
   if (named !== undefined && inStates(named, releasedVersionStates)) {
-    throw new Error(
+    blockers.push(
       `iOS version ${named.versionString} is already ${versionState(named)}: submit a new marketing version.`,
     );
   }
-  if (named !== undefined && (inStates(named, submittedVersionStates) || inStates(named, approvedVersionStates))) {
-    const stage = inStates(named, approvedVersionStates) ? 'approved' : 'submitted';
-    notes.push(stage === 'approved'
+  if (named !== undefined && (inStates(named, submittedVersionStates) || inStates(named, approvedVersionStates)
+    || inStates(named, releasedVersionStates))) {
+    const stage = inStates(named, releasedVersionStates)
+      ? 'released'
+      : inStates(named, approvedVersionStates)
+        ? 'approved'
+        : 'submitted';
+    notes.push(stage === 'released'
+      ? `Version ${named.versionString} is released; follow it with "mpgd store release status".`
+      : stage === 'approved'
       ? `Version ${named.versionString} is ${versionState(named)}: App Review approved it. `
         + 'Release it with "mpgd store release publish" when its release type is manual.'
       : `Version ${named.versionString} is ${versionState(named)}: it is already submitted. `
@@ -436,6 +444,10 @@ async function planWithWrites(
     && Date.parse(request.earliestReleaseDate) !== Date.parse(version.earliestReleaseDate ?? '')) {
     versionUpdate.releaseType = request.releaseType;
     versionUpdate.earliestReleaseDate = request.earliestReleaseDate;
+    // Only a date about to be written must lie ahead; a past one already set is App Store Connect's.
+    if (Date.parse(request.earliestReleaseDate) <= (input.now?.() ?? new Date()).getTime()) {
+      throw new Error(`The release date ${request.earliestReleaseDate} is not in the future.`);
+    }
   }
 
   // The build.
@@ -624,7 +636,7 @@ const marketingVersionPattern = /^\d+(?:\.\d+){0,2}$/u;
 const buildNumberPattern = /^\d+(?:\.\d+){0,2}$/u;
 const productIdPattern = /^[A-Za-z0-9._-]{1,100}$/u;
 
-function assertRequest(request: AppStoreReleaseRequest, now: Date): void {
+function assertRequest(request: AppStoreReleaseRequest): void {
   if (!marketingVersionPattern.test(request.marketingVersion)) {
     throw new Error(`Marketing version ${request.marketingVersion} must look like 1.2 or 1.2.3.`);
   }
@@ -638,14 +650,12 @@ function assertRequest(request: AppStoreReleaseRequest, now: Date): void {
     const date = request.earliestReleaseDate === undefined
       ? Number.NaN
       : Date.parse(request.earliestReleaseDate);
-    if (!Number.isFinite(date) || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/u.test(request.earliestReleaseDate ?? '')) {
+    // An offset is required: without one, Date.parse reads local time and App Store Connect may read UTC.
+    if (!Number.isFinite(date)
+      || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})$/u
+        .test(request.earliestReleaseDate ?? '')) {
       throw new Error(
         'A scheduled release needs --release-date as an ISO 8601 date and time, for example 2026-12-01T09:00:00+09:00.',
-      );
-    }
-    if (date <= now.getTime()) {
-      throw new Error(
-        `The release date ${String(request.earliestReleaseDate)} is not in the future.`,
       );
     }
   } else if (request.earliestReleaseDate !== undefined) {
@@ -700,7 +710,9 @@ function selectBuild(
       return undefined;
     }
   } else {
-    build = [...builds].sort((left, right) => compareBuildNumbers(right.buildNumber, left.buildNumber))[0];
+    // A build number that is not dot-separated integers cannot be ordered; it is never picked as the newest.
+    build = builds.filter((candidate) => buildNumberPattern.test(candidate.buildNumber))
+      .sort((left, right) => compareBuildNumbers(right.buildNumber, left.buildNumber))[0];
     if (build === undefined) {
       blockers.push(
         `No build of version ${request.marketingVersion} is on App Store Connect: upload one with "mpgd deploy run".`,
@@ -1403,6 +1415,7 @@ export function formatAppStoreReleasePlan(plan: AppStoreReleasePlan): string {
         prepare: plan.changed ? 'prepare and submit for review' : 'nothing to change',
         submitted: 'already submitted',
         approved: 'approved',
+        released: 'already released',
       }[plan.stage]}${plan.version.state === undefined ? '' : ` (${plan.version.state})`}`,
   ];
   if (plan.build !== undefined) {

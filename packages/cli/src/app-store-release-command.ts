@@ -362,6 +362,13 @@ async function resolveRequest(
     marketingVersion = recordedVersion;
     buildNumber = String(recordedBuild);
     recordedBuildId = status.submissions.ios?.remoteBuildId;
+    if (recordedBuildId === undefined) {
+      throw new Error(
+        `Release ${options.release} recorded no App Store Connect build ID for its iOS build (the TestFlight `
+        + `submission is ${status.submissions.ios?.status ?? 'missing'}): finish it with "mpgd deploy submit", or `
+        + 'name the build with --marketing-version and --build-number.',
+      );
+    }
   }
   if (marketingVersion === undefined) {
     throw new Error(
@@ -439,13 +446,21 @@ async function withSession<T>(
   }
   const session = await ports.appStore(app.credential, {
     ...(signal === undefined ? {} : { signal }),
-    secretValues: demoAccount === undefined ? [] : [demoAccount.password, demoAccount.name],
+    secretValues: demoAccount === undefined
+      ? []
+      // The password always; the user name only when long enough not to mangle unrelated text.
+      : [...secretForms(demoAccount.password), ...(demoAccount.name.length >= 4 ? secretForms(demoAccount.name) : [])],
   });
   try {
     return await action(session, { appId: app.appId, bundleId: app.bundleId }, demoAccount);
   } finally {
     session.close();
   }
+}
+
+/** A secret as given and as JSON escapes it, so asc's JSON error output is redacted too. */
+function secretForms(value: string): string[] {
+  return [...new Set([value, JSON.stringify(value).slice(1, -1)])];
 }
 
 function readSavedPlan(file: string): AppStoreReleasePlanFile {

@@ -85,7 +85,8 @@ whitespace is refused, because asc strips it before sending.
 13-inch iPad screenshots a requirement; `iphone` drops it.
 
 The build comes from the release ledger (`--game-id` and `--release`, the
-build `deploy run` recorded, checked against App Store Connect's build ID)
+build `deploy run` recorded, checked against App Store Connect's build ID; a
+record whose TestFlight submission never learned that ID is refused)
 or from `--marketing-version` and `--build-number`.
 
 ## Workflow
@@ -125,7 +126,7 @@ pnpm exec mpgd store release phased --game . --marketing-version 1.0.1 --action 
 | `--marketing-version` | The marketing version. Required without `--release`; with it, must match the record. |
 | `--build-number` | The build to submit. Without it (and without `--release`), the newest build of the version, compared as numbers. |
 | `--release-type` | `manual` (default), `after-approval` or `scheduled`. |
-| `--release-date` | With `scheduled` only: the earliest release date, ISO 8601 with time and offset, in the future. |
+| `--release-date` | With `scheduled` only: the earliest release date, ISO 8601 with time and offset (`Z` or `+09:00`), in the future when the plan writes it. |
 | `--phased-release` | Release over 7 days. Off by default; an inactive phased release on the version is removed. |
 | `--skip-iap` | Comma-separated product IDs to leave out of this submission (below). |
 | `--rotate-demo-password` | Send the demo password again although App Store Connect has one. |
@@ -149,7 +150,7 @@ refuses it, names every blocker, and writes nothing.
 | Another version string returned by App Review (`REJECTED`, `METADATA_REJECTED`) | blocked: resubmit or remove it in App Store Connect |
 | This version waiting for or in review | nothing to do: `already submitted` |
 | This version approved (`PENDING_DEVELOPER_RELEASE`, `PENDING_APPLE_RELEASE`, `ACCEPTED`) | nothing to do: use `publish` for a manual release |
-| This version released | refused: submit a new marketing version |
+| This version released | blocked: submit a new marketing version (re-applying the plan that released it is `unchanged`) |
 | Another version waiting for review or approved | blocked: wait for it |
 
 ## The build
@@ -175,7 +176,7 @@ The plan fails closed. Every blocker names its fix:
 | Check | Blocked when |
 | --- | --- |
 | Store page | A locale of the store presence file has no localization on the version (run `store presence apply`), or an update's locale has no What's New in the file nor on App Store Connect. A locale only on App Store Connect is noted, or blocked when it lacks What's New. |
-| Screenshots | The primary locale's version localization has no 6.9-inch (or 6.5-inch) iPhone set, or, for a universal app, no 13-inch iPad set (`APP_IPAD_PRO_3GEN_129` or `APP_IPAD_PRO_129`). Other locales use the primary locale's screenshots. |
+| Screenshots | The primary locale's version localization has no 6.9-inch (or 6.5-inch) iPhone set, or, for a universal app, no 13-inch iPad set (`APP_IPAD_PRO_3GEN_129` or `APP_IPAD_PRO_129`). Only the primary locale is checked; the other locales' sets are left to the store page sync. |
 | Age rating | The age rating declaration of the app information record being prepared (else the live one) has no answer at all. |
 | Copyright | Neither the file nor the version has one. |
 | App Review contact | Neither the file nor the version has one. |
@@ -197,7 +198,9 @@ asc 5.5.0 takes the demo password only as a command-line flag
 therefore visible in the local process list for the second that `asc` call
 runs; the kit redacts it from the captured output and never writes it to a
 file. Run `apply` on a machine (or CI runner) that other users cannot list
-processes on.
+processes on. Because the plan holds no form of the password, a password
+changed in the environment between `plan` and `apply` is sent without making
+the plan stale; the user name is covered.
 
 ## Release options
 

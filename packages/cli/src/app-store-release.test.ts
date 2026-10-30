@@ -723,9 +723,15 @@ try {
       asc.ports,
     );
     assert.ok(rejected.blockers.some((blocker) => /1\.1\.0 is REJECTED/u.test(blocker)));
-    // A released version string is refused.
-    await assert.rejects(
-      planAppStoreRelease(input({ request: request({ marketingVersion: '1.0.0' }) }), asc.ports),
+    // A released version string is blocked, and its plan changes nothing.
+    const released = await planAppStoreRelease(
+      input({ request: request({ marketingVersion: '1.0.0' }) }),
+      asc.ports,
+    );
+    assert.equal(released.stage, 'released');
+    assert.equal(released.changed, false);
+    assert.match(
+      released.blockers.join('\n'),
       /already READY_FOR_DISTRIBUTION: submit a new marketing version/u,
     );
   }
@@ -754,6 +760,12 @@ try {
         '\n',
       ),
       /\(42\) is still processing/u,
+    );
+    assert.match(
+      (await blockersFor([{ id: 'b42', buildNumber: '42', processingState: 'FAILED' }])).blockers.join(
+        '\n',
+      ),
+      /\(42\) is FAILED/u,
     );
     assert.match(
       (await blockersFor([{ id: 'b42', buildNumber: '42', processingState: 'INVALID' }])).blockers.join(
@@ -1057,6 +1069,34 @@ try {
       ),
       /applies only to --release-type scheduled/u,
     );
+    await assert.rejects(
+      planAppStoreRelease(
+        input({
+          request: request({ releaseType: 'SCHEDULED', earliestReleaseDate: '2026-12-01T09:00' }),
+        }),
+        asc.ports,
+      ),
+      /ISO 8601 date and time/u,
+      'a date without an offset is ambiguous',
+    );
+    {
+      // A date already on App Store Connect may have passed: nothing is written, nothing refused.
+      const set = fakeAsc();
+      Object.assign(set.state.versions[1] as AscReleaseVersion, {
+        releaseType: 'SCHEDULED',
+        earliestReleaseDate: '2026-10-01T00:00:00Z',
+      });
+      const kept = await planAppStoreRelease(
+        input({
+          request: request({
+            releaseType: 'SCHEDULED',
+            earliestReleaseDate: '2026-10-01T00:00:00Z',
+          }),
+        }),
+        set.ports,
+      );
+      assert.deepEqual(kept.versionUpdate, { copyright: '2026 Studio' });
+    }
     const scheduled = await planAppStoreRelease(
       input({
         request: request({
@@ -1481,12 +1521,22 @@ try {
         statusReads.push(statusInput.releaseKey);
         return {
           builds: { ios: { platformVersion: { marketingVersion: '1.1.0', buildNumber: 42 } } },
-          submissions: { ios: { remoteBuildId: 'b42' } },
+          submissions: statusInput.releaseKey === 'unsubmitted'
+            ? { ios: { status: 'unknown' } }
+            : { ios: { remoteBuildId: 'b42' } },
         };
       }) as unknown as typeof readNativeReleaseStatus,
       now,
     };
     const { MPGD_REVIEW_PASSWORD: _password, ...withoutPassword } = environment;
+    await assert.rejects(
+      planAppStoreReleaseCommand(
+        { game, profile: 'beta', gameId: 'mygame', release: 'unsubmitted' },
+        environment,
+        ports,
+      ),
+      /recorded no App Store Connect build ID for its iOS build \(the TestFlight submission is unknown\)/u,
+    );
     await assert.rejects(
       planAppStoreReleaseCommand(
         { game, profile: 'beta', version: '1.1.0' },
@@ -1622,6 +1672,21 @@ try {
       ports,
     );
     assert.equal(published.status, 'released');
+    // Re-applying the plan of a released version is a no-op; planning it again is blocked.
+    assert.equal(
+      (await applyAppStoreReleaseCommand({ planFile, approved: true }, environment, ports)).status,
+      'unchanged',
+    );
+    const releasedPlan = await planAppStoreReleaseCommand(
+      { game, profile: 'beta', version: '1.1.0' },
+      environment,
+      ports,
+    );
+    assert.equal(releasedPlan.plan.stage, 'released');
+    assert.match(
+      releasedPlan.plan.blockers.join('\n'),
+      /already READY_FOR_DISTRIBUTION: submit a new marketing version/u,
+    );
     assert.equal(
       (await publishAppStoreVersionCommand({ game, profile: 'beta', version: '1.1.0', approved: true }, environment, ports)).status,
       'unchanged',
