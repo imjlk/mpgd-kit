@@ -1085,8 +1085,8 @@ the purchase verifier, one per environment.
   A recorder outage (`AppStoreDependencyUnavailableError`) is `retry` (503,
   `APP_STORE_REVOCATION_REGISTRY_UNAVAILABLE`) before the ledger is touched;
   any other recorder error is thrown. A `FAMILY_SHARED` revocation is never
-  recorded. A record's `revokedAt` is the ledger's: Apple's `revocationDate`,
-  else the handling time. A record may be dropped once `revokedAt` is older
+  recorded. A record's `revokedAt` is Apple's `revocationDate`, else the
+  notification's `signedDate`, so a redelivery records the same time. A record may be dropped once `revokedAt` is older
   than the verifier's `maxSignedAgeMs` plus `clockSkewMs`, since every JWS
   it refuses (signed at or before that time) is then stale.
 - `REFUND_REVERSED` records nothing and leaves the record in place: the

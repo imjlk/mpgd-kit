@@ -818,13 +818,35 @@ function lookupOf(registry: AppStoreRevocationRegistry, transaction: AppStoreTra
     'a refund still retried is recorded on its first delivery',
   );
 
-  // Without a revocationDate the handling time is kept, as in the ledger.
+  // Without a revocationDate the notification's signedDate is kept, so a
+  // redelivery handled later records the same time and changes nothing.
   const undated = createInMemoryAppStoreRevocationRegistry();
   const { revocationDate: _revocationDate, ...withoutRevocationDate } = consumable;
   await handle(store, verifierOf(notification({ transaction: withoutRevocationDate })), {
     revocations: undated,
   });
-  assert.equal((await lookupOf(undated, consumable))?.revokedAt, '2026-10-24T12:00:00.000Z');
+  assert.equal((await lookupOf(undated, consumable))?.revokedAt, '2026-10-24T00:00:00.000Z');
+  const undatedRedelivery = await handleAppStoreServerNotification({
+    store,
+    verifier: verifierOf(notification({ transaction: withoutRevocationDate })),
+    body: { signedPayload: 'signed-payload' },
+    environment: 'Production',
+    bundleId,
+    signal: new AbortController().signal,
+    now: () => '2026-10-27T00:00:00.000Z',
+    revocations: {
+      async recordRevocation(recorded) {
+        assert.equal(
+          recorded.record.revokedAt,
+          '2026-10-24T00:00:00.000Z',
+          'a redelivery three days later records the same revocation time',
+        );
+        return undated.recordRevocation(recorded);
+      },
+    },
+  });
+  assert.equal(undatedRedelivery.status, 'ignored');
+  assert.equal((await lookupOf(undated, consumable))?.revokedAt, '2026-10-24T00:00:00.000Z');
 
   // A granted purchase is recorded and revoked; a REVOKE is `voided`.
   const grantedStore = createInMemoryGameServicesStore();

@@ -259,7 +259,6 @@ export async function handleAppStoreServerNotification(
   // non-consumables by their original transaction, consumables by their own.
   const grantVerificationId = createAppStoreGrantVerificationId(transaction);
   const now = input.now ?? (() => new Date().toISOString());
-  const revokedAt = readTimestamp(transaction.revocationDate) ?? now();
   if (reason !== undefined && input.revocations !== undefined) {
     // Recorded before the ledger is read, so a grant that does not exist
     // yet is refused by an offline-only verifier instead of only retried.
@@ -273,7 +272,11 @@ export async function handleAppStoreServerNotification(
           originalTransactionId: transaction.originalTransactionId,
           productId: transaction.productId,
           reason,
-          revokedAt,
+          // Apple's signed dates, never the handling time: a redelivery of
+          // an undated refund must not move the cutoff past a reversal. An
+          // unrepresentable date is kept unparseable, which refuses every JWS.
+          revokedAt: readTimestamp(transaction.revocationDate ?? notification.signedDate)
+            ?? 'unparseable',
           notificationType: notification.notificationType,
           notificationUUID,
         },
@@ -332,6 +335,7 @@ export async function handleAppStoreServerNotification(
       },
     });
   }
+  const revokedAt = readTimestamp(transaction.revocationDate) ?? now();
   const result = await revokeEntitlementGrant(input.store, {
     playerId: grant.playerId,
     revokesLedgerEntryId: grant.ledgerEntryId,
