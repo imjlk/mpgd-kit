@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 
+import { isRecord } from './asc-session.js';
 import { readLocalizedNotesFile, type PlayReleaseNote } from './play-release-options.js';
 import type {
   TestFlightBetaReviewDetail,
@@ -58,7 +59,24 @@ export interface TestFlightBetaReviewInput {
     readonly name?: string;
     /** Read from the environment variable the review file names; never printed. */
     readonly password?: string;
+    readonly nameEnv?: string;
+    readonly passwordEnv?: string;
+    /**
+     * Variables a dry run found unset (`requireValues: false`). A plan lists
+     * them; `applyTestFlightDistribution` refuses them before any call.
+     */
+    readonly unresolvedEnv?: readonly string[];
   };
+}
+
+export interface TestFlightBetaReviewReadOptions {
+  /** False for a dry run: unset demo account variables are reported, not refused. Default true. */
+  readonly requireValues?: boolean;
+}
+
+export interface TestFlightDistributionOptions {
+  /** Waits between membership reads after adding groups; tests pass a no-op. */
+  readonly sleep?: (milliseconds: number) => Promise<void>;
 }
 
 export interface TestFlightDistributionRequest extends TestFlightBuildTarget {
@@ -94,6 +112,8 @@ export interface TestFlightDistributionReport {
   }[];
   /** Names of the review detail fields this run writes (or would write); never their values. */
   readonly reviewDetailFields: readonly string[];
+  /** Inputs a dry run could not resolve, e.g. `demo account values: missing NAME`; apply needs them. */
+  readonly pendingInputs?: readonly string[];
   readonly betaReview: {
     readonly status: TestFlightBetaReviewStatus;
     /** True when this run submits (dry run: would submit) the build. */
@@ -125,6 +145,8 @@ export interface TestFlightStatusReport {
 
 /** App Store Connect `BetaAppReviewDetail.notes`: "a maximum of 4,000 characters". */
 export const maximumBetaReviewNotesCharacters = 4000;
+/** Waits before each re-read of the group membership after `builds add-groups`. */
+const membershipRetryDelaysMs = [2_000, 5_000, 10_000] as const;
 const groupReferencePattern = /^[^,\s](?:[^,]{0,98}[^,\s])?$/u;
 const environmentNamePattern = /^[A-Z_][A-Z0-9_]*$/u;
 const exportComplianceDetail = 'TestFlight is waiting for the export-compliance answer: answer it in App Store '
@@ -142,7 +164,15 @@ export async function planTestFlightDistribution(
 export async function applyTestFlightDistribution(
   port: TestFlightDistributionPort,
   request: TestFlightDistributionRequest,
+  options: TestFlightDistributionOptions = {},
 ): Promise<TestFlightDistributionReport> {
+  const unresolved = request.betaReview?.demoAccount?.unresolvedEnv ?? [];
+  if (unresolved.length > 0) {
+    throw new Error(
+      `TestFlight review demo account needs ${unresolved.join(', ')} in the environment.`,
+    );
+  }
+  const sleep = options.sleep ?? defaultSleep;
   const plan = await planDistribution(port, request);
   if (plan.blocked) {
     return toReport(plan, false);
@@ -172,8 +202,18 @@ export async function applyTestFlightDistribution(
   if (toAdd.length > 0) {
     await step('group assignment', async () => {
       await port.addBuildToGroups(plan.build.id, toAdd.map((group) => group.group.id));
-      const present = new Set(await port.listBuildGroupIds(request.appStoreAppId, plan.build.id));
-      const missing = toAdd.filter((group) => !present.has(group.group.id));
+      // App Store Connect can list a new membership a moment late: read it a
+      // few times before treating the assignment as unconfirmed.
+      let missing: readonly PlannedGroup[] = toAdd;
+      for (let attempt = 0; ; attempt += 1) {
+        const present = new Set(await port.listBuildGroupIds(request.appStoreAppId, plan.build.id));
+        missing = toAdd.filter((group) => !present.has(group.group.id));
+        const delay = membershipRetryDelaysMs[attempt];
+        if (missing.length === 0 || delay === undefined) {
+          break;
+        }
+        await sleep(delay);
+      }
       if (missing.length > 0) {
         throw new Error(
           `a membership read does not show the build in ${missing.map((group) => group.group.name).join(', ')}`,
@@ -309,6 +349,7 @@ export async function readTestFlightBuildStatus(
 export function readTestFlightBetaReviewFile(
   file: string,
   environment: NodeJS.ProcessEnv = process.env,
+  options: TestFlightBetaReviewReadOptions = {},
 ): TestFlightBetaReviewInput {
   const resolved = path.resolve(file);
   if (!existsSync(resolved) || !statSync(resolved).isFile() || statSync(resolved).size > 64 * 1024) {
@@ -320,12 +361,13 @@ export function readTestFlightBetaReviewFile(
   } catch {
     throw new Error(`TestFlight review details file is not valid JSON: ${resolved}`);
   }
-  return parseTestFlightBetaReview(parsed, environment);
+  return parseTestFlightBetaReview(parsed, environment, options);
 }
 
 export function parseTestFlightBetaReview(
   value: unknown,
   environment: NodeJS.ProcessEnv = process.env,
+  options: TestFlightBetaReviewReadOptions = {},
 ): TestFlightBetaReviewInput {
   const textKeys = [
     'contactFirstName',
@@ -377,7 +419,8 @@ export function parseTestFlightBetaReview(
       }
       result.demoAccount = { required: false };
     } else {
-      const read = (key: 'nameEnv' | 'passwordEnv'): string => {
+      const unresolved: string[] = [];
+      const read = (key: 'nameEnv' | 'passwordEnv'): { readonly env: string; readonly value?: string } => {
         const name = demo[key];
         if (typeof name !== 'string' || !environmentNamePattern.test(name)) {
           throw new Error(
@@ -386,11 +429,24 @@ export function parseTestFlightBetaReview(
         }
         const secret = environment[name];
         if (secret === undefined || secret.trim() === '') {
-          throw new Error(`TestFlight review demo account needs ${name} in the environment.`);
+          if (options.requireValues !== false) {
+            throw new Error(`TestFlight review demo account needs ${name} in the environment.`);
+          }
+          unresolved.push(name);
+          return { env: name };
         }
-        return secret.trim();
+        return { env: name, value: secret.trim() };
       };
-      result.demoAccount = { required: true, name: read('nameEnv'), password: read('passwordEnv') };
+      const name = read('nameEnv');
+      const password = read('passwordEnv');
+      result.demoAccount = {
+        required: true,
+        nameEnv: name.env,
+        passwordEnv: password.env,
+        ...(name.value === undefined ? {} : { name: name.value }),
+        ...(password.value === undefined ? {} : { password: password.value }),
+        ...(unresolved.length === 0 ? {} : { unresolvedEnv: unresolved }),
+      };
     }
   }
   return result as TestFlightBetaReviewInput;
@@ -429,6 +485,8 @@ interface DistributionPlan {
   readonly whatToTest: readonly PlannedNote[];
   readonly reviewDetailId?: string;
   readonly reviewDetailChanges?: TestFlightBetaReviewDetailChanges;
+  /** Demo account fields a dry run would write once their variables are set. */
+  readonly reviewDetailPendingFields?: readonly string[];
   readonly submit: boolean;
   readonly betaReview: { readonly status: TestFlightBetaReviewStatus; readonly submissionId?: string };
   /** A state the operator must resolve first; nothing is written. */
@@ -522,10 +580,14 @@ async function planDistribution(
   const submit = hasExternal && status === 'not-submitted';
   let reviewDetailId: string | undefined;
   let reviewDetailChanges: TestFlightBetaReviewDetailChanges | undefined;
+  let reviewDetailPendingFields: readonly string[] = [];
   if (submit) {
     const detail = await port.readBetaReviewDetail(request.appStoreAppId);
     reviewDetailId = detail.id;
-    reviewDetailChanges = planReviewDetail(detail, request.betaReview);
+    ({ changes: reviewDetailChanges, pendingFields: reviewDetailPendingFields } = planReviewDetail(
+      detail,
+      request.betaReview,
+    ));
   }
   const waitingGroups = plannedGroups.filter((group) => group.membership === 'after-review');
   return {
@@ -536,6 +598,7 @@ async function planDistribution(
     whatToTest,
     ...(reviewDetailId === undefined ? {} : { reviewDetailId }),
     ...(reviewDetailChanges === undefined ? {} : { reviewDetailChanges }),
+    ...(reviewDetailPendingFields.length === 0 ? {} : { reviewDetailPendingFields }),
     submit,
     betaReview: { status, ...(submission === undefined ? {} : { submissionId: submission.id }) },
     blocked: false,
@@ -630,7 +693,10 @@ function planWhatToTest(
 function planReviewDetail(
   detail: TestFlightBetaReviewDetail,
   input: TestFlightBetaReviewInput | undefined,
-): TestFlightBetaReviewDetailChanges | undefined {
+): {
+  readonly changes: TestFlightBetaReviewDetailChanges | undefined;
+  readonly pendingFields: readonly string[];
+} {
   const changes: Record<string, string | boolean> = {};
   const effective: Record<string, string | undefined> = {};
   for (const key of [
@@ -652,6 +718,15 @@ function planReviewDetail(
   if (demo !== undefined && demo.required !== detail.demoAccountRequired) {
     changes.demoAccountRequired = demo.required;
   }
+  // A dry run without the demo account variables plans their fields as
+  // written; apply refuses to run until they are set.
+  const unresolved = demo?.unresolvedEnv ?? [];
+  const nameUnresolved = demo?.nameEnv !== undefined && unresolved.includes(demo.nameEnv);
+  const passwordUnresolved = demo?.passwordEnv !== undefined && unresolved.includes(demo.passwordEnv);
+  const pendingFields = [
+    ...(nameUnresolved ? ['demoAccountName'] : []),
+    ...(passwordUnresolved ? ['demoAccountPassword'] : []),
+  ];
   if (demo?.required === true) {
     if (demo.name !== undefined && demo.name !== detail.demoAccountName?.trim()) {
       changes.demoAccountName = demo.name;
@@ -665,8 +740,9 @@ function planReviewDetail(
   const missing = [
     ...(['contactFirstName', 'contactLastName', 'contactEmail', 'contactPhone'] as const)
       .filter((key) => effective[key] === undefined || effective[key] === ''),
-    ...(demoRequired && (demo?.name ?? detail.demoAccountName ?? '') === '' ? ['demoAccountName'] : []),
-    ...(demoRequired && demo?.password === undefined && !detail.demoAccountPasswordSet
+    ...(demoRequired && !nameUnresolved && (demo?.name ?? detail.demoAccountName ?? '') === ''
+      ? ['demoAccountName'] : []),
+    ...(demoRequired && !passwordUnresolved && demo?.password === undefined && !detail.demoAccountPasswordSet
       ? ['demoAccountPassword'] : []),
   ];
   if (missing.length > 0) {
@@ -676,9 +752,12 @@ function planReviewDetail(
         + 'names) or fill App Store Connect > TestFlight > Test Information, then retry.',
     );
   }
-  return Object.keys(changes).length === 0
-    ? undefined
-    : changes as TestFlightBetaReviewDetailChanges;
+  return {
+    changes: Object.keys(changes).length === 0
+      ? undefined
+      : changes as TestFlightBetaReviewDetailChanges,
+    pendingFields,
+  };
 }
 
 type ExternalReview =
@@ -696,6 +775,15 @@ function classifyExternalReview(
   const submitted = submission === undefined
     ? undefined
     : classifySubmissionState(submission.betaReviewState);
+  if (submission !== undefined && submitted === undefined) {
+    // Never submit again over a submission whose state is not understood.
+    return {
+      kind: 'action-required',
+      detail: `TestFlight App Review submission ${submission.id} reports an unknown state `
+        + `${submission.betaReviewState}; inspect it in App Store Connect (App Review > TestFlight) `
+        + 'before running this again.',
+    };
+  }
   switch (externalBuildState) {
     case 'WAITING_FOR_BETA_REVIEW':
       return { kind: 'status', status: 'waiting-for-review' };
@@ -783,7 +871,13 @@ function toReport(plan: DistributionPlan, dryRun: boolean): TestFlightDistributi
       membership: entry.membership,
     })),
     whatToTest: plan.whatToTest.map((note) => ({ locale: note.locale, action: note.action })),
-    reviewDetailFields: Object.keys(plan.reviewDetailChanges ?? {}),
+    reviewDetailFields: [
+      ...Object.keys(plan.reviewDetailChanges ?? {}),
+      ...(plan.reviewDetailPendingFields ?? []),
+    ],
+    ...(unresolvedDemoEnv(plan.request).length === 0 ? {} : {
+      pendingInputs: [`demo account values: missing ${unresolvedDemoEnv(plan.request).join(', ')}`],
+    }),
     betaReview: {
       status: plan.betaReview.status,
       submit: plan.submit,
@@ -816,6 +910,12 @@ function assertBuildTarget(target: TestFlightBuildTarget): void {
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+function unresolvedDemoEnv(request: TestFlightDistributionRequest): readonly string[] {
+  return request.betaReview?.demoAccount?.unresolvedEnv ?? [];
+}
+
+function defaultSleep(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
 }

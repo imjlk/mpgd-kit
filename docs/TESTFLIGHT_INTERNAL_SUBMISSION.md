@@ -139,7 +139,10 @@ in App Store Connect, the command fails.
 A demo account never sits in the file: `"demoAccount": { "required": true,
 "nameEnv": "MPGD_TESTFLIGHT_DEMO_NAME", "passwordEnv":
 "MPGD_TESTFLIGHT_DEMO_PASSWORD" }` names environment variables, which are
-read at run time. Review notes allow 4,000 characters (App Store Connect
+read at run time. A `--dry-run` without them still plans the demo account
+fields and lists the unset variables under `pendingInputs`
+(`demo account values: missing MPGD_TESTFLIGHT_DEMO_PASSWORD`); `--approve`
+refuses to run until they are set. Review notes allow 4,000 characters (App Store Connect
 `BetaAppReviewDetail.notes`). The details are written only right before a
 submission, and only the fields that differ; App Store Connect never returns
 a stored password, so a required demo account password is sent with every
@@ -164,7 +167,11 @@ missing, naming the fields.
 | `action-required` | TestFlight waits for the export-compliance answer, as for the internal group; nothing is written, the groups are reported `blocked`, and `distribute` exits non-zero |
 
 `distribute` reads the review state again after adding the groups and submits
-only a build that still waits for its first submission. `testflight status`
+only a build that still waits for its first submission. A submission in a
+`betaReviewState` this kit does not know is reported `action-required`, naming
+the state, and is never submitted over. After adding groups, the membership
+read is retried a few times (about 17 seconds in all) before the assignment
+counts as unconfirmed. `testflight status`
 also reports `build-not-ready` (not uploaded, or still processing: poll
 again) and `build-unusable` (failed processing, expired, or an internal-only
 upload: stop polling and upload a new build), each with a `detail`.

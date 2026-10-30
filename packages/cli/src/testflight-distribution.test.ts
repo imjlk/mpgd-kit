@@ -47,6 +47,10 @@ interface FakeState {
   submitState: string;
   /** The external state App Store Connect moves to once an external group is added. */
   stateAfterAdd?: string;
+  /** Membership reads after add-groups that still miss the new groups. */
+  membershipLag?: number;
+  hiddenReads?: number;
+  hidden?: readonly string[];
   writes: string[];
   failSubmit?: boolean;
 }
@@ -81,6 +85,10 @@ function fake(overrides: Partial<FakeState> = {}): { state: FakeState; port: Tes
       return { internalBuildState: state.internalBuildState, externalBuildState: state.externalBuildState };
     },
     async listBuildGroupIds() {
+      if ((state.hiddenReads ?? 0) > 0) {
+        state.hiddenReads = (state.hiddenReads ?? 0) - 1;
+        return [...state.members].filter((id) => !(state.hidden ?? []).includes(id));
+      }
       return [...state.members];
     },
     async addBuildToGroups(id, groupIds) {
@@ -98,6 +106,8 @@ function fake(overrides: Partial<FakeState> = {}): { state: FakeState; port: Tes
         }
       }
       state.writes.push(`add-groups ${groupIds.join(',')}`);
+      state.hiddenReads = state.membershipLag ?? 0;
+      state.hidden = groupIds;
     },
     async listWhatToTest() {
       return state.notes;
@@ -523,6 +533,89 @@ try {
     assert.equal(state.writes.filter((write) => write.startsWith('add-groups')).length, 1);
   }
 
+  // A dry run without the demo account variables plans and lists them; apply refuses.
+  {
+    const file = path.join(fixture, 'review-dry-run.json');
+    writeFileSync(
+      file,
+      JSON.stringify({
+        ...review,
+        demoAccount: {
+          required: true,
+          nameEnv: 'MPGD_TF_DEMO_NAME',
+          passwordEnv: 'MPGD_TF_DEMO_PASSWORD',
+        },
+      }),
+    );
+    const unresolved = readTestFlightBetaReviewFile(file, {}, { requireValues: false });
+    assert.deepEqual(unresolved.demoAccount, {
+      required: true,
+      nameEnv: 'MPGD_TF_DEMO_NAME',
+      passwordEnv: 'MPGD_TF_DEMO_PASSWORD',
+      unresolvedEnv: ['MPGD_TF_DEMO_NAME', 'MPGD_TF_DEMO_PASSWORD'],
+    });
+    const { state, port } = fake();
+    const plan = await planTestFlightDistribution(port, { ...external, betaReview: unresolved });
+    assert.deepEqual(plan.pendingInputs, [
+      'demo account values: missing MPGD_TF_DEMO_NAME, MPGD_TF_DEMO_PASSWORD',
+    ]);
+    assert.ok(plan.reviewDetailFields.includes('demoAccountName'));
+    assert.ok(plan.reviewDetailFields.includes('demoAccountPassword'));
+    assert.equal(plan.betaReview.submit, true);
+    await assert.rejects(
+      applyTestFlightDistribution(port, { ...external, betaReview: unresolved }),
+      /needs MPGD_TF_DEMO_NAME, MPGD_TF_DEMO_PASSWORD in the environment/u,
+    );
+    assert.deepEqual(state.writes, []);
+    // A partly set account reports only what is missing.
+    const partial = readTestFlightBetaReviewFile(
+      file,
+      { MPGD_TF_DEMO_NAME: 'reviewer' },
+      { requireValues: false },
+    );
+    assert.deepEqual(partial.demoAccount?.unresolvedEnv, ['MPGD_TF_DEMO_PASSWORD']);
+    // Bad names still fail in a dry run.
+    writeFileSync(
+      file,
+      JSON.stringify({ demoAccount: { required: true, nameEnv: 'lower', passwordEnv: 'X' } }),
+    );
+    assert.throws(
+      () => readTestFlightBetaReviewFile(file, {}, { requireValues: false }),
+      /must name an environment variable/u,
+    );
+  }
+
+  // A submission in a state this kit does not know is never submitted over.
+  {
+    const { state, port } = fake({
+      submissions: [{ id: 'submission-x', betaReviewState: 'ON_HOLD' }],
+    });
+    const result = await applyTestFlightDistribution(port, external);
+    assert.equal(result.betaReview.status, 'action-required');
+    assert.equal(result.betaReview.submit, false);
+    assert.match(result.detail ?? '', /submission-x reports an unknown state ON_HOLD/u);
+    assert.deepEqual(state.writes, []);
+    assert.equal((await readTestFlightBuildStatus(port, target)).betaReview, 'action-required');
+  }
+
+  // App Store Connect lists a new membership late: the read is retried, then fails closed.
+  {
+    const delays: number[] = [];
+    const sleep = async (milliseconds: number): Promise<void> => {
+      delays.push(milliseconds);
+    };
+    const lagging = fake({ membershipLag: 2 });
+    const result = await applyTestFlightDistribution(lagging.port, external, { sleep });
+    assert.equal(result.betaReview.status, 'waiting-for-review');
+    assert.deepEqual(delays, [2_000, 5_000]);
+    const stuck = fake({ membershipLag: 10 });
+    await assert.rejects(
+      applyTestFlightDistribution(stuck.port, external, { sleep }),
+      /failed at group assignment .*does not show the build in Studio QA, iPad QA/u,
+    );
+    assert.equal(stuck.state.writes.includes('submit'), false);
+  }
+
   // Review details file: env var names only, values from the environment.
   {
     const file = path.join(fixture, 'review.json');
@@ -541,7 +634,13 @@ try {
       MPGD_TF_DEMO_NAME: 'reviewer',
       MPGD_TF_DEMO_PASSWORD: 'secret',
     });
-    assert.deepEqual(parsed.demoAccount, { required: true, name: 'reviewer', password: 'secret' });
+    assert.deepEqual(parsed.demoAccount, {
+      required: true,
+      nameEnv: 'MPGD_TF_DEMO_NAME',
+      passwordEnv: 'MPGD_TF_DEMO_PASSWORD',
+      name: 'reviewer',
+      password: 'secret',
+    });
     assert.throws(
       () => readTestFlightBetaReviewFile(file, { MPGD_TF_DEMO_NAME: 'reviewer' }),
       /needs MPGD_TF_DEMO_PASSWORD/u,

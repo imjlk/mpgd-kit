@@ -105,6 +105,7 @@ import {
   planRecordedAndroidSubmission,
   readRecordedIosBuild,
   submitRecordedNativeTarget,
+  type NativeStoreCredential,
 } from './native-deploy-submission.js';
 import {
   applyTestFlightDistribution,
@@ -1179,15 +1180,16 @@ const deployCommand = defineI18n({
             const betaReviewFile = readOptionalString(ctx.values['beta-review']);
             const betaReview = betaReviewFile === undefined
               ? undefined
-              : readTestFlightBetaReviewFile(betaReviewFile, process.env);
+              : readTestFlightBetaReviewFile(betaReviewFile, process.env, { requireValues: !dryRun });
+            const context = await readTestFlightCliContext(ctx.values);
             const request = {
-              ...await readTestFlightCliTarget(ctx.values),
+              ...context.target,
               groups,
               ...(whatToTestFile === undefined ? {} : { whatToTest: readTestFlightWhatToTestFile(whatToTestFile) }),
               ...(betaReview === undefined ? {} : { betaReview }),
             };
             const secrets = betaReview?.demoAccount?.password === undefined ? [] : [betaReview.demoAccount.password];
-            const result = await withTestFlightCliPort(ctx.values, secrets, (port) => dryRun
+            const result = await withTestFlightCliPort(context.credential, secrets, (port) => dryRun
               ? planTestFlightDistribution(port, request)
               : applyTestFlightDistribution(port, request));
             console.info(JSON.stringify(result, null, 2));
@@ -1214,8 +1216,8 @@ const deployCommand = defineI18n({
             release: { type: 'string', required: true, description: 'Explicit release ID whose recorded iOS build is read.' },
           },
           run: async (ctx) => {
-            const target = await readTestFlightCliTarget(ctx.values);
-            const result = await withTestFlightCliPort(ctx.values, [], (port) => readTestFlightBuildStatus(port, target));
+            const { target, credential } = await readTestFlightCliContext(ctx.values);
+            const result = await withTestFlightCliPort(credential, [], (port) => readTestFlightBuildStatus(port, target));
             console.info(JSON.stringify(result, null, 2));
           },
         }),
@@ -5883,45 +5885,45 @@ async function readPlayReleaseOptions(
   return createPlayReleaseRequest({ track, status, userFraction, releaseNotesFile, mappingFile });
 }
 
-/** The release's recorded iOS build and the App Store Connect app it belongs to. */
-async function readTestFlightCliTarget(values: Record<string, unknown>): Promise<TestFlightBuildTarget> {
+/**
+ * The release's recorded iOS build, the App Store Connect app it belongs to,
+ * and the iOS credential, read once from the saved plan.
+ */
+async function readTestFlightCliContext(values: Record<string, unknown>): Promise<{
+  readonly target: TestFlightBuildTarget;
+  readonly credential: Extract<NativeStoreCredential, { readonly target: 'ios' }>;
+}> {
   const game = readOptionalString(values.game);
   const plan = readNativeDeploymentPlan(
     readRequiredCliOption(values.plan, '--plan'),
     game === undefined ? undefined : path.resolve(game),
   );
+  const credential = readStoreCredential(plan, 'ios', process.env);
+  if (credential.target !== 'ios') {
+    throw new Error('TestFlight distribution needs the iOS submission credential.');
+  }
   const recorded = await readRecordedIosBuild({
     plan,
     gameId: readRequiredCliOption(values['game-id'], '--game-id'),
     releaseKey: readRequiredCliOption(values.release, '--release'),
   });
-  const credential = readStoreCredential(plan, 'ios', process.env);
-  if (credential.target !== 'ios') {
-    throw new Error('TestFlight distribution needs the iOS submission credential.');
-  }
   return {
-    appStoreAppId: credential.appStoreAppId,
-    bundleId: recorded.bundleId,
-    marketingVersion: recorded.marketingVersion,
-    buildNumber: recorded.buildNumber,
-    ...(recorded.buildId === undefined ? {} : { expectedBuildId: recorded.buildId }),
+    credential,
+    target: {
+      appStoreAppId: credential.appStoreAppId,
+      bundleId: recorded.bundleId,
+      marketingVersion: recorded.marketingVersion,
+      buildNumber: recorded.buildNumber,
+      ...(recorded.buildId === undefined ? {} : { expectedBuildId: recorded.buildId }),
+    },
   };
 }
 
 async function withTestFlightCliPort<T>(
-  values: Record<string, unknown>,
+  credential: Extract<NativeStoreCredential, { readonly target: 'ios' }>,
   secretValues: readonly string[],
   action: (port: TestFlightDistributionPort) => Promise<T>,
 ): Promise<T> {
-  const game = readOptionalString(values.game);
-  const plan = readNativeDeploymentPlan(
-    readRequiredCliOption(values.plan, '--plan'),
-    game === undefined ? undefined : path.resolve(game),
-  );
-  const credential = readStoreCredential(plan, 'ios', process.env);
-  if (credential.target !== 'ios') {
-    throw new Error('TestFlight distribution needs the iOS submission credential.');
-  }
   const session = await openAscTestFlightDistributionSession(credential, { secretValues });
   try {
     return await action(session.port);
