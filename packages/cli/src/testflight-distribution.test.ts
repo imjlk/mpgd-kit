@@ -152,7 +152,13 @@ function fake(overrides: Partial<FakeState> = {}): { state: FakeState; port: Tes
   return { state, port };
 }
 
-const target = { appStoreAppId: appId, bundleId, marketingVersion: '1.4.0', buildNumber: '42' };
+const target = {
+  appStoreAppId: appId,
+  bundleId,
+  marketingVersion: '1.4.0',
+  buildNumber: '42',
+  expectedBuildId: buildId,
+};
 const review = {
   contactFirstName: 'Ada',
   contactLastName: 'Kim',
@@ -338,13 +344,63 @@ try {
   // Adding the group let the build through without review: nothing is submitted.
   {
     const { state, port } = fake({ stateAfterAdd: 'READY_FOR_BETA_TESTING' });
+    const planned = await planTestFlightDistribution(port, external);
+    assert.ok(planned.reviewDetailFields.length > 0, 'the plan would write review details');
     const result = await applyTestFlightDistribution(port, external);
     assert.deepEqual(result.betaReview, { status: 'not-needed', submit: false });
+    // Nothing was written to the review details, so the report lists none.
+    assert.deepEqual(result.reviewDetailFields, []);
     assert.equal(state.writes.includes('submit'), false);
     assert.equal(
       state.writes.some((write) => write.startsWith('review-details')),
       false,
     );
+  }
+
+  // distribute needs the build ID the release state recorded; status reads without it.
+  {
+    const { state, port } = fake();
+    const { expectedBuildId: _recorded, ...unrecorded } = external;
+    let calls = 0;
+    const counting: TestFlightDistributionPort = {
+      ...port,
+      async readAppBundleId(requested) {
+        calls += 1;
+        return port.readAppBundleId(requested);
+      },
+    };
+    for (const run of [planTestFlightDistribution, applyTestFlightDistribution]) {
+      await assert.rejects(
+        run(counting, unrecorded),
+        /no App Store Connect build ID for iOS build 1\.4\.0 \(42\) yet\. Re-run "mpgd deploy submit --target ios"/u,
+      );
+    }
+    assert.equal(calls, 0, 'nothing is read from App Store Connect');
+    assert.deepEqual(state.writes, []);
+    const { expectedBuildId: _id, ...statusTarget } = target;
+    const status = await readTestFlightBuildStatus(port, statusTarget);
+    assert.equal(status.buildIdRecorded, false);
+    assert.equal(status.buildId, buildId);
+    assert.equal((await readTestFlightBuildStatus(port, target)).buildIdRecorded, true);
+  }
+
+  // What to Test notes are validated before any write, without the file parser.
+  {
+    const { state, port } = fake();
+    for (const [whatToTest, message] of [
+      [[{ language: 'en-US', text: '   ' }], /What to Test for en-US are empty/u],
+      [
+        [
+          { language: 'en-US', text: 'a' },
+          { language: 'EN-us', text: 'b' },
+        ],
+        /What to Test repeat the language EN-us/u,
+      ],
+      [[{ language: 'english!', text: 'a' }], /What to Test language is not a BCP-47 tag/u],
+    ] as const) {
+      await assert.rejects(applyTestFlightDistribution(port, { ...external, whatToTest }), message);
+    }
+    assert.deepEqual(state.writes, []);
   }
 
   // An auto-approved submission reports approved.

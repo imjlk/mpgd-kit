@@ -2,7 +2,11 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 import { isRecord } from './asc-session.js';
-import { readLocalizedNotesFile, type PlayReleaseNote } from './play-release-options.js';
+import {
+  assertLocalizedNotes,
+  readLocalizedNotesFile,
+  type PlayReleaseNote,
+} from './play-release-options.js';
 import type {
   TestFlightBetaReviewDetail,
   TestFlightBetaReviewDetailChanges,
@@ -43,7 +47,11 @@ export interface TestFlightBuildTarget {
   readonly bundleId: string;
   readonly marketingVersion: string;
   readonly buildNumber: string;
-  /** The build ID the release state recorded, when the submission found it. */
+  /**
+   * The build ID the release state recorded once the submission found the
+   * build. `distribute` requires it; `status` matches by version and build
+   * number without it and says so (`buildIdRecorded: false`).
+   */
   readonly expectedBuildId?: string;
 }
 
@@ -128,6 +136,11 @@ export interface TestFlightStatusReport {
   readonly marketingVersion: string;
   readonly buildNumber: string;
   readonly buildId?: string;
+  /**
+   * False when the release state has no build ID yet, so the build was
+   * matched by app, version and build number only.
+   */
+  readonly buildIdRecorded: boolean;
   readonly processingState?: string;
   readonly internalBuildState?: string;
   readonly externalBuildState?: string;
@@ -253,9 +266,16 @@ export async function applyTestFlightDistribution(
       submissionId: submission.id,
     };
   }
+  // Review details are written only with a submission; when the recheck
+  // cancelled it, none were written.
+  const {
+    reviewDetailChanges: _unwrittenChanges,
+    reviewDetailPendingFields: _unwrittenPending,
+    ...writtenPlan
+  } = plan;
   return toReport(
     {
-      ...plan,
+      ...(submit ? plan : writtenPlan),
       groups: plan.groups.map((group) =>
         group.membership === 'add' ? { ...group, membership: 'added' } : group,
       ),
@@ -277,6 +297,7 @@ export async function readTestFlightBuildStatus(
     appStoreAppId: target.appStoreAppId,
     marketingVersion: target.marketingVersion,
     buildNumber: target.buildNumber,
+    buildIdRecorded: target.expectedBuildId !== undefined,
   };
   await assertAppBundle(port, target);
   const build = await port.findBuild(
@@ -499,6 +520,13 @@ async function planDistribution(
   request: TestFlightDistributionRequest,
 ): Promise<DistributionPlan> {
   assertBuildTarget(request);
+  if (request.expectedBuildId === undefined) {
+    throw new Error(
+      `The release state has no App Store Connect build ID for iOS build ${request.marketingVersion} `
+        + `(${request.buildNumber}) yet. Re-run "mpgd deploy submit --target ios" for this release until it `
+        + 'reports testflight-ready, then retry.',
+    );
+  }
   if (request.groups.length === 0 || request.groups.some((group) => !groupReferencePattern.test(group))) {
     throw new Error('TestFlight distribution needs one or more group IDs or names (no commas).');
   }
@@ -665,6 +693,9 @@ function planWhatToTest(
   existing: readonly { readonly locale: string; readonly whatsNew?: string }[],
   hasExternal: boolean,
 ): PlannedNote[] {
+  if (requested.length > 0) {
+    assertLocalizedNotes(requested, 'What to Test');
+  }
   if (hasExternal && requested.length === 0
     && !existing.some((entry) => (entry.whatsNew ?? '').trim() !== '')) {
     throw new Error(

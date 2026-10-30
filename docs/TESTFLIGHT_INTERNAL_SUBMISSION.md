@@ -75,7 +75,11 @@ TestFlight review details, and the TestFlight App Review submission an
 external group needs. It reads the recorded marketing version and build number
 from the release state (the IPA is not needed), finds the build in App Store
 Connect, and checks the app's bundle ID and the build ID the submission
-recorded.
+recorded. `distribute` needs that recorded build ID: until the submission has
+found the build, it fails and asks to re-run `mpgd deploy submit --target ios`
+until it reports `testflight-ready`. The read-only `status` works without it,
+matching by app, version and build number, and reports
+`buildIdRecorded: false`.
 
 ```sh
 # Plan: read App Store Connect and print the changes; nothing is written
@@ -144,9 +148,11 @@ fields and lists the unset variables under `pendingInputs`
 (`demo account values: missing MPGD_TESTFLIGHT_DEMO_PASSWORD`); `--approve`
 refuses to run until they are set. Review notes allow 4,000 characters (App Store Connect
 `BetaAppReviewDetail.notes`). The details are written only right before a
-submission, and only the fields that differ; App Store Connect never returns
-a stored password, so a required demo account password is sent with every
-submission. asc 5.5.0 takes the password only as a command-line value
+submission, and only the fields that differ. App Store Connect never returns
+a stored password, so when the `--beta-review` file declares a required demo
+account, its password is sent with that write. Without `--beta-review`, or
+with a demo account that is not required, no password is sent and the one
+stored in App Store Connect is kept. asc 5.5.0 takes the password only as a command-line value
 (`asc testflight review edit --demo-account-password`), so it is visible to
 other processes on the runner for the length of that call; the session
 redacts it from asc's output. Before submitting, the command fails when the
