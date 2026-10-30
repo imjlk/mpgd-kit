@@ -353,6 +353,159 @@ for (const removeAds of ['unfinished', 'flag-omitted'] as const) {
   earlierProvider.dispose();
 }
 
+/**
+ * The Apple ID's transactions when REMOVE_ADS carries no appAccountToken (an
+ * offer code redeemed in the App Store, outside the app) and is still
+ * unfinished, next to an unfinished hint pack bound to no token either. No
+ * player was ever granted it. `finishSupport` is the native build's answer
+ * to `getFinishSupport`: `supported` for this package's native code, the
+ * others for a build from before the explicit no-token finish.
+ */
+async function createUnboundWorld(
+  finishSupport: 'supported' | 'unimplemented' | 'absent',
+): Promise<World> {
+  const unbound = (transactionId: string, productId: string, type: 'consumable' | 'non_consumable') => ({
+    transactionId,
+    originalTransactionId: transactionId,
+    productId,
+    type,
+    purchasedAt: '2030-01-01T00:00:00.000Z',
+    signedTransaction: `header.payload.signature-${transactionId}`,
+    unfinished: true,
+  });
+  const plugin = createFakeStoreKitPlugin({
+    products: [
+      fakeProduct({ productId: removeAdsSku, type: 'non_consumable' }),
+      fakeProduct({ productId: hintsSku }),
+    ],
+    transactions: [
+      unbound('3000000000000011', removeAdsSku, 'non_consumable'),
+      unbound('3000000000000012', hintsSku, 'consumable'),
+    ],
+    finishSupport,
+  });
+  const store = createInMemoryGameServicesStore();
+  const backend = createGameServicesBackend({
+    catalog,
+    placements,
+    store,
+    evidenceVerifier: {
+      async verifyPurchase({ request, product }): Promise<EvidenceVerificationDecision> {
+        // The reference App Store verifier for a transaction bound to no
+        // token: restorable only for a restore of a non-consumable, otherwise
+        // refused for every player.
+        return request.intent === 'restore' && product.type === 'non_consumable'
+          ? {
+              status: 'restorable',
+              reason: 'APP_STORE_ACCOUNT_TOKEN_MISSING',
+              verificationId: `app-store:${request.platformTransactionId}`,
+              verifiedAt: '2030-01-01T00:00:00.000Z',
+              platformEvidenceId: request.platformTransactionId,
+            }
+          : { status: 'rejected', reason: 'APP_STORE_ACCOUNT_TOKEN_MISSING' };
+      },
+      async verifyAdReward() {
+        return { status: 'rejected', reason: 'UNUSED' };
+      },
+    },
+    restoreSharing: { mode: 'share' },
+  });
+  return { plugin, backend, store, requests: [] };
+}
+
+// An unfinished durable bound to no token (an offer code redeemed outside the app), then
+// Restore Purchases: the backend grants it to the restoring guest, and its finish ends the
+// transaction with the explicit no-token match instead of retrying forever. The unbound
+// consumable is never sent and never finished.
+{
+  const world = await createUnboundWorld('supported');
+  const { reconciler, responses, failures } = install(world, 'guest-after-reinstall');
+  await reconciler.start();
+  assertEqual(world.requests, [], 'unbound: startup sends nothing bound to no token');
+  await reconciler.restorePurchases();
+  assertEqual(
+    world.requests.map((request) => [
+      request.productId,
+      request.intent,
+      request.platformTransactionId,
+    ]),
+    [['REMOVE_ADS', 'restore', '3000000000000011']],
+    'unbound: only REMOVE_ADS is sent, as a restore',
+  );
+  const ledgerEntryId = responses[0]?.verified === true ? responses[0].ledgerEntryId : undefined;
+  assertEqual(typeof ledgerEntryId, 'string', 'unbound: the backend grants the restore');
+  assertEqual(
+    await holdersOf(world),
+    ['guest-after-reinstall'],
+    'unbound: the restoring guest holds REMOVE_ADS',
+  );
+  assertEqual(
+    world.plugin.calls.filter((call) => call.startsWith('finish:')),
+    [`finish:3000000000000011:${String(ledgerEntryId)}:without-token`],
+    'unbound: the grant finishes the transaction once, explicitly without a token',
+  );
+  assertEqual(
+    await reconciler.listRecoverable(),
+    [],
+    'unbound: the record is finished, not left retrying',
+  );
+  // StoreKit keeps a finished durable in currentEntitlements.
+  world.plugin.upsert({
+    transactionId: '3000000000000011',
+    originalTransactionId: '3000000000000011',
+    productId: removeAdsSku,
+    type: 'non_consumable',
+    purchasedAt: '2030-01-01T00:00:00.000Z',
+    signedTransaction: 'header.payload.signature-3000000000000011',
+    unfinished: false,
+  });
+  await reconciler.restorePurchases();
+  await reconciler.reconcile();
+  assertEqual(world.requests.length, 1, 'unbound: a later restore and reconcile send nothing');
+  assertEqual(
+    world.plugin.calls.filter((call) => call.startsWith('finish:')).length,
+    1,
+    'unbound: nothing is finished again',
+  );
+  assertEqual(
+    world.plugin.transactions.find((transaction) => transaction.transactionId === '3000000000000012')
+      ?.unfinished,
+    true,
+    'unbound: the consumable bound to no token stays unfinished',
+  );
+  await reconciler.stop();
+  assertEqual(failures, [], 'unbound: no reconciler stage failed');
+}
+
+// The same durable on a native build from before the explicit no-token finish: the grant is
+// unchanged, the finish is never sent to native code that would refuse it, and the record keeps
+// retrying `finishing`, as before. The entitlement is unaffected.
+for (const finishSupport of ['unimplemented', 'absent'] as const) {
+  const world = await createUnboundWorld(finishSupport);
+  const { reconciler, failures } = install(world, 'guest-after-reinstall');
+  await reconciler.start();
+  await reconciler.restorePurchases();
+  await reconciler.reconcile();
+  assertEqual(
+    await holdersOf(world),
+    ['guest-after-reinstall'],
+    `${finishSupport}: the restoring guest holds REMOVE_ADS`,
+  );
+  assertEqual(
+    world.plugin.calls.filter((call) => call.startsWith('finish:')),
+    [],
+    `${finishSupport}: the earlier native build is never sent a finish without a token`,
+  );
+  assertEqual(
+    (await reconciler.listRecoverable()).map((record) => [record.logicalId, record.state]),
+    [['REMOVE_ADS', 'finishing']],
+    `${finishSupport}: the record keeps retrying its finish`,
+  );
+  assertEqual(world.requests.length, 1, `${finishSupport}: the grant is not sent again`);
+  await reconciler.stop();
+  assertEqual(failures, [], `${finishSupport}: an unfinished durable is not a reconciler failure`);
+}
+
 // The holder limit: a third guest past `maxHolders: 2` is answered pending and evicts nobody.
 {
   const world = await createWorld(2);

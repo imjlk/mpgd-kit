@@ -135,6 +135,7 @@ try {
     'getTransactions',
     'sync',
     'finishTransaction',
+    'getFinishSupport',
   ]) {
     assert.match(
       swift,

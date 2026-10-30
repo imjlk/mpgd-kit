@@ -198,6 +198,61 @@ final class StoreKitTransactionPolicyTests: XCTestCase {
             transactionId: "25", appAccountToken: token, in: [.notOneTime, .unverified]))
     }
 
+    func testFinishBindingNeedsATokenOrTheExplicitNoTokenFlag() {
+        typealias Policy = StoreKitTransactionPolicy
+        // The token path of earlier builds, unchanged.
+        XCTAssertEqual(Policy.finishBinding(appAccountToken: token.uppercased(), withoutAppAccountToken: nil),
+                       .appAccountToken(token))
+        XCTAssertNil(Policy.finishBinding(appAccountToken: "00000000-0000-0000-0000-000000000000",
+                                          withoutAppAccountToken: nil))
+        XCTAssertNil(Policy.finishBinding(appAccountToken: "not-a-uuid", withoutAppAccountToken: nil))
+        // A missing token is never "no token", and never a wildcard.
+        XCTAssertNil(Policy.finishBinding(appAccountToken: nil, withoutAppAccountToken: nil))
+        XCTAssertNil(Policy.finishBinding(appAccountToken: NSNull(), withoutAppAccountToken: nil))
+        // The explicit no-token match: the literal true, and no token argument at all.
+        XCTAssertEqual(Policy.finishBinding(appAccountToken: nil, withoutAppAccountToken: true),
+                       .withoutAppAccountToken)
+        XCTAssertNil(Policy.finishBinding(appAccountToken: nil, withoutAppAccountToken: false))
+        XCTAssertNil(Policy.finishBinding(appAccountToken: nil, withoutAppAccountToken: "true"))
+        XCTAssertNil(Policy.finishBinding(appAccountToken: nil, withoutAppAccountToken: NSNumber(value: 1)))
+        XCTAssertEqual(Policy.finishBinding(appAccountToken: nil, withoutAppAccountToken: NSNumber(value: true)),
+                       .withoutAppAccountToken)
+        XCTAssertNil(Policy.finishBinding(appAccountToken: token, withoutAppAccountToken: true))
+        XCTAssertNil(Policy.finishBinding(appAccountToken: NSNull(), withoutAppAccountToken: true))
+        XCTAssertNil(Policy.finishBinding(appAccountToken: token, withoutAppAccountToken: false))
+        XCTAssertEqual(Policy.finishWithoutAppAccountTokenVersion, 1)
+    }
+
+    func testNoTokenFinishMatchesOnlyAnUnboundNonConsumable() throws {
+        let unbound = read("71", productId: "remove_ads", type: .nonConsumable, token: nil)
+        let match = try XCTUnwrap(StoreKitTransactionPolicy.finishable(
+            transactionId: "71", binding: .withoutAppAccountToken, in: [.unverified, unbound]))
+        XCTAssertEqual(match.transactionId, "71")
+        XCTAssertNil(match.appAccountToken)
+        XCTAssertEqual(StoreKitTransactionPolicy.finishInput(match).appAccountToken, nil)
+
+        // A transaction that carries a token, a consumable bound to none, a
+        // revoked one, an unknown id, and anything not one-time stay refused.
+        XCTAssertNil(StoreKitTransactionPolicy.finishable(
+            transactionId: "72", binding: .withoutAppAccountToken,
+            in: [read("72", productId: "remove_ads", type: .nonConsumable)]))
+        XCTAssertNil(StoreKitTransactionPolicy.finishable(
+            transactionId: "73", binding: .withoutAppAccountToken, in: [read("73", token: nil)]))
+        XCTAssertNil(StoreKitTransactionPolicy.finishable(
+            transactionId: "74", binding: .withoutAppAccountToken,
+            in: [read("74", productId: "remove_ads", type: .nonConsumable, token: nil,
+                      revokedAtMillis: 1_700_000_100_000)]))
+        XCTAssertNil(StoreKitTransactionPolicy.finishable(
+            transactionId: "75", binding: .withoutAppAccountToken, in: [unbound, .notOneTime]))
+
+        // A nil token matches only a nil token: the token binding never finishes it.
+        XCTAssertNil(StoreKitTransactionPolicy.finishable(
+            transactionId: "71", binding: .appAccountToken(token), in: [unbound]))
+        let bound = try XCTUnwrap(StoreKitTransactionPolicy.finishable(
+            transactionId: "21", binding: .appAccountToken(token), in: [read("21")]))
+        XCTAssertEqual(bound.appAccountToken, token)
+    }
+
     func testAnUnverifiableTransactionDoesNotBlockFinishingAVerifiedOne() throws {
         let match = try XCTUnwrap(StoreKitTransactionPolicy.finishable(
             transactionId: "61", appAccountToken: token, in: [.unverified, read("61"), .unverified]))

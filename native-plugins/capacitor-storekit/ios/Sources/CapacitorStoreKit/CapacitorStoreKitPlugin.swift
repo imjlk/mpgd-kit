@@ -19,7 +19,8 @@ public class CapacitorStoreKitPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "getTransactions", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "sync", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "finishTransaction", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "getPresentationSupport", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "getPresentationSupport", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "getFinishSupport", returnType: CAPPluginReturnPromise)
     ]
 
     private let connection = OpenIapAppleConnection()
@@ -87,6 +88,15 @@ public class CapacitorStoreKitPlugin: CAPPlugin, CAPBridgedPlugin {
     /// wait for facts.
     @objc func getPresentationSupport(_ call: CAPPluginCall) {
         call.resolve(["purchasePresentation": MpgdPurchaseSheet.protocolVersion])
+    }
+
+    /// Declares the finish matches this native code applies beyond the
+    /// session token: `withoutAppAccountToken`, the explicit no-token match
+    /// for a non-consumable bound to no token. A build without this method
+    /// answers `UNIMPLEMENTED`, and the TypeScript SDK then leaves such a
+    /// transaction unfinished, as before.
+    @objc func getFinishSupport(_ call: CAPPluginCall) {
+        call.resolve(["withoutAppAccountToken": StoreKitTransactionPolicy.finishWithoutAppAccountTokenVersion])
     }
 
     @objc func purchase(_ call: CAPPluginCall) {
@@ -241,11 +251,15 @@ public class CapacitorStoreKitPlugin: CAPPlugin, CAPBridgedPlugin {
         // SDK supplies the session token and applies the same match before
         // calling. A signed server finish capability is still required to stop
         // a webview caller who read the token from `getTransactions`.
+        // `withoutAppAccountToken: true` (and no token argument) instead
+        // matches only a non-consumable bound to no token; a missing token
+        // without it is refused, as before.
         guard let transactionId = call.getString("transactionId"), UInt64(transactionId) != nil,
               let ledgerEntryId = call.getString("ledgerEntryId"),
               !ledgerEntryId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              let accountToken = StoreKitTransactionPolicy.normalizedAccountToken(
-                call.getString("appAccountToken")) else {
+              let binding = StoreKitTransactionPolicy.finishBinding(
+                appAccountToken: call.options["appAccountToken"],
+                withoutAppAccountToken: call.options["withoutAppAccountToken"]) else {
             call.reject(
                 "A transaction ID, confirmed ledger entry, and app account token are required.",
                 "STOREKIT_FINISH_REQUIRES_GRANT"
@@ -262,12 +276,12 @@ public class CapacitorStoreKitPlugin: CAPPlugin, CAPBridgedPlugin {
                 // already-finished durable stays an idempotent `finished: true`.
                 var candidate = StoreKitTransactionPolicy.finishable(
                     transactionId: transactionId,
-                    appAccountToken: accountToken,
+                    binding: binding,
                     in: await RecoveryReadShim.unfinished())
                 if candidate == nil {
                     candidate = StoreKitTransactionPolicy.finishable(
                         transactionId: transactionId,
-                        appAccountToken: accountToken,
+                        binding: binding,
                         in: await RecoveryReadShim.history())
                 }
                 guard let match = candidate else {
