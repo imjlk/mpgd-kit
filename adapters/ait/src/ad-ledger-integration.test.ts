@@ -225,7 +225,11 @@ describe('late known non-grant after a caller deadline', () => {
     await flush();
     expire();
     await expect(pending).resolves.toMatchObject({ status: 'pending' });
-    expect(runtime.actions?.getAvailability()).toBe('busy');
+    // The ad still holds the screen, but a new key is refused for the pending
+    // result first; availability reports what `execute` would answer.
+    expect(runtime.presentation.getSnapshot().owner).toMatchObject({ kind: 'rewarded' });
+    expect(runtime.actions?.getAvailability()).toBe('reconciliation-required');
+    await expect(view.execute({ placementId: 'CONTINUE', idempotencyKey: 'another' })).rejects.toMatchObject({ code: 'reconciliation-required' });
     failLoad();
     await flush();
     expect(runtime.actions?.getAvailability()).toBe('ready');

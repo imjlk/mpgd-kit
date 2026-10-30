@@ -721,9 +721,18 @@ restoring player gets its own grant of it:
   takes nothing from any player, because StoreKit keeps it in
   `Transaction.currentEntitlements`, where the earlier guest's own read still
   finds it. The native plugin keeps its token match unchanged and is handed
-  the transaction's own token, read from the native list. A consumable or
-  subscription of another token, and a transaction bound to no token, are
-  never finished.
+  the transaction's own token, read from the native list. A durable still
+  unfinished and bound to no token (an offer code or another purchase made
+  outside the app, restored and granted under `APP_STORE_ACCOUNT_TOKEN_MISSING`)
+  is finished the same way, for the same reason, with the native plugin's
+  explicit no-token match (`finishTransaction` with `withoutAppAccountToken:
+  true` and no token field), which matches only a verified, non-revoked
+  non-consumable bound to no token; a missing token is never read as a
+  wildcard. The SDK sends it only for a durable of its catalog and only to a
+  native build that declares it (`getFinishSupport`); on an earlier build
+  (`UNIMPLEMENTED`) it answers `{ finished: false }`, so the record keeps
+  retrying `finishing` as before and the grant is unaffected. A consumable or
+  subscription of another token or of no token is never finished.
 - **Verifier.** A decision, `{ status: 'restorable', reason, ...verified
   fields }`: every check passed except the account binding, which names
   another player or none; `reason` is the binding mismatch, or the

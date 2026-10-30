@@ -686,13 +686,15 @@ async function settled(): Promise<void> {
     [],
     'another account, a revoked transaction, and an unbound transaction never reach native finish',
   );
+  assertEqual(mismatched.finishSupportCalls, 0, 'none of them asks for the no-token match');
 
   // A durable StoreKit already finished has nothing left to finish, whatever
   // its token: a restore shared from an earlier guest's purchase ends there.
   // An unfinished one of another token (a crash between the earlier guest's
-  // grant and its finish, then a reinstall) is finished with its own token;
-  // a revoked one, one bound to no token, a consumable, and a SKU the catalog
-  // does not declare durable are not.
+  // grant and its finish, then a reinstall) is finished with its own token,
+  // and one bound to no token (an offer code redeemed outside the app) with
+  // the explicit no-token match; a revoked one, a consumable, and a SKU the
+  // catalog does not declare durable are not.
   const restoredPlugin = createFakeStoreKitPlugin({
     transactions: [
       fakeTransaction({
@@ -760,6 +762,23 @@ async function settled(): Promise<void> {
         appAccountToken: otherAccount,
         unfinished: true,
       }),
+      // Bound to no token: a non-consumable on a consumable SKU, a revoked
+      // durable, a durable of a SKU the catalog does not sell, and a
+      // consumable on a durable SKU.
+      ...(['37', '38', '39', '43'] as const).map((transactionId) => ({
+        transactionId,
+        originalTransactionId: transactionId,
+        productId: transactionId === '37'
+          ? sku
+          : transactionId === '39'
+          ? 'com.example.game.retired'
+          : removeAdsSku,
+        type: transactionId === '43' ? 'consumable' as const : 'non_consumable' as const,
+        purchasedAt: '2026-07-16T12:00:00Z',
+        signedTransaction: `header.payload.signature-${transactionId}`,
+        unfinished: true,
+        ...(transactionId === '38' ? { revokedAt: '2026-07-17T12:00:00Z' } : {}),
+      })),
     ],
   });
   const restoredSdk = createSdk({ plugin: restoredPlugin }).sdk;
@@ -767,7 +786,21 @@ async function settled(): Promise<void> {
   if (restoredFinish === undefined) {
     throw new Error('finishTransaction is required for finish: client.');
   }
-  const restoredIds = ['25', '26', '27', '28', '29', '30', '31', '32', '33'];
+  const restoredIds = [
+    '25',
+    '26',
+    '27',
+    '28',
+    '29',
+    '30',
+    '31',
+    '32',
+    '33',
+    '37',
+    '38',
+    '39',
+    '43',
+  ];
   const restoredResults = [];
   for (const transactionId of restoredIds) {
     restoredResults.push(
@@ -780,19 +813,147 @@ async function settled(): Promise<void> {
   }
   assertEqual(
     restoredResults.map((result) => result.finished),
-    [true, true, false, false, false, false, false, true, false],
-    'a finished durable, and an unfinished one of another token (a build without the flag too), '
-      + 'are finished; a revoked, unbound, consumable, kind-mismatched (either way), or unmapped one is not',
+    [true, true, false, true, false, false, false, true, false, false, false, false, false],
+    'a finished durable, and an unfinished one of another token (a build without the flag too) '
+      + 'or of no token, are finished; a revoked, consumable, kind-mismatched (either way), or '
+      + 'unmapped one is not, with a token or without',
   );
   assertEqual(
     restoredPlugin.calls.filter((call) => call.startsWith('finish:')),
-    [`finish:26:le-share:${otherAccount}`, `finish:32:le-share:${otherAccount}`],
-    'only the unfinished durables reach the native finish, each with its own token, lowercased',
+    [
+      `finish:26:le-share:${otherAccount}`,
+      'finish:28:le-share:without-token',
+      `finish:32:le-share:${otherAccount}`,
+    ],
+    'only the unfinished durables reach the native finish, each with its own token, lowercased, '
+      + 'or explicitly with none',
   );
   assertEqual(
     restoredPlugin.transactions.map((transaction) => transaction.transactionId),
-    ['25', '27', '28', '29', '30', '31', '33'],
+    ['25', '27', '29', '30', '31', '33', '37', '38', '39', '43'],
     'the native finish took the unfinished durables off the unfinished list',
+  );
+  assertEqual(
+    restoredPlugin.finishSupportCalls,
+    1,
+    'only the durable bound to no token asks the native build, once',
+  );
+}
+
+// A durable bound to no token on a native build without the explicit no-token
+// match (`getFinishSupport` answers UNIMPLEMENTED, is missing, fails, or does
+// not declare it): it is left unfinished, as before this match existed, and
+// the caller retries. A transient failure is asked again; UNIMPLEMENTED and an
+// answer without the match are not.
+{
+  const unbound = (transactionId: string) => ({
+    transactionId,
+    originalTransactionId: transactionId,
+    productId: removeAdsSku,
+    type: 'non_consumable' as const,
+    purchasedAt: '2026-07-16T12:00:00Z',
+    signedTransaction: `header.payload.signature-${transactionId}`,
+    unfinished: true,
+  });
+  const nonConsumables = [
+    fakeProduct(),
+    fakeProduct({ productId: removeAdsSku, type: 'non_consumable' }),
+  ];
+  for (const finishSupport of ['unimplemented', 'absent'] as const) {
+    const plugin = createFakeStoreKitPlugin({
+      products: nonConsumables,
+      transactions: [unbound('34')],
+      finishSupport,
+    });
+    const { sdk } = createSdk({ plugin });
+    const finish = sdk.finishTransaction;
+    if (finish === undefined) {
+      throw new Error('finishTransaction is required for finish: client.');
+    }
+    for (const attempt of [1, 2]) {
+      assertEqual(
+        await finish.call(sdk, { transactionId: '34', isConsumable: false, ledgerEntryId: 'le-34' }),
+        { finished: false },
+        `${finishSupport}: attempt ${attempt} leaves the unbound durable unfinished`,
+      );
+    }
+    assertEqual(
+      plugin.calls.filter((call) => call.startsWith('finish:')),
+      [],
+      `${finishSupport}: an earlier native build is never sent a finish without a token`,
+    );
+    assertEqual(
+      plugin.finishSupportCalls,
+      finishSupport === 'unimplemented' ? 1 : 0,
+      `${finishSupport}: an UNIMPLEMENTED answer is remembered`,
+    );
+    assertEqual(plugin.transactions.length, 1, `${finishSupport}: the durable stays unfinished`);
+  }
+
+  const plugin = createFakeStoreKitPlugin({
+    products: nonConsumables,
+    transactions: [unbound('35')],
+  });
+  const answers: unknown[] = [
+    Promise.reject(Object.assign(new Error('bridge busy'), { code: 'STOREKIT_UNAVAILABLE' })),
+    { withoutAppAccountToken: 1 },
+  ];
+  let supportCalls = 0;
+  plugin.getFinishSupport = async () => {
+    supportCalls += 1;
+    return (await answers.shift()) as { readonly withoutAppAccountToken?: number };
+  };
+  const { sdk } = createSdk({ plugin });
+  const finish = sdk.finishTransaction;
+  if (finish === undefined) {
+    throw new Error('finishTransaction is required for finish: client.');
+  }
+  assertEqual(
+    await finish.call(sdk, { transactionId: '35', isConsumable: false, ledgerEntryId: 'le-35' }),
+    { finished: false },
+    'a failed support check leaves the durable unfinished for now',
+  );
+  assertEqual(
+    await finish.call(sdk, { transactionId: '35', isConsumable: false, ledgerEntryId: 'le-35' }),
+    { finished: true },
+    'the next finish asks again and finishes it without a token',
+  );
+  assertEqual(supportCalls, 2, 'a transient failure is not remembered');
+  assertEqual(
+    plugin.calls.filter((call) => call.startsWith('finish:')),
+    ['finish:35:le-35:without-token'],
+    'only the supported attempt reaches the native finish',
+  );
+
+  const silent = createFakeStoreKitPlugin({
+    products: nonConsumables,
+    transactions: [unbound('36')],
+  });
+  let silentSupportCalls = 0;
+  silent.getFinishSupport = async () => {
+    silentSupportCalls += 1;
+    return {};
+  };
+  const silentSdk = createSdk({ plugin: silent }).sdk;
+  const silentFinish = silentSdk.finishTransaction;
+  if (silentFinish === undefined) {
+    throw new Error('finishTransaction is required for finish: client.');
+  }
+  assertEqual(
+    await silentFinish.call(silentSdk, { transactionId: '36', isConsumable: false, ledgerEntryId: 'le-36' }),
+    { finished: false },
+    'a build that does not declare the match is never sent it',
+  );
+  assertEqual(
+    await silentFinish.call(silentSdk, { transactionId: '36', isConsumable: false, ledgerEntryId: 'le-36' }),
+    { finished: false },
+    'nor on the next finish',
+  );
+  assertEqual(silentSupportCalls, 1, 'an answer without the match is remembered');
+  assertEqual(
+    silent.calls.filter((call) => call.startsWith('finish:')),
+    [],
+    'nothing reaches the native finish',
   );
 }
 
@@ -928,6 +1089,16 @@ async function settled(): Promise<void> {
       }),
       fakeTransaction({ transactionId: '56', unfinished: true, revokedAt: refunded }),
       fakeTransaction({ transactionId: '58', unfinished: true, revokedAt: refunded }),
+      {
+        transactionId: '59',
+        originalTransactionId: '59',
+        productId: sku,
+        type: 'consumable',
+        purchasedAt: '2026-07-16T12:00:00Z',
+        revokedAt: refunded,
+        unfinished: true,
+        signedTransaction: 'header.payload.signature-59',
+      },
     ],
   });
   plugin.transactions.push({ transactionId: '55', productId: sku, revokedAt: refunded } as never);
@@ -1020,6 +1191,7 @@ async function settled(): Promise<void> {
     ['53', true, "nor another token's revoked consumable"],
     ['54', true, 'nor a consumable of a SKU the catalog declares durable'],
     ['55', true, 'nor a malformed entry of the id'],
+    ['59', true, 'nor a revoked consumable bound to no token (never the no-token match)'],
     ['56', false, 'nor a revoked consumable the caller does not call a consumable'],
   ] as const) {
     assertEqual(

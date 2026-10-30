@@ -63,6 +63,49 @@ export interface StoreKitPresentationSupport {
   readonly purchasePresentation: number;
 }
 
+/**
+ * What `getFinishSupport` declares: `withoutAppAccountToken` is the protocol
+ * version of the explicit no-token finish, absent from a build before it.
+ */
+export interface StoreKitFinishSupport {
+  readonly withoutAppAccountToken?: number;
+}
+
+/**
+ * One `finishTransaction` call: the session app account token, or explicitly
+ * none (`withoutAppAccountToken: true`, no token field at all), which matches
+ * only a non-consumable bound to no token. Never both, never neither.
+ */
+export type StoreKitFinishTransactionInput =
+  | {
+    readonly transactionId: string;
+    readonly ledgerEntryId: string;
+    /** Session app account token; must match the verified transaction. */
+    readonly appAccountToken: string;
+    readonly withoutAppAccountToken?: never;
+    /**
+     * Finish a transaction StoreKit lists as revoked (refunded) instead:
+     * only an unfinished, revoked consumable bound to `appAccountToken`, and
+     * nothing else. Grants nothing; it stops StoreKit redelivering it. Never
+     * combined with `withoutAppAccountToken`. A native build from before the
+     * flag ignores it and refuses the revoked transaction (`finished: false`).
+     */
+    readonly revoked?: boolean;
+  }
+  | {
+    readonly transactionId: string;
+    readonly ledgerEntryId: string;
+    readonly appAccountToken?: never;
+    readonly revoked?: never;
+    /**
+     * Finish a verified, non-revoked non-consumable bound to no app account
+     * token (bought or redeemed outside the app). Only a build whose
+     * `getFinishSupport` declares it accepts this; an earlier one rejects
+     * the call with `STOREKIT_FINISH_REQUIRES_GRANT`.
+     */
+    readonly withoutAppAccountToken: true;
+  };
+
 export interface CapacitorStoreKitPlugin {
   getProducts(input: { readonly productIds: readonly string[] }): Promise<{
     readonly products: readonly StoreKitProduct[];
@@ -79,6 +122,13 @@ export interface CapacitorStoreKitPlugin {
    * it still type-checks, and then the SDK refuses purchases that need facts.
    */
   getPresentationSupport?(): Promise<StoreKitPresentationSupport>;
+  /**
+   * Declares the finish matches beyond the session token. A native build
+   * from before it answers `UNIMPLEMENTED`; optional so a plugin double
+   * without it still type-checks, and then the SDK never finishes a
+   * transaction bound to no token.
+   */
+  getFinishSupport?(): Promise<StoreKitFinishSupport>;
   /** Includes unfinished consumables and current non-consumable entitlements. */
   getTransactions(): Promise<{ readonly transactions: readonly StoreKitTransaction[] }>;
   /** User-initiated App Store account synchronization before restore. */
@@ -88,27 +138,17 @@ export interface CapacitorStoreKitPlugin {
    * (with `revoked`: after it answered for a refunded transaction without a
    * standing grant). Finishing never grants. Native finishes only a
    * verified, non-revoked, one-time transaction whose app account token
-   * matches `appAccountToken` (with `revoked`: only a revoked consumable).
+   * matches `appAccountToken`, or, with `withoutAppAccountToken: true`, a
+   * verified, non-revoked non-consumable bound to no token, or, with
+   * `revoked: true`, only a revoked consumable bound to `appAccountToken`.
    * The StoreKit SDK injects the session token and applies the same match
    * before this call, including for `commerce.v2.finishTransaction`. Games
    * must not call this plugin method directly. The token match is not a
    * signed server capability: a caller who can read `getTransactions` can
-   * still supply that token with a forged ledger entry id.
+   * still supply that token (or the no-token flag) with a forged ledger
+   * entry id.
    */
-  finishTransaction(input: {
-    readonly transactionId: string;
-    readonly ledgerEntryId: string;
-    /** Session app account token; must match the verified transaction. */
-    readonly appAccountToken: string;
-    /**
-     * Finish a transaction StoreKit lists as revoked (refunded) instead:
-     * only an unfinished, revoked consumable bound to `appAccountToken`, and
-     * nothing else. Grants nothing; it stops StoreKit redelivering it. A
-     * native build from before the flag ignores it and refuses the revoked
-     * transaction (`finished: false`).
-     */
-    readonly revoked?: boolean;
-  }): Promise<{ readonly finished: boolean }>;
+  finishTransaction(input: StoreKitFinishTransactionInput): Promise<{ readonly finished: boolean }>;
   addListener(
     eventName: 'transactionUpdated',
     listener: (event: StoreKitTransaction) => void,

@@ -8,6 +8,7 @@ import type {
   GameServicesRewardedAdResult,
 } from '@mpgd/game-services/operations';
 
+import { matchCoordinatorRefusal, type CoordinatorRefusal } from '../commerce/refusals.js';
 import type { ExecutionBlock, GameExecutionController } from '../index.js';
 import { observe, type ObserverErrorHandler } from '../observers.js';
 import type { FullScreenPresentationScope } from '../presentation/index.js';
@@ -39,6 +40,8 @@ export type GameActionSnapshot<K extends GameActionKind> = Readonly<{ kind: K } 
 )>;
 export type PurchaseActionSnapshot = GameActionSnapshot<'purchase'>;
 export type RewardedAdActionSnapshot = GameActionSnapshot<'rewarded-ad'>;
+/** Whether a new action can start now; `busy` also while any presentation owns the shared scope. */
+export type GameActionAvailability = 'ready' | 'busy' | 'reconciliation-required' | 'history-full' | 'disposed';
 export type GameActionErrorCode = 'disposed' | 'busy' | 'key-conflict' | 'already-completed'
   | 'reconciliation-required' | 'history-full' | 'invalid-input'
   | 'reconciliation-unavailable' | 'invalid-reconciliation';
@@ -107,7 +110,14 @@ export interface GameActionCoordinator {
   confirmRecoveredRewardResult(idempotencyKey: string, result: GameServicesRewardedAdResult): boolean;
   /** Concurrent callers join one recovery query; only a matching committed grant unlocks new keys. */
   reconcile(): Promise<GameActionReconciliationResult>;
-  getAvailability(): 'ready' | 'busy' | 'reconciliation-required' | 'history-full' | 'disposed';
+  getAvailability(): GameActionAvailability;
+  /**
+   * Hears each change of `getAvailability()`, with no initial delivery: an
+   * action starting or settling, and a presentation (an outside purchase
+   * included) taking or leaving the shared scope. Ends after `disposed`. The
+   * sources are watched only while at least one listener is subscribed.
+   */
+  subscribeAvailability(listener: UiListener<GameActionAvailability>): () => void;
   /** Terminal for new calls; pending external work still settles and releases its own block. */
   dispose(): void;
 }
@@ -129,12 +139,63 @@ const purchaseSources: Readonly<Record<GameServicesPurchaseInput['source'], true
   event: true,
 };
 
+/** A coordinated store's refusal before its provider ran; structural, so this entry imports no commerce code. */
+export interface GameActionPurchaseRefusal {
+  readonly idempotencyKey: string;
+  readonly reason: CoordinatorRefusal;
+}
+export interface GameActionPurchaseRefusalSource {
+  subscribe(listener: (refusal: GameActionPurchaseRefusal) => void): () => void;
+}
+
+/**
+ * Which coordinator refusal a service result is, exactly, if any: a failed
+ * purchase that never launched (no transaction, evidence, verification or
+ * ledger entry) whose diagnostic is one of the coordinator's own answers.
+ */
+function coordinatorRefusalOf(result: GameServicesPurchaseResult): CoordinatorRefusal | undefined {
+  const diagnostic = result.purchase.diagnostic;
+  if (result.status !== 'failed' || result.purchase.status !== 'failed'
+    || result.purchase.transactionId !== undefined || result.purchase.evidence !== undefined
+    || result.purchase.authoritativeGrant !== undefined
+    || result.verification !== undefined || result.ledgerEntryId !== undefined || diagnostic === undefined) {
+    return undefined;
+  }
+  return matchCoordinatorRefusal({
+    code: diagnostic.code,
+    retryable: diagnostic.retryable,
+    storeCode: diagnostic.providerCode,
+  });
+}
+
 /** Bind one coordinator to one runtime/client (including its player identity), above all screens. */
 export function createGameActionCoordinator(options: {
   readonly execution: GameExecutionController;
   readonly client: Pick<GameServicesOperationClient, 'purchase' | 'claimRewardedAd'>;
-  /** Use only with a client backed by createCoordinatedPlatformGateway sharing this scope/execution. */
+  /**
+   * The shared full-screen scope: while any presentation owns it (an outside
+   * purchase included), the coordinator is `busy` and new actions reject with
+   * `busy`. With `actionBlock: 'without-presentation'` (the default) the
+   * actions also rely on that scope's leases instead of their own block, so
+   * use it only with a client backed by createCoordinatedPlatformGateway
+   * sharing this scope/execution.
+   */
   readonly presentation?: FullScreenPresentationScope;
+  /**
+   * When each action holds its own simulation/gameplay-input block from before
+   * the service call until its result: only without a `presentation` scope
+   * (default), or `always`, for a client whose rewarded ads take no lease.
+   */
+  readonly actionBlock?: 'without-presentation' | 'always';
+  /**
+   * The coordinated store's own refusals before its provider ran (the
+   * `onRefusal` of createCoordinatedCommerceProvider). When the coordinator
+   * refused a running purchase action's store call (`busy`: another purchase
+   * took the scope after the action was reserved; `history-full`; `disposed`)
+   * and the service answers with exactly that refusal, the action rejects with
+   * the same code and keeps its key, as if the preflight had refused it.
+   */
+  readonly purchaseRefusals?: GameActionPurchaseRefusalSource;
   /** Never evicts keys: once full, new keys are rejected until application teardown. Default 1024. */
   readonly maxRememberedKeys?: number;
   readonly reconciliation?: GameActionReconciliationPort;
@@ -147,6 +208,10 @@ export function createGameActionCoordinator(options: {
     );
   }
   const capacity = options.maxRememberedKeys ?? 1024;
+  const actionBlock = options.actionBlock ?? 'without-presentation';
+  if (actionBlock !== 'without-presentation' && actionBlock !== 'always') {
+    throw new TypeError('actionBlock must be without-presentation or always.');
+  }
   const recoveryPlayerId = options.reconciliation?.playerId;
   const recoveryPort = options.reconciliation;
   if (recoveryPort && (typeof recoveryPlayerId !== 'string' || recoveryPlayerId.trim() === '' || typeof recoveryPort.recover !== 'function')) {
@@ -168,6 +233,48 @@ export function createGameActionCoordinator(options: {
   function isDisposed(): boolean {
     return disposed || execution.getSnapshot().status === 'destroyed'
       || options.presentation?.getSnapshot().status === 'disposed';
+  }
+
+  function availability(): GameActionAvailability {
+    if (isDisposed()) {
+      return 'disposed';
+    }
+    // The same order as the `execute` preflight in `reserve`.
+    if (unconfirmed !== undefined) {
+      return 'reconciliation-required';
+    }
+    if (current !== undefined) {
+      return 'busy';
+    }
+    // Any owner of the shared scope, including a purchase started outside these actions.
+    if (options.presentation?.getSnapshot().owner !== undefined) {
+      return 'busy';
+    }
+    return history.size >= capacity ? 'history-full' : 'ready';
+  }
+
+  // Availability goes out through a UI bridge: on change, in order, also to
+  // listeners that reenter, with no initial delivery. `disposed` is the last
+  // value; then the sources detach and, once that delivery is done, the bridge
+  // and its listeners go. The sources are watched only while someone listens.
+  const detachSources: (() => void)[] = [];
+  let listening = 0;
+  let closed = false;
+  function refreshAvailability(): void {
+    if (closed) {
+      return;
+    }
+    const next = availability();
+    if (next === 'disposed') {
+      closed = true;
+      detachAvailabilitySources();
+    }
+    availabilityBridge.setSnapshot(next);
+    if (closed) {
+      // Delivery is synchronous; a reentrant `disposed` queued behind the
+      // current delivery still reaches its listeners before this runs.
+      void Promise.resolve().then(() => availabilityBridge.destroy());
+    }
   }
 
   function reserve<K extends GameActionKind>(kind: K, supplied: Inputs[K], canStart: () => boolean): Flight<K> {
@@ -256,6 +363,7 @@ export function createGameActionCoordinator(options: {
       );
       observe(() => block?.release(), onObserverError);
       bridge.destroy();
+      refreshAvailability();
     }
 
     function progress(value: Progress[K]): void {
@@ -308,16 +416,45 @@ export function createGameActionCoordinator(options: {
             if (isDisposed() || !canStart()) {
               throw new GameActionExecutionError('disposed');
             }
-            if (options.presentation === undefined) {
+            if (options.presentation === undefined || actionBlock === 'always') {
               block = execution.acquireBlock({ reason: `action:${kind}`, channels: ['simulation', 'gameplay-input'] });
             }
             if (isDisposed() || !canStart()) {
               throw new GameActionExecutionError('disposed');
             }
+            // Another purchase can take the scope between the reservation and
+            // this call; the coordinated store then refuses it before its provider runs.
+            let refused: CoordinatorRefusal | undefined;
+            let stopRefusals: (() => void) | undefined;
+            const refusals = kind === 'purchase' ? options.purchaseRefusals : undefined;
+            if (refusals !== undefined) {
+              // A failing source only loses this recognition, never the purchase.
+              observe(() => {
+                stopRefusals = refusals.subscribe((refusal) => {
+                  if (refusal.idempotencyKey === key && !flight.settled) {
+                    refused = refusal.reason;
+                  }
+                });
+              }, onObserverError);
+            }
             invoked = true;
-            const result = await (kind === 'purchase'
-              ? client.purchase(input as Inputs['purchase'], { onProgress: (value) => observe(() => progress(value as Progress[K]), onObserverError) })
-              : client.claimRewardedAd(input as Inputs['rewarded-ad'], { onProgress: (value) => observe(() => progress(value as Progress[K]), onObserverError) })) as Results[K];
+            let result: Results[K];
+            try {
+              result = await (kind === 'purchase'
+                ? client.purchase(input as Inputs['purchase'], { onProgress: (value) => observe(() => progress(value as Progress[K]), onObserverError) })
+                : client.claimRewardedAd(input as Inputs['rewarded-ad'], { onProgress: (value) => observe(() => progress(value as Progress[K]), onObserverError) })) as Results[K];
+            } finally {
+              if (stopRefusals !== undefined) {
+                observe(stopRefusals, onObserverError);
+              }
+            }
+            if (refused !== undefined && coordinatorRefusalOf(result as GameServicesPurchaseResult) === refused) {
+              // Nothing reached the store: answer as the preflight would, and keep the key.
+              invoked = false;
+              finish('exception');
+              reject(new GameActionExecutionError(refused));
+              return;
+            }
             finish(result.status);
             resolve(result);
           } catch (error) {
@@ -329,6 +466,7 @@ export function createGameActionCoordinator(options: {
     };
     history.set(key, fingerprint);
     current = flight as AnyFlight;
+    refreshAvailability();
     return flight;
   }
 
@@ -370,6 +508,7 @@ export function createGameActionCoordinator(options: {
       const result = Object.freeze({ status: 'reconciled' as const, operation, ledgerEntryId: transaction.ledgerEntryId });
       // History and the original promise are retained: recovering never makes the same key executable again.
       unconfirmed = undefined;
+      refreshAvailability();
       return result;
     });
     const joined = work.finally(() => {
@@ -499,6 +638,17 @@ export function createGameActionCoordinator(options: {
     });
   }
 
+  const availabilityBridge = createGameUiBridge<GameActionAvailability, never, never>({
+    initialSnapshot: availability(),
+    ...(onObserverError === undefined ? {} : { onListenerError: onObserverError }),
+  });
+  closed = availabilityBridge.getSnapshot() === 'disposed';
+  function detachAvailabilitySources(): void {
+    for (const detach of detachSources.splice(0)) {
+      observe(detach, onObserverError);
+    }
+  }
+
   return Object.freeze({
     createPurchaseController: () => makeController('purchase'),
     getPendingOperation: () => unconfirmed,
@@ -510,6 +660,7 @@ export function createGameActionCoordinator(options: {
       if ((!rejected && !noCandidate) || result.ledgerEntryId !== undefined || result.claim?.ledgerEntryId !== undefined || result.reward.ledgerEntryId !== undefined || result.reward.rewardGranted !== false) { throw new GameActionExecutionError('invalid-reconciliation'); }
       if (unconfirmed?.kind === 'rewarded-ad' && unconfirmed.input.idempotencyKey === idempotencyKey) {
         unconfirmed = undefined;
+        refreshAvailability();
         return true;
       }
       if (current !== undefined && current.key === idempotencyKey && current.bridge.getSnapshot().kind === 'rewarded-ad' && !current.settled) {
@@ -520,23 +671,42 @@ export function createGameActionCoordinator(options: {
     },
     reconcile,
     createRewardedAdController: () => makeController('rewarded-ad'),
-    getAvailability() {
-      if (isDisposed()) {
-        return 'disposed';
+    getAvailability: availability,
+    subscribeAvailability(listener: UiListener<GameActionAvailability>): () => void {
+      if (closed || isDisposed()) {
+        throw new GameActionExecutionError('disposed');
       }
-      if (current !== undefined) {
-        return 'busy';
+      if (typeof listener !== 'function') {
+        throw new TypeError('Availability listener must be a function.');
       }
-      if (options.presentation?.getSnapshot().owner !== undefined) {
-        return 'busy';
+      if (listening === 0) {
+        // Nobody heard the changes since the last listener left: catch up
+        // silently before this listener joins.
+        availabilityBridge.setSnapshot(availability());
+        // Execution tells destruction; the scope tells owners coming and going.
+        detachSources.push(execution.subscribe(refreshAvailability));
+        if (options.presentation !== undefined) {
+          detachSources.push(options.presentation.subscribe(refreshAvailability));
+        }
       }
-      if (unconfirmed !== undefined) {
-        return 'reconciliation-required';
-      }
-      return history.size >= capacity ? 'history-full' : 'ready';
+      const unsubscribe = availabilityBridge.subscribeSnapshot(listener);
+      listening += 1;
+      let active = true;
+      return () => {
+        if (!active) {
+          return;
+        }
+        active = false;
+        unsubscribe();
+        listening -= 1;
+        if (listening === 0) {
+          detachAvailabilitySources();
+        }
+      };
     },
     dispose(): void {
       disposed = true;
+      refreshAvailability();
     },
   });
 }

@@ -9,7 +9,11 @@ import {
 } from '@mpgd/platform';
 import { createGameExecutionController } from '../index.js';
 import { createFullScreenPresentationScope } from '../presentation/index.js';
-import { createCoordinatedCommerceProvider } from './index.js';
+import {
+  coordinatorRefusalAnswers,
+  createCoordinatedCommerceProvider,
+  matchCoordinatorRefusal,
+} from './index.js';
 
 type Commerce = NonNullable<PlatformGateway['commerce']>;
 type Result = Awaited<ReturnType<Commerce['requestPurchase']>>;
@@ -184,6 +188,52 @@ describe('coordinator refusals keep the key', () => {
     f.emit('closed', 1);
     // Sequences keep increasing across the refusal and the retry.
     expect(seen).toEqual(['first:1:not-started', 'first:2:unknown', 'first:3:closed']);
+  });
+  it('tells onRefusal of each of its own refusals before the not-started fact, never of a provider failure', async () => {
+    const order: string[] = [];
+    const f = fixture(true, async () => ({ outcome: 'failed', error: { code: 'IN_PROGRESS', retryable: true, storeCode: 'PRESENTATION_BUSY' } }));
+    const controlled = createCoordinatedCommerceProvider({
+      provider: f.provider,
+      presentation: f.presentation,
+      maxRememberedInvocations: 2,
+      onRefusal: (refusal) => {
+        expect(Object.isFrozen(refusal)).toBe(true);
+        order.push(`refusal:${refusal.idempotencyKey}:${refusal.reason}`);
+      },
+    });
+    controlled.presentation?.subscribe((event) => order.push(`fact:${event.idempotencyKey}:${event.state}`));
+    const ad = f.presentation.acquire({ kind: 'rewarded', invocationId: 'ad' });
+    await controlled.requestPurchase(request);
+    ad.confirmClosed();
+    // The provider's own failure with the same code is not a coordinator refusal.
+    await expect(controlled.requestPurchase({ ...request, idempotencyKey: 'store' })).resolves.toMatchObject({ outcome: 'failed', error: { storeCode: 'PRESENTATION_BUSY' } });
+    f.emit('not-started', 1, 'store');
+    const held = f.presentation.acquire({ kind: 'rewarded', invocationId: 'held' });
+    await controlled.requestPurchase({ ...request, idempotencyKey: 'full' });
+    held.confirmClosed();
+    controlled.dispose();
+    await controlled.requestPurchase({ ...request, idempotencyKey: 'late' });
+    expect(order).toEqual([
+      'refusal:first:busy', 'fact:first:not-started',
+      'fact:store:unknown', 'fact:store:not-started',
+      'refusal:full:history-full', 'fact:full:not-started',
+      'refusal:late:disposed', 'fact:late:not-started',
+    ]);
+  });
+  it('matches exactly its own refusal answers', async () => {
+    for (const reason of ['busy', 'disposed', 'history-full'] as const) {
+      const answer = coordinatorRefusalAnswers[reason];
+      expect(matchCoordinatorRefusal({ ...answer, retryable: true })).toBe(reason);
+      expect(matchCoordinatorRefusal({ ...answer, retryable: false })).toBeUndefined();
+      expect(matchCoordinatorRefusal({ code: answer.code, retryable: true })).toBeUndefined();
+    }
+    expect(matchCoordinatorRefusal({ code: 'IN_PROGRESS', retryable: true, storeCode: 'PRESENTATION_DISPOSED' })).toBeUndefined();
+    expect(matchCoordinatorRefusal(undefined)).toBeUndefined();
+    // The answers the coordinator gives are the ones it matches.
+    const f = fixture();
+    f.presentation.acquire({ kind: 'rewarded', invocationId: 'ad' });
+    const refused = await f.controlled.requestPurchase(request);
+    expect(refused.outcome === 'failed' ? matchCoordinatorRefusal(refused.error) : undefined).toBe('busy');
   });
   it('keeps a replacement flight that a listener starts on the refusal fact', async () => {
     const f = fixture();

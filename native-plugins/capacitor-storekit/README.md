@@ -65,8 +65,8 @@ finished later (see Recovery); one malformed
 transaction is reported as a `purchaseError` without blocking its siblings);
 `finishTransaction({ transactionId, ledgerEntryId, isConsumable, retry?, revoked? })`
 resolves the session app account token and finishes only a listed,
-non-revoked transaction bound to that token, or a durable of another token a
-restore shared to this player (see Recovery), and on a retry (`retry: true`)
+non-revoked transaction bound to that token, or a durable of another token or
+of no token a restore shared to this player (see Recovery), and on a retry (`retry: true`)
 answers `finished: true` without a native call for a consumable the list no
 longer carries (a lost acknowledgement, see Recovery); with `revoked: true`
 (the SDK declares `acceptsRevokedFinish`; `ledgerEntryId` may then be
@@ -245,7 +245,7 @@ existing ledger grant, and calls `finishTransaction` only after a verified
 response with a ledger entry id. The StoreKit SDK and the native plugin both
 refuse to call `transaction.finish()` on a transaction whose app account
 token is missing or does not match the token they are given; the SDK gives the
-session's, except for a durable of another token (below). A caller who can read the token from the plugin can
+session's, except for a durable of another token or of no token (below). A caller who can read the token from the plugin can
 still present it with a forged ledger entry id; that remaining hole needs a
 signed server finish capability. A listed, non-revoked durable StoreKit
 already finished (`unfinished: false`) answers `{ finished: true }` without a
@@ -261,8 +261,38 @@ durable takes nothing from the earlier guest: StoreKit keeps it in
 (`unfinished: false`). The native plugin is unchanged and still filters
 nothing by token on reads. A webview caller can therefore finish another
 token's unfinished durable, which, for the same reason, grants or removes
-nothing. A consumable of another token and a transaction bound to no token
-are never finished. Permanently rejected and account-mismatched
+nothing.
+
+A durable of the configured catalog still unfinished and bound to no token
+(an offer code redeemed in the App Store, or another purchase made outside
+the app, then restored; the backend's restore sharing grants it as
+`APP_STORE_ACCOUNT_TOKEN_MISSING`) is finished with the explicit no-token
+match: `finishTransaction({ transactionId, ledgerEntryId,
+withoutAppAccountToken: true })`, with no `appAccountToken` field at all.
+The native plugin then matches only a verified, non-revoked non-consumable
+bound to no token; a missing token without the flag is still refused
+(`STOREKIT_FINISH_REQUIRES_GRANT`), never read as "any token". The SDK sends
+it only for a durable its catalog declares, for a record the reconciler
+holds a ledger grant for, and only when the native build declares the match
+through `getFinishSupport` (`{ withoutAppAccountToken: 1 }`). A native build
+from before it answers that method with `UNIMPLEMENTED` (remembered) and would
+refuse the call, so the SDK leaves the durable unfinished there and the record
+keeps retrying `finishing`, as in earlier releases; the entitlement is
+unaffected. Rebuild the app with this package's native code to finish it.
+The catalog and ledger-grant conditions are the SDK's and the reconciler's;
+the native match checks only the transaction itself and, like the token
+match, is not a signed server capability, so a webview caller could finish
+such a durable too, which grants or removes nothing.
+Finishing takes nothing from anyone for the same reason as above:
+StoreKit keeps a finished non-consumable in `Transaction.currentEntitlements`
+([Apple](https://developer.apple.com/documentation/storekit/transaction/currententitlements)).
+
+A consumable of another token or of no token is never finished: the SDK
+never admits it, the backend refuses one bound to no token for every
+player (`APP_STORE_ACCOUNT_TOKEN_MISSING`), and it stays in
+`Transaction.unfinished`, reported as an `account-mismatch` diagnostic on each
+read. Subscriptions are never reported or finished by this plugin.
+Permanently rejected and account-mismatched
 transactions are not finished: the client cannot prove content delivery for
 them, so persist that terminal result in the game-owned operation journal and
 do not run an automatic retry loop for it. An unknown backend result stays

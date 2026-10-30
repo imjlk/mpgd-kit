@@ -26,6 +26,7 @@ import type {
   StoreKitTransaction,
 } from './definitions.js';
 import { appStoreStoreId, storeKitStoreSdkCapabilities } from './commerce-profile.js';
+import { probeNativeSupport } from './native-support.js';
 import { CapacitorStoreKit } from './plugin.js';
 import {
   resolveStoreKitNativePurchasePresentation,
@@ -47,6 +48,7 @@ export type CapacitorStoreKitStoreSdkPlugin = Pick<
   | 'finishTransaction'
   | 'addListener'
   | 'getPresentationSupport'
+  | 'getFinishSupport'
 >;
 
 /**
@@ -409,6 +411,23 @@ export function createCapacitorStoreKitStoreSdk(
     return expected;
   };
 
+  /**
+   * Whether the native build declares the explicit no-token finish
+   * (`getFinishSupport`). A build from before it answers `UNIMPLEMENTED`,
+   * which is remembered; any other failure is asked again on the next
+   * finish, and both answer "not supported" for this one, so the durable is
+   * left unfinished (as before) rather than sent a call the build refuses.
+   */
+  const finishWithoutTokenSupported = probeNativeSupport(
+    () => {
+      const check = sdk.getFinishSupport;
+      return typeof check === 'function' ? check.call(sdk) : undefined;
+    },
+    (answer) => isRecord(answer)
+      && typeof answer.withoutAppAccountToken === 'number'
+      && answer.withoutAppAccountToken >= 1,
+  );
+
   // Overlapping finishes for the same transaction and ledger entry share one
   // native call; the v2 reconciler is the gate that authorizes the call.
   const inFlightFinishes = new Map<
@@ -422,8 +441,9 @@ export function createCapacitorStoreKitStoreSdk(
 
   /**
    * Mirrors the native finish gate: the transaction must be listed, not
-   * revoked, and bound to the session app account token. A missing list is
-   * an invalid response, not a quiet "not finished".
+   * revoked, and bound to the session app account token (exceptions for a
+   * durable below). A missing list is an invalid response, not a quiet "not
+   * finished".
    *
    * On a retried finish (`retry`: the caller asked to finish this purchase
    * before, in an earlier attempt or session), a consumable the list no
@@ -448,8 +468,8 @@ export function createCapacitorStoreKitStoreSdk(
    * reconciler cannot hold a grant for it from this SDK, and the answer
    * neither grants nor takes anything.
    *
-   * Two exceptions for a listed, non-revoked durable, the only kind the
-   * restore read admits from another token:
+   * Three exceptions for a listed, non-revoked durable, the only kind the
+   * restore read admits from another token or from none:
    *
    * - StoreKit already finished it (`unfinished: false`): nothing is left to
    *   finish whatever its token, so a restore shared to this player ends
@@ -463,9 +483,18 @@ export function createCapacitorStoreKitStoreSdk(
    *   finishing it takes nothing from any player: the earlier guest's next
    *   read still lists it (`unfinished: false`) for its own verification. It
    *   is finished with its own token, which the native gate matches.
+   * - It is unfinished (or the build omits the flag), the catalog declares
+   *   its SKU durable, and it is bound to no token (bought or redeemed
+   *   outside the app, such as an offer code, then restored): the same
+   *   reasoning holds, since the caller holds this player's ledger grant and
+   *   StoreKit keeps the finished durable as a current entitlement. It is
+   *   finished with the explicit no-token match (`withoutAppAccountToken`),
+   *   which matches only a non-consumable bound to no token, and only when
+   *   the native build declares it (`getFinishSupport`); an earlier build
+   *   leaves it unfinished, and the caller retries as before.
    *
-   * A consumable of another token, or a transaction bound to no token, is
-   * never finished here.
+   * A consumable of another token or of no token, or a durable whose SKU the
+   * catalog does not declare durable, is never finished here.
    *
    * A revoked finish (`revoked`, see `revokedFinishPermitted`) has its own
    * gate; an ordinary finish of a revoked transaction stays refused.
@@ -475,7 +504,10 @@ export function createCapacitorStoreKitStoreSdk(
     appAccountToken: string,
     lostAcknowledgement: boolean,
   ): Promise<
-    | { readonly verdict: 'finish'; readonly appAccountToken: string }
+    | {
+      readonly verdict: 'finish';
+      readonly binding: FinishBinding;
+    }
     | { readonly verdict: 'finished' | 'refused' }
   > => {
     const entries = await listedEntries(transactionId);
@@ -491,16 +523,17 @@ export function createCapacitorStoreKitStoreSdk(
     }
     const bound = transaction.appAccountToken?.toLowerCase();
     if (bound === appAccountToken) {
-      return { verdict: 'finish', appAccountToken };
+      return { verdict: 'finish', binding: { appAccountToken } };
     }
-    if (
-      bound !== undefined
-      && transaction.type === 'non_consumable'
-      && kinds.get(transaction.productId) === 'durable'
-    ) {
-      return { verdict: 'finish', appAccountToken: bound };
+    if (transaction.type !== 'non_consumable' || kinds.get(transaction.productId) !== 'durable') {
+      return { verdict: 'refused' };
     }
-    return { verdict: 'refused' };
+    if (bound !== undefined) {
+      return { verdict: 'finish', binding: { appAccountToken: bound } };
+    }
+    return await finishWithoutTokenSupported()
+      ? { verdict: 'finish', binding: { withoutAppAccountToken: true } }
+      : { verdict: 'refused' };
   };
 
   /** The native list's entries of one transaction id, in any shape. */
@@ -682,7 +715,8 @@ export function createCapacitorStoreKitStoreSdk(
       requireIos();
       // The session token is the binding. A bridge or plugin caller cannot
       // substitute another account's token on this path: the only other
-      // token used is a durable's own, read from the native list.
+      // bindings used are a durable's own token, read from the native list,
+      // and the explicit no-token match for a durable the list shows unbound.
       const appAccountToken = await Promise.resolve(resolveAppAccountToken());
       const { transactionId } = request;
       const revoked = request.revoked === true;
@@ -724,8 +758,9 @@ export function createCapacitorStoreKitStoreSdk(
           if (await revokedFinishPermitted(transactionId, appAccountToken) !== 'finish') {
             return { finished: false };
           }
-          // A native build from before the flag ignores it and applies its
-          // ordinary gate, which refuses a revoked transaction: `finished: false`.
+          // Always the session token, never the no-token match. A native
+          // build from before the flag ignores it and applies its ordinary
+          // gate, which refuses a revoked transaction: `finished: false`.
           return readFinishResult(await sdk.finishTransaction({
             transactionId,
             ledgerEntryId,
@@ -733,9 +768,9 @@ export function createCapacitorStoreKitStoreSdk(
             revoked: true,
           }));
         }
-        // Same match the native plugin applies: missing, revoked, unbound, or
-        // another account never reaches `transaction.finish()`, except a
-        // durable of another token (see `finishPermitted`). On a retry, a
+        // Same match the native plugin applies: missing, revoked, or another
+        // account never reaches `transaction.finish()`, except a durable of
+        // another token or of none (see `finishPermitted`). On a retry, a
         // consumable that left the unfinished list is already finished (a
         // lost acknowledgement).
         const permitted = await finishPermitted(
@@ -746,11 +781,14 @@ export function createCapacitorStoreKitStoreSdk(
         if (permitted.verdict !== 'finish') {
           return { finished: permitted.verdict === 'finished' };
         }
-        return readFinishResult(await sdk.finishTransaction({
-          transactionId,
-          ledgerEntryId,
-          appAccountToken: permitted.appAccountToken,
-        }));
+        const { binding } = permitted;
+        return readFinishResult('withoutAppAccountToken' in binding
+          ? await sdk.finishTransaction({ transactionId, ledgerEntryId, withoutAppAccountToken: true })
+          : await sdk.finishTransaction({
+            transactionId,
+            ledgerEntryId,
+            appAccountToken: binding.appAccountToken,
+          }));
       })();
       inFlightFinishes.set(transactionId, { ledgerEntryId, revoked, promise });
       try {
@@ -864,6 +902,11 @@ export const capacitorStoreKitErrorCodeMap: StoreSdkErrorCodeMap = Object.freeze
   ...defaultStoreSdkErrorCodeMap,
   ...storeKitStoreSdkErrorCodeMap,
 });
+
+/** The account match one native finish asks for; see `StoreKitFinishTransactionInput` in the definitions. */
+type FinishBinding =
+  | { readonly appAccountToken: string }
+  | { readonly withoutAppAccountToken: true };
 
 const maxProductIdsPerLookup = 100;
 /**

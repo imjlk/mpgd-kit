@@ -7,11 +7,13 @@ import type {
 } from '@mpgd/game-services/operations';
 
 import { createGameExecutionController } from '../index.js';
+import { createFullScreenPresentationScope } from '../presentation/index.js';
 import { createGameUiBridge } from '../ui/index.js';
 import {
   createGameActionCoordinator,
   createPurchaseActionController,
   createRewardedAdActionController,
+  GameActionExecutionError,
   type PurchaseActionSnapshot,
 } from './index.js';
 
@@ -433,5 +435,264 @@ describe('confirmed late rewarded non-grants', () => {
     await original;
     expect(coordinator.getPendingOperation()).toBeUndefined();
     expect(coordinator.getAvailability()).toBe('ready');
+  });
+});
+
+describe('availability', () => {
+  function withScope(actionBlock?: 'without-presentation' | 'always') {
+    const execution = createGameExecutionController();
+    const presentation = createFullScreenPresentationScope({ execution });
+    const unsubscribed = vi.fn();
+    const subscribe = presentation.subscribe;
+    const scope = {
+      ...presentation,
+      subscribe: (listener: Parameters<typeof subscribe>[0]) => {
+        const off = subscribe(listener);
+        return () => {
+          unsubscribed();
+          off();
+        };
+      },
+    };
+    const purchase = deferred<GameServicesPurchaseResult>();
+    const client = { purchase: vi.fn(() => purchase.promise), claimRewardedAd: vi.fn(async () => adResult('granted')) };
+    const coordinator = createGameActionCoordinator({
+      execution, client, presentation: scope,
+      ...(actionBlock === undefined ? {} : { actionBlock }),
+    });
+    const seen: string[] = [];
+    coordinator.subscribeAvailability((value) => {
+      seen.push(value);
+    });
+    return { execution, presentation, scope, coordinator, client, purchase, seen, unsubscribed };
+  }
+
+  it('follows any owner of the shared scope without an initial delivery', async () => {
+    const { presentation, coordinator, client, seen } = withScope('always');
+    expect(seen).toEqual([]);
+    const lease = presentation.acquire({ kind: 'purchase', invocationId: 'outside' });
+    expect(seen).toEqual(['busy']);
+    lease.markStarted();
+    lease.markUnknown();
+    expect(seen).toEqual(['busy']);
+    await expect(coordinator.createPurchaseController().execute(purchaseInput)).rejects.toMatchObject({ code: 'busy' });
+    await expect(coordinator.createRewardedAdController().execute(adInput)).rejects.toMatchObject({ code: 'busy' });
+    expect(client.purchase).not.toHaveBeenCalled();
+    lease.confirmClosed();
+    expect(seen).toEqual(['busy', 'ready']);
+    expect(coordinator.getAvailability()).toBe('ready');
+  });
+
+  it("holds the action's own block with actionBlock 'always' and relies on leases by default", async () => {
+    for (const [mode, reasons] of [['always', ['action:purchase']], [undefined, []]] as const) {
+      const { execution, coordinator, purchase, seen } = withScope(mode);
+      const result = coordinator.createPurchaseController().execute(purchaseInput);
+      await Promise.resolve();
+      expect(execution.getSnapshot().blocks.map((block) => block.reason)).toEqual(reasons);
+      expect(seen).toEqual(['busy']);
+      purchase.resolve(purchaseResult('granted'));
+      await result;
+      expect(execution.getSnapshot().blocks).toHaveLength(0);
+      expect(seen).toEqual(['busy', 'ready']);
+    }
+    const execution = createGameExecutionController();
+    expect(() => createGameActionCoordinator({
+      execution,
+      client: { purchase: vi.fn(), claimRewardedAd: vi.fn() },
+      actionBlock: 'never' as never,
+    })).toThrow(TypeError);
+  });
+
+  it('reports reconciliation and history-full changes', async () => {
+    const pending = deferred<GameServicesPurchaseResult>();
+    const { coordinator } = setup({ purchase: () => pending.promise, claimRewardedAd: async () => adResult('granted') }, 1);
+    const seen: string[] = [];
+    coordinator.subscribeAvailability((value) => {
+      seen.push(value);
+    });
+    const result = coordinator.createPurchaseController().execute(purchaseInput);
+    pending.resolve(purchaseResult('pending'));
+    await result;
+    expect(seen).toEqual(['busy', 'reconciliation-required']);
+  });
+
+  it('delivers in order to reentrant listeners and ends with disposed', () => {
+    const { presentation, coordinator, seen, unsubscribed } = withScope();
+    const nested: string[] = [];
+    coordinator.subscribeAvailability((value) => {
+      if (value === 'busy') {
+        coordinator.dispose();
+      }
+      nested.push(value);
+    });
+    const late = vi.fn();
+    const off = coordinator.subscribeAvailability(late);
+    off();
+    presentation.acquire({ kind: 'purchase', invocationId: 'outside' });
+    expect(seen).toEqual(['busy', 'disposed']);
+    expect(nested).toEqual(['busy', 'disposed']);
+    expect(late).not.toHaveBeenCalled();
+    expect(unsubscribed).toHaveBeenCalledOnce();
+    expect(() => coordinator.subscribeAvailability(() => {})).toThrow(GameActionExecutionError);
+  });
+
+  it('watches the scope only while someone listens', () => {
+    const { presentation, scope, coordinator, seen, unsubscribed } = withScope();
+    // withScope's listener is attached; a second one shares the same sources.
+    const other = vi.fn();
+    const offOther = coordinator.subscribeAvailability(other);
+    offOther();
+    expect(unsubscribed).not.toHaveBeenCalled();
+    const lease = presentation.acquire({ kind: 'purchase', invocationId: 'outside' });
+    expect(seen).toEqual(['busy']);
+    expect(other).not.toHaveBeenCalled();
+
+    const standalone = createGameActionCoordinator({
+      execution: presentation.execution,
+      client: { purchase: vi.fn(), claimRewardedAd: vi.fn() },
+      presentation: scope,
+    });
+    const first = vi.fn();
+    const offFirst = standalone.subscribeAvailability(first);
+    offFirst();
+    expect(unsubscribed).toHaveBeenCalledOnce();
+    // Nobody listens: the closing lease is not observed, and a new listener
+    // starts from the current value without a stale delivery.
+    lease.confirmClosed();
+    const second = vi.fn();
+    standalone.subscribeAvailability(second);
+    expect(first).not.toHaveBeenCalled();
+    expect(second).not.toHaveBeenCalled();
+    presentation.acquire({ kind: 'purchase', invocationId: 'again' });
+    expect(second).toHaveBeenCalledExactlyOnceWith('busy');
+  });
+
+  it('ends with disposed when execution is destroyed and detaches from the scope', () => {
+    const { execution, presentation, seen, unsubscribed } = withScope();
+    execution.destroy();
+    expect(seen).toEqual(['disposed']);
+    expect(unsubscribed).toHaveBeenCalledOnce();
+    presentation.dispose();
+    expect(seen).toEqual(['disposed']);
+    expect(() => createGameActionCoordinator({ execution, client: { purchase: vi.fn(), claimRewardedAd: vi.fn() } }).subscribeAvailability(() => {}))
+      .toThrow(GameActionExecutionError);
+  });
+});
+
+describe('coordinated store refusals', () => {
+  const busyRefusal: GameServicesPurchaseResult = {
+    status: 'failed',
+    purchase: { status: 'failed', entitlementIds: [], diagnostic: { code: 'IN_PROGRESS', retryable: true, providerCode: 'PRESENTATION_BUSY' } },
+  };
+  function withRefusals(answers: GameServicesPurchaseResult[], refuse: (key: string) => string | undefined) {
+    const listeners = new Set<(refusal: { idempotencyKey: string; reason: 'busy' | 'disposed' | 'history-full' }) => void>();
+    const purchase = vi.fn(async (input: { readonly idempotencyKey: string }) => {
+      const reason = refuse(input.idempotencyKey);
+      if (reason !== undefined) {
+        for (const listener of [...listeners]) {
+          listener({ idempotencyKey: reason === 'other' ? 'someone-else' : input.idempotencyKey, reason: reason === 'other' ? 'busy' : reason as 'busy' | 'disposed' | 'history-full' });
+        }
+      }
+      const answer = answers.shift();
+      if (answer === undefined) {
+        throw new Error('no answer');
+      }
+      return answer;
+    });
+    const coordinator = createGameActionCoordinator({
+      execution: createGameExecutionController(),
+      client: { purchase, claimRewardedAd: async () => adResult('granted') },
+      purchaseRefusals: {
+        subscribe(listener) {
+          listeners.add(listener);
+          return () => {
+            listeners.delete(listener);
+          };
+        },
+      },
+    });
+    return { coordinator, purchase, listeners };
+  }
+
+  it('answers busy and keeps the key only for the coordinator refusal of this call', async () => {
+    let refuse = true;
+    const { coordinator, purchase, listeners } = withRefusals([busyRefusal, purchaseResult('granted')], () => (refuse ? 'busy' : undefined));
+    const controller = coordinator.createPurchaseController();
+    await expect(controller.execute(purchaseInput)).rejects.toMatchObject({ name: 'GameActionExecutionError', code: 'busy' });
+    expect(controller.getSnapshot()).toEqual({ kind: 'purchase', status: 'idle' });
+    expect(coordinator.getAvailability()).toBe('ready');
+    expect(listeners.size).toBe(0);
+    refuse = false;
+    await expect(controller.execute(purchaseInput)).resolves.toMatchObject({ status: 'granted' });
+    expect(purchase).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ['another key', 'other', busyRefusal],
+    ['a disposed refusal', 'disposed', busyRefusal],
+    ['no refusal', undefined, busyRefusal],
+    ['another store code', 'busy', { ...busyRefusal, purchase: { ...busyRefusal.purchase, diagnostic: { code: 'IN_PROGRESS', retryable: true, providerCode: 'PLAY_BILLING_BUSY' } } }],
+    ['no store code', 'busy', { ...busyRefusal, purchase: { ...busyRefusal.purchase, diagnostic: { code: 'IN_PROGRESS', retryable: true } } }],
+    ['a non-retryable failure', 'busy', { ...busyRefusal, purchase: { ...busyRefusal.purchase, diagnostic: { code: 'IN_PROGRESS', retryable: false, providerCode: 'PRESENTATION_BUSY' } } }],
+    ['a cancellation', 'busy', { ...busyRefusal, status: 'cancelled' }],
+  ] as const)('keeps a failed result with %s', async (_label, reason, answer) => {
+    const { coordinator, purchase } = withRefusals([answer as GameServicesPurchaseResult], () => reason);
+    const controller = coordinator.createPurchaseController();
+    await expect(controller.execute(purchaseInput)).resolves.toBe(answer);
+    await expect(controller.execute(purchaseInput)).resolves.toBe(answer);
+    expect(purchase).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['history-full', 'IN_PROGRESS', 'PRESENTATION_HISTORY_FULL'],
+    ['disposed', 'NOT_PREPARED', 'PRESENTATION_DISPOSED'],
+  ] as const)('answers a %s refusal with the same code and keeps the key', async (reason, code, providerCode) => {
+    const refusal: GameServicesPurchaseResult = {
+      status: 'failed',
+      purchase: { status: 'failed', entitlementIds: [], diagnostic: { code, retryable: true, providerCode } },
+    };
+    let refuse = true;
+    const { coordinator, purchase } = withRefusals([refusal, purchaseResult('granted')], () => (refuse ? reason : undefined));
+    const controller = coordinator.createPurchaseController();
+    await expect(controller.execute(purchaseInput)).rejects.toMatchObject({ name: 'GameActionExecutionError', code: reason });
+    expect(controller.getSnapshot()).toEqual({ kind: 'purchase', status: 'idle' });
+    refuse = false;
+    await expect(controller.execute(purchaseInput)).resolves.toMatchObject({ status: 'granted' });
+    expect(purchase).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a failed result whose refusal shape names another reason than the coordinator did', async () => {
+    const historyFull: GameServicesPurchaseResult = {
+      status: 'failed',
+      purchase: { status: 'failed', entitlementIds: [], diagnostic: { code: 'IN_PROGRESS', retryable: true, providerCode: 'PRESENTATION_HISTORY_FULL' } },
+    };
+    const { coordinator, purchase } = withRefusals([historyFull], () => 'busy');
+    const controller = coordinator.createPurchaseController();
+    await expect(controller.execute(purchaseInput)).resolves.toBe(historyFull);
+    await expect(controller.execute(purchaseInput)).resolves.toBe(historyFull);
+    expect(purchase).toHaveBeenCalledOnce();
+  });
+
+  it('reports reconciliation-required before busy, as execute refuses', async () => {
+    const execution = createGameExecutionController();
+    const presentation = createFullScreenPresentationScope({ execution });
+    const coordinator = createGameActionCoordinator({
+      execution,
+      presentation,
+      actionBlock: 'always',
+      client: { purchase: async () => purchaseResult('pending'), claimRewardedAd: async () => adResult('granted') },
+    });
+    await coordinator.createPurchaseController().execute(purchaseInput);
+    expect(coordinator.getAvailability()).toBe('reconciliation-required');
+    const seen: string[] = [];
+    coordinator.subscribeAvailability((value) => {
+      seen.push(value);
+    });
+    const lease = presentation.acquire({ kind: 'purchase', invocationId: 'outside' });
+    expect(coordinator.getAvailability()).toBe('reconciliation-required');
+    await expect(coordinator.createPurchaseController().execute({ ...purchaseInput, idempotencyKey: 'purchase-2' }))
+      .rejects.toMatchObject({ code: 'reconciliation-required' });
+    lease.confirmClosed();
+    expect(seen).toEqual([]);
   });
 });
