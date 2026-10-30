@@ -150,7 +150,8 @@ current status, selected by `signedTransactionEvidence`:
   refund still reads as purchased, and a refund that reaches the backend
   before the first grant leaves no ledger grant to reverse, so this mode
   requires `revocations`, an `AppStoreRevocationLookup` (construction throws
-  without it). Before a grant (or a `restorable` answer) the verifier looks
+  without it). Before a grant, a `restorable` answer, or an answer that the
+  purchase is another account's, the verifier looks
   the grant identity up there and, when a refund or revocation is recorded,
   refuses a JWS signed at or before its `revokedAt` plus `clockSkewMs` (the
   skew widens the refusal) with `APP_STORE_TRANSACTION_REVOKED`, the reason

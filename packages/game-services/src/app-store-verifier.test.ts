@@ -1419,6 +1419,29 @@ assertEqual(
     'a record whose revokedAt does not parse refuses every JWS',
   );
 
+  // A recorded refund refuses every presenter: a consumable bound to another
+  // account is refused as revoked, not answered as another account's
+  // purchase, as the Server API's revocationDate check answers it.
+  assertDecision(
+    await createOfflineHarness({
+      policy: offlinePolicy(2 * 60 * 60 * 1000, refundRegistry),
+      client: otherAccountPayload,
+    }).verifier.verifyPurchase(evidenceInput),
+    'rejected',
+    'APP_STORE_TRANSACTION_REVOKED',
+    'a refunded consumable presented with another account\u2019s token is refused as revoked',
+  );
+  const otherAccountUnrefunded = await createOfflineHarness({
+    policy: offlinePolicy(2 * 60 * 60 * 1000, createInMemoryAppStoreRevocationRegistry()),
+    client: otherAccountPayload,
+  }).verifier.verifyPurchase(evidenceInput);
+  assertDecision(
+    otherAccountUnrefunded,
+    'rejected',
+    'APP_STORE_ACCOUNT_TOKEN_MISMATCH',
+    'without a recorded refund another account\u2019s consumable is still reported as theirs',
+  );
+
   // A non-consumable is keyed by its original transaction: a restore of a
   // refunded purchase (a new transaction id) is refused too.
   const nonConsumableTransaction: AppStoreTransactionPayload = {

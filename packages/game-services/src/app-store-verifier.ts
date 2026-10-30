@@ -666,15 +666,6 @@ async function verifyAppStorePurchase(
   if (rejection !== undefined) {
     return { status: 'rejected', reason: rejection };
   }
-  if (tokenMismatch && !foreignBinding) {
-    // A transaction without an appAccountToken (bought outside the app, or
-    // by a build that set none) is no account's: refused for every player.
-    // One with another token is that account's, which can still recover it
-    // (RFC "Another account's purchase").
-    return transaction.appAccountToken === undefined
-      ? { status: 'rejected', reason: 'APP_STORE_ACCOUNT_TOKEN_MISSING' }
-      : { status: 'rejected', reason: 'APP_STORE_ACCOUNT_TOKEN_MISMATCH', anotherAccount: true };
-  }
 
   const verificationId = createAppStoreGrantVerificationId(transaction);
   if (offlineTransaction !== undefined && policy.mode === 'offline-only') {
@@ -683,7 +674,9 @@ async function verifyAppStorePurchase(
     // Server API status would. A refund before the first grant has no ledger
     // grant to reverse, so without this check it would grant with nothing
     // behind it. A JWS signed after it without a `revocationDate` shows that
-    // Apple reversed the refund, and passes.
+    // Apple reversed the refund, and passes. It runs before the account
+    // binding answers, so a refund refuses every presenter, as the Server
+    // API's `revocationDate` does.
     const revocation = await findRecordedRevocation(
       policy.revocations,
       verificationId,
@@ -694,6 +687,16 @@ async function verifyAppStorePurchase(
     if (revocation !== undefined) {
       return revocation;
     }
+  }
+
+  if (tokenMismatch && !foreignBinding) {
+    // A transaction without an appAccountToken (bought outside the app, or
+    // by a build that set none) is no account's: refused for every player.
+    // One with another token is that account's, which can still recover it
+    // (RFC "Another account's purchase").
+    return transaction.appAccountToken === undefined
+      ? { status: 'rejected', reason: 'APP_STORE_ACCOUNT_TOKEN_MISSING' }
+      : { status: 'rejected', reason: 'APP_STORE_ACCOUNT_TOKEN_MISMATCH', anotherAccount: true };
   }
 
   return {
