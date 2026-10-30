@@ -1,4 +1,4 @@
-import type { GameActionController } from '@mpgd/game-runtime/actions';
+import type { GameActionAvailability, GameActionController } from '@mpgd/game-runtime/actions';
 import { bindPhaserGameScene } from '@mpgd/game-runtime/phaser';
 import Phaser from 'phaser';
 
@@ -21,6 +21,8 @@ export class PlayScene extends Phaser.Scene {
   private analyticsText!: Phaser.GameObjects.Text;
   private context!: StarterContext;
   private rewardedAction: GameActionController<'rewarded-ad'> | undefined;
+  private showingNotReady = false;
+  private requesting = false;
   private lastScore = -1;
   private lastAnalyticsCount = -1;
 
@@ -83,17 +85,65 @@ export class PlayScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
-    this.rewardedAction = this.context.gameRuntime.actions?.createRewardedAdController();
+    const actions = this.context.gameRuntime.actions;
+    this.rewardedAction = actions?.createRewardedAdController();
     const action = this.rewardedAction;
+    // Follow the runtime's availability, so the hint changes while any purchase
+    // (one from the shop included) or ad holds the screen, without a key press.
+    this.showingNotReady = false;
+    this.requesting = false;
+    const stopAvailability = actions?.subscribeAvailability((availability) => {
+      this.showAvailability(availability);
+    });
+    if (actions !== undefined) {
+      this.showAvailability(actions.getAvailability());
+    }
     const keyboard = this.input.keyboard;
     const onReward = () => {
       void this.requestRewardedAd();
     };
     keyboard?.on('keydown-R', onReward);
     this.events.once('shutdown', () => {
+      stopAvailability?.();
       action?.dispose();
       keyboard?.off('keydown-R', onReward);
     });
+  }
+
+  private showAvailability(availability: GameActionAvailability): void {
+    // This scene's own request makes the actions busy too; its result text
+    // follows, so only someone else's purchase or ad shows the waiting text.
+    if (!this.rewardedAdsAvailable() || this.rewardedAction === undefined || availability === 'disposed'
+      || this.requesting) {
+      return;
+    }
+    if (availability === 'ready') {
+      // Restore the hint only over the waiting text, never over a result.
+      if (this.showingNotReady) {
+        this.showingNotReady = false;
+        this.rewardText.setText(this.rewardHint());
+      }
+      return;
+    }
+    this.showingNotReady = true;
+    // `history-full` lasts until the runtime is recreated; only `busy` ends
+    // with the other purchase or ad.
+    this.rewardText.setText(
+      t(
+        this.context.locale,
+        availability === 'history-full'
+          ? 'rewardHistoryFull'
+          : availability === 'reconciliation-required'
+            ? 'rewardReconciling'
+            : 'rewardNotReady',
+      ),
+    );
+  }
+
+  /** A result or error replaces the waiting text for good: `ready` must not restore the hint over it. */
+  private showRewardText(text: string): void {
+    this.showingNotReady = false;
+    this.rewardText.setText(text);
   }
 
   override update(_time: number, delta: number): void {
@@ -139,13 +189,15 @@ export class PlayScene extends Phaser.Scene {
     const action = this.rewardedAction;
 
     if (!this.rewardedAdsAvailable() || action === undefined) {
-      this.rewardText.setText(t(this.context.locale, 'rewardUnavailable'));
+      this.showRewardText(t(this.context.locale, 'rewardUnavailable'));
       return;
     }
 
+    // The tap-time guard stays: availability can change before the next frame.
     if (this.context.gameRuntime.actions?.getAvailability() !== 'ready') {
       return;
     }
+    this.requesting = true;
     try {
       const result = await action.execute({
         placementId: rewardedPlacementId,
@@ -155,7 +207,7 @@ export class PlayScene extends Phaser.Scene {
       if (action.isDisposed() || this.rewardedAction !== action) {
         return;
       }
-      this.rewardText.setText(
+      this.showRewardText(
         result.claim?.granted === true
           ? t(this.context.locale, 'reward', { status: result.status })
           : t(this.context.locale, 'rewardError'),
@@ -169,9 +221,13 @@ export class PlayScene extends Phaser.Scene {
         },
       });
       if (!action.isDisposed() && this.rewardedAction === action) {
-        this.rewardText.setText(t(this.context.locale, 'rewardError'));
+        this.showRewardText(t(this.context.locale, 'rewardError'));
       }
       console.error('[rewarded-ad]', error);
+    } finally {
+      if (this.rewardedAction === action) {
+        this.requesting = false;
+      }
     }
   }
 }

@@ -16,6 +16,11 @@ import {
   type AdProvider,
   type AdShowResult,
 } from '@mpgd/platform/ads';
+import {
+  createCommerceReconciler,
+  toGameServicesPurchaseResult,
+} from '@mpgd/game-services/commerce-reconciler';
+import { createInMemoryMonetizationOperationStore } from '@mpgd/game-services/monetization-operation-store';
 import { createGamePlatformRuntime } from './index.js';
 
 describe('host loading and synchronous exit', () => {
@@ -628,5 +633,208 @@ describe('purchase coordination without an ad provider', () => {
     await purchase;
     expect(runtime.execution.getSnapshot().blocks).toHaveLength(0);
     runtime.dispose();
+  });
+
+  // A purchase started outside `runtime.actions` (a game shop or a reconciler
+  // calling the gateway's commerce) makes the actions `busy` in both modes.
+  function outsidePurchase(options: { readonly ads: boolean; readonly opens?: boolean }) {
+    const store: ReturnType<typeof noAds> = noAds({
+      facts: true,
+      purchase: async (input) => {
+        if (options.opens !== false) {
+          store.fact(input.idempotencyKey, 'open');
+        }
+        return { outcome: 'launched' };
+      },
+    });
+    const purchase = vi.fn(async (input: { readonly productId: string; readonly source: 'shop'; readonly idempotencyKey: string }) => {
+      const outcome = await runtime.gateway.commerce?.requestPurchase({ logicalId: input.productId, source: input.source, idempotencyKey: input.idempotencyKey });
+      return { status: outcome?.outcome === 'failed' ? 'failed' : 'granted', purchase: { status: 'purchased', entitlementIds: [] } } as unknown as GameServicesPurchaseResult;
+    });
+    const runtime = createGamePlatformRuntime({
+      gateway: options.ads ? { ...store.gateway, ads: fixture().gateway.ads } : store.gateway,
+      initialLifecycleState: 'active',
+      createServices: () => ({ client: { purchase, claimRewardedAd: vi.fn() } as unknown as GameServicesOperationClient }),
+    });
+    const seen: string[] = [];
+    runtime.actions?.subscribeAvailability((value) => {
+      seen.push(value);
+    });
+    return { store, runtime, purchase, seen };
+  }
+  const action = { productId: 'GEMS', source: 'shop', idempotencyKey: 'action' } as const;
+
+  it.each([false, true])('reports busy while an outside purchase holds the scope (ads: %s)', async (ads) => {
+    const { store, runtime, purchase, seen } = outsidePurchase({ ads });
+    expect(runtime.gateway.ads.provider === undefined).toBe(!ads);
+    await runtime.gateway.commerce?.requestPurchase(request);
+    // The store answered first: the lease is `unknown`, still the scope's owner.
+    expect(runtime.presentation.getSnapshot().owner).toMatchObject({ kind: 'purchase', invocationId: 'p' });
+    expect(runtime.actions?.getAvailability()).toBe('busy');
+    expect(seen).toEqual(['busy']);
+
+    // An action purchase meanwhile is refused before the service call: the
+    // key is not spent and no second sheet is requested.
+    const controller = runtime.actions?.createPurchaseController();
+    await expect(controller?.execute(action)).rejects.toMatchObject({ name: 'GameActionExecutionError', code: 'busy' });
+    expect(purchase).not.toHaveBeenCalled();
+    expect(controller?.getSnapshot()).toEqual({ kind: 'purchase', status: 'idle' });
+
+    store.fact('p', 'closed');
+    expect(runtime.actions?.getAvailability()).toBe('ready');
+    expect(seen).toEqual(['busy', 'ready']);
+
+    // The same key runs once the sheet is gone.
+    await expect(controller?.execute(action)).resolves.toMatchObject({ status: 'granted' });
+    expect(purchase).toHaveBeenCalledOnce();
+    expect(seen).toEqual(['busy', 'ready', 'busy']);
+    store.fact('action', 'closed');
+    expect(seen).toEqual(['busy', 'ready', 'busy', 'ready']);
+    expect(runtime.execution.getSnapshot().blocks).toHaveLength(0);
+    runtime.dispose();
+  });
+
+  it.each([false, true])('clears busy on a not-started fact (ads: %s)', async (ads) => {
+    const { store, runtime, seen } = outsidePurchase({ ads, opens: false });
+    const pending = runtime.gateway.commerce?.requestPurchase(request);
+    await flush();
+    expect(seen).toEqual(['busy']);
+    store.fact('p', 'not-started');
+    expect(seen).toEqual(['busy', 'ready']);
+    await pending;
+    expect(runtime.actions?.getAvailability()).toBe('ready');
+    runtime.dispose();
+  });
+
+  // The real reconciler and result mapping behind the action, as in the
+  // game-services client, with a gate before its store call: the window in
+  // which an outside purchase can take the scope after the reservation.
+  async function raceRuntime(options: { readonly ads: boolean; readonly storeRefuses?: boolean }) {
+    const store: ReturnType<typeof noAds> = noAds({
+      facts: true,
+      purchase: async (input) => {
+        if (options.storeRefuses === true && input.idempotencyKey === 'action') {
+          // A store's own failure that looks like the coordinator's refusal.
+          store.fact(input.idempotencyKey, 'not-started');
+          return { outcome: 'failed', error: { code: 'IN_PROGRESS', retryable: true, storeCode: 'PRESENTATION_BUSY' } };
+        }
+        store.fact(input.idempotencyKey, 'open');
+        return { outcome: 'launched' };
+      },
+    });
+    const product = (logicalId: string) => ({
+      logicalId, store: 'fixture', storeSku: logicalId.toLowerCase(), kind: 'consumable' as const,
+      title: logicalId, description: logicalId, price: { formatted: '$1', currencyCode: 'USD' },
+    });
+    const commerce: Commerce = {
+      ...store.commerce,
+      getCapabilities: async () => ({
+        purchase: { consumable: true, durable: false, subscription: false, quantity: false },
+        catalog: { products: true, offers: false, localizedPrice: true },
+        lifecycle: { availablePurchases: true, pending: true, restore: false, events: true, finish: 'client' },
+        authority: { evidence: 'client-token', accountBinding: 'optional' },
+        availability: 'available',
+      }),
+      fetchProducts: async () => [product('COINS'), product('GEMS')],
+    };
+    let open!: () => void;
+    let gate = new Promise<void>((done) => {
+      open = done;
+    });
+    let reconciler!: ReturnType<typeof createCommerceReconciler>;
+    const purchase = vi.fn(async (input: { readonly productId: string; readonly source: 'shop'; readonly idempotencyKey: string }) => {
+      await gate;
+      await reconciler.requestPurchase({ logicalId: input.productId, source: input.source, idempotencyKey: input.idempotencyKey });
+      const record = await reconciler.read(input.idempotencyKey);
+      if (record === undefined) {
+        throw new Error('no record');
+      }
+      return toGameServicesPurchaseResult(record);
+    });
+    const runtime = createGamePlatformRuntime({
+      gateway: { ...store.gateway, commerce, ...(options.ads ? { ads: fixture().gateway.ads } : {}) },
+      initialLifecycleState: 'active',
+      createServices: (gateway) => {
+        reconciler = createCommerceReconciler({
+          provider: gateway.commerce as Commerce,
+          backend: { verifyPurchase: vi.fn(async () => { throw new Error('nothing to verify'); }) },
+          store: createInMemoryMonetizationOperationStore(),
+          playerId: 'player',
+          target: 'android',
+        });
+        return { client: { purchase, claimRewardedAd: vi.fn() } as unknown as GameServicesOperationClient };
+      },
+    });
+    await reconciler.start();
+    return {
+      store, runtime, purchase, reconciler,
+      release() {
+        open();
+        gate = Promise.resolve();
+      },
+    };
+  }
+
+  it.each([false, true])('answers busy and keeps the key when an outside purchase wins the window (ads: %s)', async (ads) => {
+    const { store, runtime, purchase, reconciler, release } = await raceRuntime({ ads });
+    const controller = runtime.actions?.createPurchaseController();
+    // Reserved while the screen is free; its store call waits.
+    const first = controller?.execute(action);
+    await flush();
+    expect(runtime.actions?.getAvailability()).toBe('busy');
+    // An outside purchase takes the screen in the window.
+    await expect(runtime.gateway.commerce?.requestPurchase(request)).resolves.toEqual({ outcome: 'launched' });
+    release();
+    await expect(first).rejects.toMatchObject({ name: 'GameActionExecutionError', code: 'busy' });
+    expect(store.commerce.requestPurchase).toHaveBeenCalledOnce();
+    expect(controller?.getSnapshot()).toEqual({ kind: 'purchase', status: 'idle' });
+    // The reconciler kept the key retryable; the actions remember nothing.
+    expect(await reconciler.read('action')).toMatchObject({ state: 'requested', error: { retryable: true, storeCode: 'PRESENTATION_BUSY' } });
+    expect(runtime.actions?.getAvailability()).toBe('busy');
+    store.fact('p', 'closed');
+    expect(runtime.actions?.getAvailability()).toBe('ready');
+
+    // The same key now reaches the store once.
+    await expect(controller?.execute(action)).resolves.toMatchObject({ status: 'pending' });
+    expect(purchase).toHaveBeenCalledTimes(2);
+    expect(store.commerce.requestPurchase).toHaveBeenCalledTimes(2);
+    expect(store.commerce.requestPurchase).toHaveBeenLastCalledWith(expect.objectContaining({ idempotencyKey: 'action', logicalId: 'GEMS' }));
+    store.fact('action', 'closed');
+    await reconciler.stop();
+    runtime.dispose();
+  });
+
+  it("settles a store's own look-alike failure as failed and spends the key", async () => {
+    const { store, runtime, purchase, reconciler, release } = await raceRuntime({ ads: false, storeRefuses: true });
+    release();
+    const controller = runtime.actions?.createPurchaseController();
+    // Same code, store code and not-started fact, but the provider ran: not the coordinator's refusal.
+    await expect(controller?.execute(action)).resolves.toMatchObject({
+      status: 'failed', purchase: { diagnostic: { code: 'IN_PROGRESS', retryable: true, providerCode: 'PRESENTATION_BUSY' } },
+    });
+    expect(store.commerce.requestPurchase).toHaveBeenCalledOnce();
+    expect(controller?.getSnapshot()).toMatchObject({ status: 'failed' });
+    // The action replays its result instead of calling the service again.
+    await expect(controller?.execute(action)).resolves.toMatchObject({ status: 'failed' });
+    expect(purchase).toHaveBeenCalledOnce();
+    await reconciler.stop();
+    runtime.dispose();
+  });
+
+  it('ends availability delivery at runtime disposal, under an open outside sheet', async () => {
+    const { store, runtime, seen } = outsidePurchase({ ads: false });
+    await runtime.gateway.commerce?.requestPurchase(request);
+    const late = vi.fn();
+    runtime.actions?.subscribeAvailability(late);
+    runtime.dispose();
+    expect(seen).toEqual(['busy', 'disposed']);
+    expect(late).toHaveBeenCalledExactlyOnceWith('disposed');
+    // The native sheet still ends later; nobody hears it through the actions.
+    store.fact('p', 'closed');
+    expect(seen).toEqual(['busy', 'disposed']);
+    expect(late).toHaveBeenCalledOnce();
+    expect(runtime.actions?.getAvailability()).toBe('disposed');
+    expect(() => runtime.actions?.subscribeAvailability(() => {})).toThrow(expect.objectContaining({ code: 'disposed' }));
+    expect(store.listeners.size).toBe(0);
   });
 });
