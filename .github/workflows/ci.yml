@@ -392,9 +392,10 @@ jobs:
       # Linux jobs pin ubuntu-24.04 rather than ubuntu-latest: ttsc keys each
       # compiled plugin on the Go toolchain (`go version`), and the image's Go
       # changes between Ubuntu releases. This cache key does not include the image,
-      # so a new image restores plugins that ttsc then rebuilds from scratch
-      # (past the 120s run-ttsx test budget) and never re-saves. Moving to a new
-      # image needs this key (and the copies below) to change in the same PR.
+      # so a new image restores plugins built with another Go; ttsc rebuilds them
+      # (past the 120s run-ttsx test budget) and, on an exact key hit, the cache is
+      # never re-saved. Moving to a new image needs this key and the other Linux
+      # copies below to change in the same PR.
       - name: Cache compiled ttsc plugins
         if: ${{ steps.release-pr-meta.outputs.docs_only != 'true' }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
