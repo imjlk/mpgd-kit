@@ -20,7 +20,7 @@ jobs:
       contents: read
       actions: read
       pull-requests: read
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     outputs:
       release_pr_metadata_only: ${{ steps.release-pr-meta.outputs.enabled }}
@@ -389,6 +389,13 @@ jobs:
       - run: pnpm install --frozen-lockfile
         if: ${{ steps.release-pr-meta.outputs.docs_only != 'true' }}
 
+      # Linux jobs pin ubuntu-24.04 rather than ubuntu-latest: ttsc keys each
+      # compiled plugin on the Go toolchain (`go version`), and the image's Go
+      # changes between Ubuntu releases. This cache key does not include the image,
+      # so a new image restores plugins built with another Go; ttsc rebuilds them
+      # (past the 120s run-ttsx test budget) and, on an exact key hit, the cache is
+      # never re-saved. Moving to a new image needs this key and the other Linux
+      # copies below to change in the same PR.
       - name: Cache compiled ttsc plugins
         if: ${{ steps.release-pr-meta.outputs.docs_only != 'true' }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -428,7 +435,7 @@ jobs:
   docs-validation:
     if: ${{ needs.prepare.outputs.docs_validation == 'true' }}
     needs: prepare
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -460,7 +467,7 @@ jobs:
   test-focused:
     if: ${{ github.event_name == 'pull_request' && needs.prepare.outputs.release_pr_metadata_only != 'true' && needs.prepare.outputs.docs_only != 'true' && needs.prepare.outputs.run_prepared == 'false' }}
     needs: prepare
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -512,7 +519,7 @@ jobs:
   test-browser:
     if: ${{ needs.prepare.outputs.release_pr_metadata_only != 'true' && needs.prepare.outputs.docs_only != 'true' && needs.prepare.outputs.run_native != 'true' }}
     needs: prepare
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -568,7 +575,7 @@ jobs:
   compile-tools:
     if: ${{ needs.prepare.outputs.release_pr_metadata_only != 'true' && needs.prepare.outputs.docs_only != 'true' && needs.prepare.outputs.run_prepared == 'true' }}
     needs: prepare
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -605,7 +612,7 @@ jobs:
   test-prepared:
     if: ${{ needs.prepare.outputs.release_pr_metadata_only != 'true' && needs.prepare.outputs.docs_only != 'true' && needs.prepare.outputs.run_prepared == 'true' }}
     needs: [prepare, compile-tools]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 75
     strategy:
       fail-fast: false
@@ -647,7 +654,7 @@ jobs:
   build-web-targets:
     if: ${{ needs.prepare.outputs.release_pr_metadata_only != 'true' && needs.prepare.outputs.docs_only != 'true' && needs.prepare.outputs.run_prepared == 'true' }}
     needs: prepare
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -706,7 +713,7 @@ jobs:
 
   build-android:
     if: ${{ needs.prepare.outputs.release_pr_metadata_only != 'true' && needs.prepare.outputs.docs_only != 'true' && (needs.prepare.outputs.run_prepared == 'true' || needs.prepare.outputs.run_native == 'true') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: prepare
     timeout-minutes: 120
 
@@ -874,7 +881,7 @@ jobs:
 
   build-ait:
     if: ${{ needs.prepare.outputs.release_pr_metadata_only != 'true' && needs.prepare.outputs.docs_only != 'true' && needs.prepare.outputs.run_prepared == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: prepare
     timeout-minutes: 120
 
@@ -921,7 +928,7 @@ jobs:
 
   build-devvit:
     if: ${{ needs.prepare.outputs.release_pr_metadata_only != 'true' && needs.prepare.outputs.docs_only != 'true' && needs.prepare.outputs.run_prepared == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: prepare
     timeout-minutes: 30
     permissions:
@@ -1214,7 +1221,7 @@ jobs:
     # fail the workflow rather than leave a green-looking partial CI run.
     if: ${{ always() }}
     needs: [prepare, docs-validation, test-focused, test-browser, compile-tools, test-prepared, build-web-targets, test-windows-tooling, prepare-windows-starter, build-windows-starter, test-windows-native-starter, build-android, build-ios, build-ait, build-devvit]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -1286,7 +1293,7 @@ jobs:
     # suppress the deployment after the required gate has passed.
     if: ${{ always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.prepare.outputs.docs_validation == 'true' && needs.docs-validation.result == 'success' && needs.ci-required.result == 'success' }}
     needs: [prepare, docs-validation, ci-required]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     concurrency:
       group: mpgd-kit-github-pages
