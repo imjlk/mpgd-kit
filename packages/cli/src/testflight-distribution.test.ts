@@ -45,6 +45,8 @@ interface FakeState {
   submissions: TestFlightBetaReviewSubmission[];
   /** What App Store Connect does to the external state when a build is submitted. */
   submitState: string;
+  /** The external state App Store Connect moves to once an external group is added. */
+  stateAfterAdd?: string;
   writes: string[];
   failSubmit?: boolean;
 }
@@ -91,6 +93,9 @@ function fake(overrides: Partial<FakeState> = {}): { state: FakeState; port: Tes
           throw new Error('asc refuses an external group during review');
         }
         state.members.add(groupId);
+        if (group?.isInternal === false && state.stateAfterAdd !== undefined) {
+          state.externalBuildState = state.stateAfterAdd;
+        }
       }
       state.writes.push(`add-groups ${groupIds.join(',')}`);
     },
@@ -320,6 +325,18 @@ try {
     assert.equal((await readTestFlightBuildStatus(port, target)).betaReview, 'not-needed');
   }
 
+  // Adding the group let the build through without review: nothing is submitted.
+  {
+    const { state, port } = fake({ stateAfterAdd: 'READY_FOR_BETA_TESTING' });
+    const result = await applyTestFlightDistribution(port, external);
+    assert.deepEqual(result.betaReview, { status: 'not-needed', submit: false });
+    assert.equal(state.writes.includes('submit'), false);
+    assert.equal(
+      state.writes.some((write) => write.startsWith('review-details')),
+      false,
+    );
+  }
+
   // An auto-approved submission reports approved.
   {
     const { port } = fake({ submitState: 'APPROVED' });
@@ -409,6 +426,22 @@ try {
     );
     assert.equal(status.betaReview, 'build-not-ready');
     assert.equal(status.processingState, 'PROCESSING');
+    assert.equal(
+      (await readTestFlightBuildStatus(fake({ processingState: 'INVALID' }).port, target)).betaReview,
+      'build-unusable',
+    );
+    assert.equal(
+      (await readTestFlightBuildStatus(fake({ externalBuildState: 'EXPIRED' }).port, target)).betaReview,
+      'build-unusable',
+    );
+    assert.equal(
+      (await readTestFlightBuildStatus(fake({ externalBuildState: 'PROCESSING' }).port, target)).betaReview,
+      'build-not-ready',
+    );
+    assert.equal(
+      (await readTestFlightBuildStatus(fake({ processingState: undefined }).port, target)).betaReview,
+      'build-not-ready',
+    );
   }
 
   // Export compliance keeps the action-required behaviour and writes nothing.
@@ -419,6 +452,10 @@ try {
     });
     const result = await applyTestFlightDistribution(port, external);
     assert.equal(result.betaReview.status, 'action-required');
+    assert.deepEqual(
+      result.groups.map((group) => group.membership),
+      ['blocked', 'blocked'],
+    );
     assert.match(result.detail ?? '', /ITSAppUsesNonExemptEncryption/u);
     assert.deepEqual(state.writes, []);
     assert.equal((await readTestFlightBuildStatus(port, target)).betaReview, 'action-required');

@@ -68,7 +68,7 @@ export interface TestFlightDistributionRequest extends TestFlightBuildTarget {
   readonly betaReview?: TestFlightBetaReviewInput;
 }
 
-export type TestFlightGroupMembership = 'present' | 'add' | 'added' | 'after-review';
+export type TestFlightGroupMembership = 'present' | 'add' | 'added' | 'after-review' | 'blocked';
 
 export interface TestFlightDistributionReport {
   readonly dryRun: boolean;
@@ -82,7 +82,10 @@ export interface TestFlightDistributionReport {
     readonly id: string;
     readonly name: string;
     readonly external: boolean;
-    /** `after-review`: App Store Connect accepts the group once the open review ends. */
+    /**
+     * `after-review`: App Store Connect accepts the group once the open review
+     * ends. `blocked`: not added until the `action-required` step is done.
+     */
     readonly membership: TestFlightGroupMembership;
   }[];
   readonly whatToTest: readonly {
@@ -110,8 +113,12 @@ export interface TestFlightStatusReport {
   readonly externalBuildState?: string;
   /** Groups that contain the build. */
   readonly groups: readonly { readonly id: string; readonly name: string; readonly external: boolean }[];
-  /** `build-not-ready`: not uploaded, still processing, or not usable by TestFlight. */
-  readonly betaReview: TestFlightBetaReviewStatus | 'build-not-ready';
+  /**
+   * `build-not-ready`: not uploaded or still processing; poll again.
+   * `build-unusable`: failed processing, expired or internal-only; it never
+   * becomes testable, so stop polling.
+   */
+  readonly betaReview: TestFlightBetaReviewStatus | 'build-not-ready' | 'build-unusable';
   readonly submission?: TestFlightBetaReviewSubmission;
   readonly detail?: string;
 }
@@ -175,7 +182,22 @@ export async function applyTestFlightDistribution(
     });
   }
   let betaReview = plan.betaReview;
-  if (plan.submit) {
+  let detail = plan.detail;
+  let submit = plan.submit;
+  if (submit) {
+    // Adding the external group may have changed the review state; submit
+    // only a build that still waits for its first submission.
+    const after = classifyExternalReview(
+      (await port.readBuildBetaState(plan.build.id)).externalBuildState,
+      latestSubmission(await port.listBetaReviewSubmissions(plan.build.id)),
+    );
+    if (after.kind !== 'status' || after.status !== 'not-submitted') {
+      submit = false;
+      betaReview = after.kind === 'status' ? { status: after.status } : { status: 'action-required' };
+      detail = after.kind === 'status' ? detail : after.detail;
+    }
+  }
+  if (submit) {
     const detailChanges = plan.reviewDetailChanges;
     if (detailChanges !== undefined && plan.reviewDetailId !== undefined) {
       const detailId = plan.reviewDetailId;
@@ -198,6 +220,8 @@ export async function applyTestFlightDistribution(
         group.membership === 'add' ? { ...group, membership: 'added' } : group,
       ),
       betaReview,
+      submit,
+      ...(detail === undefined ? {} : { detail }),
     },
     false,
   );
@@ -230,20 +254,23 @@ export async function readTestFlightBuildStatus(
   }
   assertExpectedBuild(target, build.id);
   if (build.processingState !== 'VALID') {
+    const processing = build.processingState === 'PROCESSING';
     return {
       ...base,
       buildId: build.id,
       processingState: build.processingState,
       groups: [],
-      betaReview: 'build-not-ready',
+      betaReview: processing ? 'build-not-ready' : 'build-unusable',
+      detail: processing
+        ? 'App Store Connect is still processing the build; poll again.'
+        : `App Store Connect reports ${build.processingState}; upload a new build.`,
     };
   }
-  const [state, groups, memberIds, submissions] = await Promise.all([
-    port.readBuildBetaState(build.id),
-    port.listGroups(target.appStoreAppId),
-    port.listBuildGroupIds(target.appStoreAppId, build.id),
-    port.listBetaReviewSubmissions(build.id),
-  ]);
+  // One asc call at a time, like every other asc-backed port.
+  const state = await port.readBuildBetaState(build.id);
+  const groups = await port.listGroups(target.appStoreAppId);
+  const memberIds = await port.listBuildGroupIds(target.appStoreAppId, build.id);
+  const submissions = await port.listBetaReviewSubmissions(build.id);
   const members = new Set(memberIds);
   const submission = latestSubmission(submissions);
   const review = classifyExternalReview(state.externalBuildState, submission);
@@ -257,7 +284,9 @@ export async function readTestFlightBuildStatus(
       .map((group) => ({ id: group.id, name: group.name, external: !group.isInternal })),
     betaReview: review.kind === 'status'
       ? review.status
-      : review.kind === 'action-required' ? 'action-required' : 'build-not-ready',
+      : review.kind === 'action-required'
+        ? 'action-required'
+        : review.kind === 'not-ready' ? 'build-not-ready' : 'build-unusable',
     ...(submission === undefined ? {} : { submission }),
     ...(review.kind === 'status' ? {} : { detail: review.detail }),
   };
@@ -529,7 +558,7 @@ function blocked(
     ...base,
     groups: groups.map((group) => ({
       group,
-      membership: present.has(group.id) ? 'present' : 'add',
+      membership: present.has(group.id) ? 'present' : 'blocked',
     })),
     betaReview: { status: 'action-required' },
     blocked: true,

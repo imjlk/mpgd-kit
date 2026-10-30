@@ -1191,8 +1191,12 @@ const deployCommand = defineI18n({
               ? planTestFlightDistribution(port, request)
               : applyTestFlightDistribution(port, request));
             console.info(JSON.stringify(result, null, 2));
-            if (!dryRun && result.betaReview.status === 'action-required') {
-              throw new Error(`TestFlight distribution needs action in App Store Connect: ${result.detail ?? ''}`);
+            if (!dryRun && (result.betaReview.status === 'action-required'
+              || result.betaReview.status === 'rejected')) {
+              throw new Error(
+                `TestFlight distribution needs action in App Store Connect (${result.betaReview.status}): `
+                  + (result.detail ?? 'see App Review > TestFlight.'),
+              );
             }
           },
         }),

@@ -160,8 +160,14 @@ missing, naming the fields.
 | `not-submitted` | Ready to submit (`READY_FOR_BETA_SUBMISSION`); `distribute --approve` submits it |
 | `waiting-for-review`, `in-review` | Submitted; nothing is submitted again |
 | `approved` | `BETA_APPROVED`, or a testable build with an approved submission |
-| `rejected` | `BETA_REJECTED`: fix it in App Store Connect (App Review > TestFlight) and resubmit there |
-| `action-required` | TestFlight waits for the export-compliance answer, as for the internal group; nothing is written and `distribute` exits non-zero |
+| `rejected` | `BETA_REJECTED`: fix it in App Store Connect (App Review > TestFlight) and resubmit there; `distribute` exits non-zero |
+| `action-required` | TestFlight waits for the export-compliance answer, as for the internal group; nothing is written, the groups are reported `blocked`, and `distribute` exits non-zero |
+
+`distribute` reads the review state again after adding the groups and submits
+only a build that still waits for its first submission. `testflight status`
+also reports `build-not-ready` (not uploaded, or still processing: poll
+again) and `build-unusable` (failed processing, expired, or an internal-only
+upload: stop polling and upload a new build), each with a `detail`.
 
 While a review is open or rejected, App Store Connect (and asc) refuse to add
 the build to another external group: those groups are reported as
@@ -170,8 +176,9 @@ build of each version in review at a time and six submissions in 24 hours.
 
 **Failing closed.** The command stops before any write when the release has
 no recorded iOS build, the build is not in App Store Connect yet, still
-processing (`processingState` or TestFlight state `PROCESSING`), failed
-processing, expired, or is an internal-only upload (`NOT_APPLICABLE`). A
+processing (`processingState`, or the TestFlight state of a requested group
+`PROCESSING`), failed processing, or expired; and, for an external group,
+when it is an internal-only upload (`NOT_APPLICABLE`). A
 write that fails names the steps already written; re-running the same command
 skips them.
 
