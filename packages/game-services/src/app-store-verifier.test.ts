@@ -1338,6 +1338,72 @@ assertEqual(
     'APP_STORE_TRANSACTION_REVOKED',
     'a JWS signed after the refund that carries it is refused by the payload check',
   );
+  // Refunded, reversed, and revoked again: the registry keeps the latest
+  // revocation, so a JWS cached between the reversal and the second
+  // revocation is refused too, and a late older notification changes nothing.
+  const repeatedRegistry = createInMemoryAppStoreRevocationRegistry();
+  const firstRefund = revocationOf(baseTransaction);
+  const secondRevokedAtMs = recordedRevokedAtMs + 30 * 60 * 1000;
+  const secondRefund = {
+    ...firstRefund,
+    revokedAt: new Date(secondRevokedAtMs).toISOString(),
+    notificationUUID: 'uuid-second-refund',
+  };
+  await repeatedRegistry.recordRevocation({ record: firstRefund, signal: controller.signal });
+  const betweenRevocations = {
+    ...baseTransaction,
+    signedDate: recordedRevokedAtMs + 15 * 60 * 1000,
+  };
+  assertEqual(
+    (await createOfflineHarness({
+      policy: offlinePolicy(2 * 60 * 60 * 1000, repeatedRegistry),
+      client: betweenRevocations,
+    }).verifier.verifyPurchase(evidenceInput)).status,
+    'verified',
+    'a JWS signed after the reversal passes while only the first refund is recorded',
+  );
+  assertEqual(
+    (await repeatedRegistry.recordRevocation({ record: secondRefund, signal: controller.signal }))
+      .alreadyRecorded,
+    false,
+    'a later revocation of the same grant identity replaces the earlier one',
+  );
+  assertEqual(
+    (await repeatedRegistry.recordRevocation({ record: secondRefund, signal: controller.signal }))
+      .alreadyRecorded,
+    true,
+    'a redelivered revocation is idempotent',
+  );
+  assertEqual(
+    (await repeatedRegistry.recordRevocation({ record: firstRefund, signal: controller.signal }))
+      .alreadyRecorded,
+    true,
+    'a late older revocation keeps the latest',
+  );
+  assertDecision(
+    await createOfflineHarness({
+      policy: offlinePolicy(2 * 60 * 60 * 1000, repeatedRegistry),
+      client: betweenRevocations,
+    }).verifier.verifyPurchase(evidenceInput),
+    'rejected',
+    'APP_STORE_TRANSACTION_REVOKED',
+    'a JWS cached between the reversal and the second revocation is refused',
+  );
+  await repeatedRegistry.recordRevocation({
+    record: { ...secondRefund, revokedAt: 'not-a-time', notificationUUID: 'uuid-garbled' },
+    signal: controller.signal,
+  });
+  await repeatedRegistry.recordRevocation({ record: secondRefund, signal: controller.signal });
+  assertDecision(
+    await createOfflineHarness({
+      policy: offlinePolicy(2 * 60 * 60 * 1000, repeatedRegistry),
+      client: { ...baseTransaction, signedDate: secondRevokedAtMs + 10 * 60 * 1000 },
+    }).verifier.verifyPurchase(evidenceInput),
+    'rejected',
+    'APP_STORE_TRANSACTION_REVOKED',
+    'an unparseable revokedAt counts as the latest and is never replaced',
+  );
+
   const unparseableRegistry = createInMemoryAppStoreRevocationRegistry();
   await unparseableRegistry.recordRevocation({
     record: { ...revocationOf(baseTransaction), revokedAt: 'not-a-time' },

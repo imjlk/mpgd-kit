@@ -245,10 +245,14 @@ export interface AppStoreRevocationLookup {
 }
 
 /**
- * Durably records a revocation, once per `verificationId`: a later record
- * for the same id keeps the first and answers `alreadyRecorded: true`. Throw
- * `AppStoreDependencyUnavailableError` only for a transient storage outage
- * (the notification is answered `retry`, so Apple redelivers).
+ * Durably records a revocation, keeping per `verificationId` the record with
+ * the latest `revokedAt`: a purchase can be refunded, reversed, and revoked
+ * again, and the lookup must refuse every JWS signed before the latest
+ * revocation. A record whose `revokedAt` does not parse counts as the
+ * latest. A record no later than the kept one (a redelivery, or an older
+ * notification arriving late) keeps it and answers `alreadyRecorded: true`.
+ * Throw `AppStoreDependencyUnavailableError` only for a transient storage
+ * outage (the notification is answered `retry`, so Apple redelivers).
  */
 export interface AppStoreRevocationRecorder {
   recordRevocation(input: {
@@ -274,13 +278,31 @@ export function createInMemoryAppStoreRevocationRegistry(): AppStoreRevocationRe
     },
     async recordRevocation(input) {
       assertNonEmptyString(input.record.verificationId, 'record.verificationId');
-      if (records.has(input.record.verificationId)) {
+      const kept = records.get(input.record.verificationId);
+      if (kept !== undefined && !isLaterRevocation(input.record, kept)) {
         return { alreadyRecorded: true };
       }
       records.set(input.record.verificationId, { ...input.record });
       return { alreadyRecorded: false };
     },
   };
+}
+
+/**
+ * Whether `record` revokes later than `kept`, the order a registry keeps
+ * records in. An unparseable `revokedAt` is the latest (it refuses every
+ * JWS), and one unparseable record never replaces another.
+ */
+function isLaterRevocation(
+  record: AppStoreRevocationRecord,
+  kept: AppStoreRevocationRecord,
+): boolean {
+  const recordMs = Date.parse(record.revokedAt);
+  const keptMs = Date.parse(kept.revokedAt);
+  if (!Number.isFinite(keptMs)) {
+    return false;
+  }
+  return !Number.isFinite(recordMs) || recordMs > keptMs;
 }
 
 /**

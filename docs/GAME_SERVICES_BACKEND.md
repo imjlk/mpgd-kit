@@ -1077,8 +1077,10 @@ the purchase verifier, one per environment.
   `REFUND` and `REVOKE` of the customer's own one-time purchase is recorded
   there before the ledger is read, granted or not, keyed by the grant's
   verification id (`createAppStoreVerificationId`: original transaction id
-  for non-consumables, transaction id for consumables) and kept once per
-  key. An offline-only purchase verifier reads the same registry, so a
+  for non-consumables, transaction id for consumables). The registry keeps
+  the latest revocation per key: a purchase refunded, reversed, and revoked
+  again refuses every JWS signed before the last revocation, and a
+  redelivery or a late older notification changes nothing. An offline-only purchase verifier reads the same registry, so a
   pre-refund JWS is refused even when the refund arrived before any grant.
   A recorder outage (`AppStoreDependencyUnavailableError`) is `retry` (503,
   `APP_STORE_REVOCATION_REGISTRY_UNAVAILABLE`) before the ledger is touched;
