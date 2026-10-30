@@ -4,7 +4,11 @@ import {
   createAppStoreGameServicesEvidenceVerifier,
   createAppStoreServerApiClient,
   createAppStoreSignedTransactionEvidence,
+  createAppStoreVerificationId,
+  createInMemoryAppStoreRevocationRegistry,
   isAppStoreVerificationId,
+  type AppStoreRevocationLookup,
+  type AppStoreRevocationRecord,
   type AppStoreServerApiClient,
   type AppStoreSignedTransactionEvidencePolicy,
   type AppStoreSignedTransactionVerifier,
@@ -1134,10 +1138,17 @@ assertEqual(
     "the evidence path reports another account's purchase",
   );
 
-  // Offline-only: the client JWS alone decides, within the freshness window.
-  const offlineOnly = createOfflineHarness({
-    policy: { mode: 'offline-only', maxSignedAgeMs: 2 * 60 * 60 * 1000 },
+  // Offline-only: the client JWS decides, within the freshness window and
+  // against the revocations App Store Server Notifications recorded.
+  const offlinePolicy = (
+    maxSignedAgeMs: number,
+    revocations: AppStoreRevocationLookup = createInMemoryAppStoreRevocationRegistry(),
+  ): AppStoreSignedTransactionEvidencePolicy => ({
+    mode: 'offline-only',
+    maxSignedAgeMs,
+    revocations,
   });
+  const offlineOnly = createOfflineHarness({ policy: offlinePolicy(2 * 60 * 60 * 1000) });
   assertEqual(
     (await offlineOnly.verifier.verifyPurchase(evidenceInput)).status,
     'verified',
@@ -1149,9 +1160,7 @@ assertEqual(
     clientJws,
     'offline-only verifies only the client JWS',
   );
-  const staleOfflineOnly = createOfflineHarness({
-    policy: { mode: 'offline-only', maxSignedAgeMs: 30 * 60 * 1000 },
-  });
+  const staleOfflineOnly = createOfflineHarness({ policy: offlinePolicy(30 * 60 * 1000) });
   assertDecision(
     await staleOfflineOnly.verifier.verifyPurchase(evidenceInput),
     'rejected',
@@ -1159,16 +1168,16 @@ assertEqual(
     'offline-only rejects a client JWS signed before the freshness window',
   );
   const refundedOfflineOnly = createOfflineHarness({
-    policy: { mode: 'offline-only', maxSignedAgeMs: 2 * 60 * 60 * 1000 },
+    policy: offlinePolicy(2 * 60 * 60 * 1000),
     fresh: { ...baseTransaction, revocationDate: signedDate + 60_000 },
   });
   assertEqual(
     (await refundedOfflineOnly.verifier.verifyPurchase(evidenceInput)).status,
     'verified',
-    'offline-only cannot see a refund after signing: the documented risk of that mode',
+    'offline-only cannot see a refund Apple has not notified yet: the documented risk of that mode',
   );
   const revokedOfflineOnly = createOfflineHarness({
-    policy: { mode: 'offline-only', maxSignedAgeMs: 2 * 60 * 60 * 1000 },
+    policy: offlinePolicy(2 * 60 * 60 * 1000),
     client: { ...baseTransaction, revocationDate: signedDate + 1_000 },
   });
   assertDecision(
@@ -1178,7 +1187,7 @@ assertEqual(
     'offline-only applies the revocation check to the client JWS',
   );
   const otherAccountOfflineOnly = createOfflineHarness({
-    policy: { mode: 'offline-only', maxSignedAgeMs: 2 * 60 * 60 * 1000 },
+    policy: offlinePolicy(2 * 60 * 60 * 1000),
     client: otherAccountPayload,
   });
   assertDecision(
@@ -1186,6 +1195,333 @@ assertEqual(
     'rejected',
     'APP_STORE_ACCOUNT_TOKEN_MISMATCH',
     'offline-only applies the account binding check to the client JWS',
+  );
+
+  // A refund the backend recorded before the first grant: the client still
+  // holds the JWS signed before it, inside the window, and no ledger grant
+  // exists to reverse. Offline-only refuses it as revoked.
+  function revocationOf(transaction: AppStoreTransactionPayload): AppStoreRevocationRecord {
+    return {
+      verificationId: createAppStoreVerificationId({
+        environment: transaction.environment,
+        bundleId: transaction.bundleId,
+        transactionId: transaction.type === 'Non-Consumable'
+          ? transaction.originalTransactionId
+          : transaction.transactionId,
+      }),
+      environment: transaction.environment,
+      bundleId: transaction.bundleId,
+      transactionId: transaction.transactionId,
+      originalTransactionId: transaction.originalTransactionId,
+      productId: transaction.productId,
+      reason: 'refund',
+      revokedAt: new Date(signedDate + 60_000).toISOString(),
+      notificationType: 'REFUND',
+      notificationUUID: 'uuid-refund-before-grant',
+    };
+  }
+  const refundRegistry = createInMemoryAppStoreRevocationRegistry();
+  assertEqual(
+    (await refundRegistry.recordRevocation({
+      record: revocationOf(baseTransaction),
+      signal: controller.signal,
+    })).alreadyRecorded,
+    false,
+    'the first record of a refund is kept',
+  );
+  assertEqual(
+    (await refundRegistry.recordRevocation({
+      record: { ...revocationOf(baseTransaction), notificationUUID: 'uuid-redelivered' },
+      signal: controller.signal,
+    })).alreadyRecorded,
+    true,
+    'a second record for the same grant identity answers the first',
+  );
+  assertEqual(
+    (await refundRegistry.findRevocation({
+      verificationId: revocationOf(baseTransaction).verificationId,
+      environment: baseTransaction.environment,
+      bundleId: baseTransaction.bundleId,
+      transactionId: baseTransaction.transactionId,
+      originalTransactionId: baseTransaction.originalTransactionId,
+      signal: controller.signal,
+    }))?.notificationUUID,
+    'uuid-refund-before-grant',
+    'the registry keeps the first notification of a refund',
+  );
+  const lookups: string[] = [];
+  const recordingRegistry: AppStoreRevocationLookup = {
+    async findRevocation(input) {
+      lookups.push(`${input.verificationId}|${input.transactionId}|${input.originalTransactionId}`);
+      return refundRegistry.findRevocation(input);
+    },
+  };
+  const refundedBeforeGrant = createOfflineHarness({
+    policy: offlinePolicy(2 * 60 * 60 * 1000, recordingRegistry),
+  });
+  assertDecision(
+    await refundedBeforeGrant.verifier.verifyPurchase(evidenceInput),
+    'rejected',
+    'APP_STORE_TRANSACTION_REVOKED',
+    'offline-only refuses a pre-refund JWS within the window once the refund is recorded',
+  );
+  assertEqual(
+    lookups.join(','),
+    `${revocationOf(baseTransaction).verificationId}|${baseTransaction.transactionId}|${baseTransaction.originalTransactionId}`,
+    'offline-only looks the grant identity up once, with the decoded transaction ids',
+  );
+  assertEqual(
+    refundedBeforeGrant.serverApiCalls.length,
+    0,
+    'the recorded refund is read without the Server API',
+  );
+  lookups.length = 0;
+  assertDecision(
+    await createOfflineHarness({
+      policy: offlinePolicy(30 * 60 * 1000, recordingRegistry),
+    }).verifier.verifyPurchase(evidenceInput),
+    'rejected',
+    'APP_STORE_SIGNED_TRANSACTION_STALE',
+    'a stale JWS is refused before the registry is read',
+  );
+  assertEqual(lookups.length, 0, 'the registry is read only for a decision that would grant');
+  assertEqual(
+    (await createOfflineHarness({
+      policy: offlinePolicy(2 * 60 * 60 * 1000, recordingRegistry),
+      client: { ...baseTransaction, transactionId: '2000000123456790' },
+    }).verifier.verifyPurchase({
+      ...evidenceInput,
+      request: {
+        ...evidenceInput.request,
+        platformTransactionId: '2000000123456790',
+        evidence: createAppStoreSignedTransactionEvidenceFixture({
+          transactionId: '2000000123456790',
+        }),
+      },
+    })).status,
+    'verified',
+    'a consumable refund refuses only its own transaction',
+  );
+
+  // The record refuses only a JWS signed at or before the revocation (plus
+  // the default 5-minute clock skew, which widens the refusal). A JWS signed
+  // later without a revocationDate shows that Apple reversed the refund.
+  const recordedRevokedAtMs = Date.parse(revocationOf(baseTransaction).revokedAt);
+  const defaultClockSkewMs = 5 * 60 * 1000;
+  assertDecision(
+    await createOfflineHarness({
+      policy: offlinePolicy(2 * 60 * 60 * 1000, refundRegistry),
+      client: { ...baseTransaction, signedDate: recordedRevokedAtMs + defaultClockSkewMs },
+    }).verifier.verifyPurchase(evidenceInput),
+    'rejected',
+    'APP_STORE_TRANSACTION_REVOKED',
+    'a JWS signed within the clock skew after the revocation is still refused',
+  );
+  assertEqual(
+    (await createOfflineHarness({
+      policy: offlinePolicy(2 * 60 * 60 * 1000, refundRegistry),
+      client: { ...baseTransaction, signedDate: recordedRevokedAtMs + defaultClockSkewMs + 1 },
+    }).verifier.verifyPurchase(evidenceInput)).status,
+    'verified',
+    'a JWS signed after the recorded refund without a revocationDate (a reversed refund) is granted',
+  );
+  assertDecision(
+    await createOfflineHarness({
+      policy: offlinePolicy(2 * 60 * 60 * 1000, refundRegistry),
+      client: {
+        ...baseTransaction,
+        signedDate: recordedRevokedAtMs + defaultClockSkewMs + 1,
+        revocationDate: recordedRevokedAtMs,
+      },
+    }).verifier.verifyPurchase(evidenceInput),
+    'rejected',
+    'APP_STORE_TRANSACTION_REVOKED',
+    'a JWS signed after the refund that carries it is refused by the payload check',
+  );
+  // Refunded, reversed, and revoked again: the registry keeps the latest
+  // revocation, so a JWS cached between the reversal and the second
+  // revocation is refused too, and a late older notification changes nothing.
+  const repeatedRegistry = createInMemoryAppStoreRevocationRegistry();
+  const firstRefund = revocationOf(baseTransaction);
+  const secondRevokedAtMs = recordedRevokedAtMs + 30 * 60 * 1000;
+  const secondRefund = {
+    ...firstRefund,
+    revokedAt: new Date(secondRevokedAtMs).toISOString(),
+    notificationUUID: 'uuid-second-refund',
+  };
+  await repeatedRegistry.recordRevocation({ record: firstRefund, signal: controller.signal });
+  const betweenRevocations = {
+    ...baseTransaction,
+    signedDate: recordedRevokedAtMs + 15 * 60 * 1000,
+  };
+  assertEqual(
+    (await createOfflineHarness({
+      policy: offlinePolicy(2 * 60 * 60 * 1000, repeatedRegistry),
+      client: betweenRevocations,
+    }).verifier.verifyPurchase(evidenceInput)).status,
+    'verified',
+    'a JWS signed after the reversal passes while only the first refund is recorded',
+  );
+  assertEqual(
+    (await repeatedRegistry.recordRevocation({ record: secondRefund, signal: controller.signal }))
+      .alreadyRecorded,
+    false,
+    'a later revocation of the same grant identity replaces the earlier one',
+  );
+  assertEqual(
+    (await repeatedRegistry.recordRevocation({ record: secondRefund, signal: controller.signal }))
+      .alreadyRecorded,
+    true,
+    'a redelivered revocation is idempotent',
+  );
+  assertEqual(
+    (await repeatedRegistry.recordRevocation({ record: firstRefund, signal: controller.signal }))
+      .alreadyRecorded,
+    true,
+    'a late older revocation keeps the latest',
+  );
+  assertDecision(
+    await createOfflineHarness({
+      policy: offlinePolicy(2 * 60 * 60 * 1000, repeatedRegistry),
+      client: betweenRevocations,
+    }).verifier.verifyPurchase(evidenceInput),
+    'rejected',
+    'APP_STORE_TRANSACTION_REVOKED',
+    'a JWS cached between the reversal and the second revocation is refused',
+  );
+  await repeatedRegistry.recordRevocation({
+    record: { ...secondRefund, revokedAt: 'not-a-time', notificationUUID: 'uuid-garbled' },
+    signal: controller.signal,
+  });
+  await repeatedRegistry.recordRevocation({ record: secondRefund, signal: controller.signal });
+  assertDecision(
+    await createOfflineHarness({
+      policy: offlinePolicy(2 * 60 * 60 * 1000, repeatedRegistry),
+      client: { ...baseTransaction, signedDate: secondRevokedAtMs + 10 * 60 * 1000 },
+    }).verifier.verifyPurchase(evidenceInput),
+    'rejected',
+    'APP_STORE_TRANSACTION_REVOKED',
+    'an unparseable revokedAt counts as the latest and is never replaced',
+  );
+
+  const unparseableRegistry = createInMemoryAppStoreRevocationRegistry();
+  await unparseableRegistry.recordRevocation({
+    record: { ...revocationOf(baseTransaction), revokedAt: 'not-a-time' },
+    signal: controller.signal,
+  });
+  assertDecision(
+    await createOfflineHarness({
+      policy: offlinePolicy(2 * 60 * 60 * 1000, unparseableRegistry),
+      client: { ...baseTransaction, signedDate: recordedRevokedAtMs + 60 * 60 * 1000 },
+    }).verifier.verifyPurchase(evidenceInput),
+    'rejected',
+    'APP_STORE_TRANSACTION_REVOKED',
+    'a record whose revokedAt does not parse refuses every JWS',
+  );
+
+  // A recorded refund refuses every presenter: a consumable bound to another
+  // account is refused as revoked, not answered as another account's
+  // purchase, as the Server API's revocationDate check answers it.
+  assertDecision(
+    await createOfflineHarness({
+      policy: offlinePolicy(2 * 60 * 60 * 1000, refundRegistry),
+      client: otherAccountPayload,
+    }).verifier.verifyPurchase(evidenceInput),
+    'rejected',
+    'APP_STORE_TRANSACTION_REVOKED',
+    'a refunded consumable presented with another account\u2019s token is refused as revoked',
+  );
+  const otherAccountUnrefunded = await createOfflineHarness({
+    policy: offlinePolicy(2 * 60 * 60 * 1000, createInMemoryAppStoreRevocationRegistry()),
+    client: otherAccountPayload,
+  }).verifier.verifyPurchase(evidenceInput);
+  assertDecision(
+    otherAccountUnrefunded,
+    'rejected',
+    'APP_STORE_ACCOUNT_TOKEN_MISMATCH',
+    'without a recorded refund another account\u2019s consumable is still reported as theirs',
+  );
+
+  // A non-consumable is keyed by its original transaction: a restore of a
+  // refunded purchase (a new transaction id) is refused too.
+  const nonConsumableTransaction: AppStoreTransactionPayload = {
+    ...baseTransaction,
+    productId: 'com.example.game.remove_ads',
+    type: 'Non-Consumable',
+  };
+  const nonConsumableRegistry = createInMemoryAppStoreRevocationRegistry();
+  await nonConsumableRegistry.recordRevocation({
+    record: revocationOf({ ...nonConsumableTransaction, transactionId: '2000000123456001' }),
+    signal: controller.signal,
+  });
+  const nonConsumableInput = {
+    ...evidenceInput,
+    product: {
+      id: 'REMOVE_ADS',
+      type: 'non_consumable',
+      grant: { type: 'entitlement', entitlement: 'remove_ads' },
+      platformProductIds: { ios: nonConsumableTransaction.productId },
+    },
+    platformProductId: nonConsumableTransaction.productId,
+  } satisfies VerifyPurchaseEvidenceInput;
+  assertDecision(
+    await createOfflineHarness({
+      policy: offlinePolicy(2 * 60 * 60 * 1000, nonConsumableRegistry),
+      client: nonConsumableTransaction,
+    }).verifier.verifyPurchase(nonConsumableInput),
+    'rejected',
+    'APP_STORE_TRANSACTION_REVOKED',
+    'a refunded non-consumable is refused by its original transaction id',
+  );
+  assertDecision(
+    await createOfflineHarness({
+      policy: offlinePolicy(2 * 60 * 60 * 1000, nonConsumableRegistry),
+      client: { ...nonConsumableTransaction, appAccountToken: otherAccountPayload.appAccountToken },
+    }).verifier.verifyPurchase({
+      ...nonConsumableInput,
+      request: { ...nonConsumableInput.request, intent: 'restore' },
+    }),
+    'rejected',
+    'APP_STORE_TRANSACTION_REVOKED',
+    'a refunded non-consumable is never reported restorable to another player',
+  );
+
+  // The registry's availability.
+  assertDecision(
+    await createOfflineHarness({
+      policy: offlinePolicy(2 * 60 * 60 * 1000, {
+        async findRevocation() {
+          throw new AppStoreDependencyUnavailableError('revocation store down');
+        },
+      }),
+    }).verifier.verifyPurchase(evidenceInput),
+    'pending',
+    'APP_STORE_REVOCATION_LOOKUP_UNAVAILABLE',
+    'a registry outage keeps the purchase pending, never a grant',
+  );
+  await assertRejects(
+    async () =>
+      createOfflineHarness({
+        policy: offlinePolicy(2 * 60 * 60 * 1000, {
+          async findRevocation() {
+            throw new Error('revocation lookup bug');
+          },
+        }),
+      }).verifier.verifyPurchase(evidenceInput),
+    'revocation lookup bug',
+    'any other registry error propagates',
+  );
+  const offlinePolicyRequest = createOfflineHarness({
+    policy: offlinePolicy(2 * 60 * 60 * 1000, {
+      async findRevocation() {
+        throw new Error('a request without evidence never reads the registry');
+      },
+    }),
+  });
+  assertEqual(
+    (await offlinePolicyRequest.verifier.verifyPurchase(baseInput)).status,
+    'verified',
+    'offline-only keeps the Server API lookup for a request without evidence',
   );
 
   // Ignore: the evidence is not read and the transaction is fetched by id.
@@ -1208,6 +1544,11 @@ assertEqual(
   for (const policy of [
     { mode: 'offline-only' },
     { mode: 'offline-only', maxSignedAgeMs: 0 },
+    // A client JWS cannot show a later refund: offline-only needs the
+    // revocations notifications recorded.
+    { mode: 'offline-only', maxSignedAgeMs: 60_000 },
+    { mode: 'offline-only', maxSignedAgeMs: 60_000, revocations: {} },
+    { mode: 'offline-only', maxSignedAgeMs: 60_000, revocations: null },
     { mode: 'cached' },
   ]) {
     await assertRejects(
@@ -1571,6 +1912,8 @@ assertEqual(
 
   // Offline-only decides on the client JWS: no Server API call at all.
   const offlineCalls: string[] = [];
+  const sandboxRegistry = createInMemoryAppStoreRevocationRegistry();
+  const sandboxLookups: string[] = [];
   const offlineSandbox = createAppStoreGameServicesEvidenceVerifier({
     ...base,
     serverApi: recordingApi(offlineCalls, 'found'),
@@ -1579,13 +1922,22 @@ assertEqual(
         return { status: 'rejected', reason: 'APP_STORE_ENVIRONMENT_MISMATCH' };
       },
     },
-    signedTransactionEvidence: { mode: 'offline-only', maxSignedAgeMs: 24 * 60 * 60 * 1000 },
+    signedTransactionEvidence: {
+      mode: 'offline-only',
+      maxSignedAgeMs: 24 * 60 * 60 * 1000,
+      revocations: {
+        async findRevocation(input) {
+          sandboxLookups.push(`${input.environment}|${input.verificationId}`);
+          return sandboxRegistry.findRevocation(input);
+        },
+      },
+    },
     sandboxPurchases: {
       mode: 'grant',
       signedTransactionVerifier: permissiveVerifier(sandboxTransaction),
     },
   });
-  const offlineDecision = await offlineSandbox.verifyPurchase({
+  const offlineSandboxInput = {
     ...baseInput,
     request: {
       ...baseInput.request,
@@ -1594,13 +1946,61 @@ assertEqual(
         transactionId: baseInput.request.platformTransactionId,
       }),
     },
-  });
+  };
+  const offlineDecision = await offlineSandbox.verifyPurchase(offlineSandboxInput);
   assertEqual(
     offlineDecision.status,
     'verified',
     'offline-only verifies a sandbox JWS in the sandbox',
   );
   assertEqual(offlineCalls.length, 0, 'offline-only makes no Server API call');
+  const sandboxVerificationId = createAppStoreVerificationId({
+    environment: 'Sandbox',
+    bundleId: sandboxTransaction.bundleId,
+    transactionId: sandboxTransaction.transactionId,
+  });
+  assertEqual(
+    sandboxLookups.join(','),
+    `Sandbox|${sandboxVerificationId}`,
+    'a sandbox JWS is looked up under its sandbox grant identity',
+  );
+  const sandboxRevocation = {
+    verificationId: createAppStoreVerificationId({
+      environment: 'Production',
+      bundleId: sandboxTransaction.bundleId,
+      transactionId: sandboxTransaction.transactionId,
+    }),
+    environment: 'Production' as const,
+    bundleId: sandboxTransaction.bundleId,
+    transactionId: sandboxTransaction.transactionId,
+    originalTransactionId: sandboxTransaction.originalTransactionId,
+    productId: sandboxTransaction.productId,
+    reason: 'refund' as const,
+    revokedAt: '2026-07-16T12:30:00.000Z',
+    notificationType: 'REFUND',
+    notificationUUID: 'uuid-production-refund',
+  };
+  await sandboxRegistry.recordRevocation({ record: sandboxRevocation, signal: controller.signal });
+  assertEqual(
+    (await offlineSandbox.verifyPurchase(offlineSandboxInput)).status,
+    'verified',
+    'a production refund of the same id never refuses a sandbox transaction',
+  );
+  await sandboxRegistry.recordRevocation({
+    record: {
+      ...sandboxRevocation,
+      verificationId: sandboxVerificationId,
+      environment: 'Sandbox',
+      notificationUUID: 'uuid-sandbox-refund',
+    },
+    signal: controller.signal,
+  });
+  assertDecision(
+    await offlineSandbox.verifyPurchase(offlineSandboxInput),
+    'rejected',
+    'APP_STORE_TRANSACTION_REVOKED',
+    'a recorded sandbox refund refuses the sandbox JWS',
+  );
 
   // A client JWS verified in production keeps a production miss pending.
   const lagCalls: string[] = [];

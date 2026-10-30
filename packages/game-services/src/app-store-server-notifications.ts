@@ -3,18 +3,16 @@ import {
   findPurchaseGrantByEvidenceVerificationId,
   revokeEntitlementGrant,
 } from './commerce-ledger.js';
+import { createAppStoreGrantVerificationId } from './app-store-verification-id.js';
 import {
   AppStoreDependencyUnavailableError,
-  createAppStoreVerificationId,
   type AppStoreEnvironment,
+  type AppStoreRevocationReason,
+  type AppStoreRevocationRecorder,
   type AppStoreTransactionPayload,
 } from './app-store-verifier.js';
 import type { GameServicesStore } from './server.js';
-import type {
-  EntitlementLedgerPayload,
-  EntitlementRevocationReason,
-  ProductGrantTransaction,
-} from './types.js';
+import type { EntitlementLedgerPayload, ProductGrantTransaction } from './types.js';
 
 /**
  * App Store Server Notifications V2 for one-time purchases: the store-side
@@ -86,6 +84,15 @@ export interface HandleAppStoreServerNotificationInput {
    * most `maxUnmatchedRefundRetryMs` (6 hours).
    */
   readonly unmatchedRefundRetryMs?: number;
+  /**
+   * Records every `REFUND` and `REVOKE` of the customer's own one-time
+   * purchase, before the ledger is read, whether or not a grant exists yet.
+   * Required in practice for a verifier in `offline-only` mode, which reads
+   * the same registry: a refund that arrives before the first grant leaves
+   * no grant to reverse, and the client may still hold a JWS signed before
+   * it. A recorder outage (`AppStoreDependencyUnavailableError`) is `retry`.
+   */
+  readonly revocations?: AppStoreRevocationRecorder;
 }
 
 /** Default of `unmatchedRefundRetryMs`. */
@@ -138,7 +145,7 @@ export type AppStoreServerNotificationOutcome =
  */
 export const maxAppStoreServerNotificationBytes = 256 * 1024;
 
-const revocationReasons: Readonly<Record<string, EntitlementRevocationReason>> = {
+const revocationReasons: Readonly<Record<string, AppStoreRevocationReason>> = {
   // The customer was refunded for the purchase.
   REFUND: 'refund',
   // Access the customer had through an organization ended. A family member's
@@ -149,6 +156,9 @@ const revocationReasons: Readonly<Record<string, EntitlementRevocationReason>> =
 
 /**
  * Verifies one App Store Server Notification and applies it to the ledger.
+ * With `revocations`, every `REFUND` and `REVOKE` of the customer's own
+ * one-time purchase is recorded there first, so an offline-only purchase
+ * verifier refuses a JWS signed before it even when no grant existed yet.
  * `REFUND` and `REVOKE` for a granted one-time purchase append one `revoke`
  * entry, keyed by the notification's `notificationUUID` so a redelivery
  * answers the first entry. Every other type, a transaction this ledger never
@@ -163,7 +173,8 @@ const revocationReasons: Readonly<Record<string, EntitlementRevocationReason>> =
  * A refund for a grant this ledger does not hold is `retry` while it is
  * recent (`unmatchedRefundRetryMs`, a purchase may be committing a grant it
  * verified before the refund) and `ignored` after; a purchase request that
- * starts after the refund is refused by the verifier's Server API mode.
+ * starts after the refund is refused by the verifier's Server API mode, or,
+ * in offline-only mode, by the `revocations` record.
  * A thrown error (a store outage, an abort) is not an outcome: the host must
  * answer it with a 5xx so Apple redelivers.
  */
@@ -246,14 +257,42 @@ export async function handleAppStoreServerNotification(
 
   // The grant's identity is the one the purchase verifier recorded:
   // non-consumables by their original transaction, consumables by their own.
-  const grantVerificationId = createAppStoreVerificationId({
-    environment: transaction.environment,
-    bundleId: transaction.bundleId,
-    transactionId: transaction.type === 'Non-Consumable'
-      ? transaction.originalTransactionId
-      : transaction.transactionId,
-  });
+  const grantVerificationId = createAppStoreGrantVerificationId(transaction);
   const now = input.now ?? (() => new Date().toISOString());
+  if (reason !== undefined && input.revocations !== undefined) {
+    // Recorded before the ledger is read, so a grant that does not exist
+    // yet is refused by an offline-only verifier instead of only retried.
+    try {
+      await input.revocations.recordRevocation({
+        record: {
+          verificationId: grantVerificationId,
+          environment: transaction.environment,
+          bundleId: transaction.bundleId,
+          transactionId: transaction.transactionId,
+          originalTransactionId: transaction.originalTransactionId,
+          productId: transaction.productId,
+          reason,
+          // Apple's signed dates, never the handling time: a redelivery of
+          // an undated refund must not move the cutoff past a reversal. An
+          // unrepresentable date is kept unparseable, which refuses every JWS.
+          revokedAt: readTimestamp(transaction.revocationDate ?? notification.signedDate)
+            ?? 'unparseable',
+          notificationType: notification.notificationType,
+          notificationUUID,
+        },
+        signal: input.signal,
+      });
+    } catch (error) {
+      if (error instanceof AppStoreDependencyUnavailableError) {
+        return {
+          status: 'retry',
+          reason: 'APP_STORE_REVOCATION_REGISTRY_UNAVAILABLE',
+          notificationUUID,
+        };
+      }
+      throw error;
+    }
+  }
   const grant = await findPurchaseGrantByEvidenceVerificationId(input.store, grantVerificationId);
   if (grant === undefined || grant.payload.target !== 'ios') {
     if (

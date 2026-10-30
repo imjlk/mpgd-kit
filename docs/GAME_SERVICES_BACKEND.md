@@ -143,13 +143,30 @@ current status, selected by `signedTransactionEvidence`:
   check below runs on that fresh payload, so a refund after signing is
   rejected (`APP_STORE_TRANSACTION_REVOKED`) and a Server API outage stays
   `pending`, never a grant.
-- `{ mode: 'offline-only', maxSignedAgeMs }`: for deployments without Server
-  API access only. The client JWS alone decides; its `signedDate` must be
-  within `maxSignedAgeMs` of the verifier clock
-  (`APP_STORE_SIGNED_TRANSACTION_STALE` otherwise). The documented risk: a
-  transaction refunded after its JWS was signed is accepted until the window
-  closes, so pair this mode with App Store Server Notifications or a periodic
-  revocation sweep over the ledger.
+- `{ mode: 'offline-only', maxSignedAgeMs, revocations }`: for deployments
+  without Server API access only. The client JWS decides; its `signedDate`
+  must be within `maxSignedAgeMs` of the verifier clock
+  (`APP_STORE_SIGNED_TRANSACTION_STALE` otherwise). A JWS signed before a
+  refund still reads as purchased, and a refund that reaches the backend
+  before the first grant leaves no ledger grant to reverse, so this mode
+  requires `revocations`, an `AppStoreRevocationLookup` (construction throws
+  without it). Before a grant, a `restorable` answer, or an answer that the
+  purchase is another account's, the verifier looks
+  the grant identity up there and, when a refund or revocation is recorded,
+  refuses a JWS signed at or before its `revokedAt` plus `clockSkewMs` (the
+  skew widens the refusal) with `APP_STORE_TRANSACTION_REVOKED`, the reason
+  the commerce reconciler finishes a refunded consumable on. A record whose
+  `revokedAt` does not parse refuses every JWS. A JWS signed later carries
+  its own `revocationDate` while the refund stands (refused by the payload
+  checks); one without it shows that Apple reversed the refund, and passes,
+  as a Server API verifier would grant it. A lookup outage
+  (`AppStoreDependencyUnavailableError`) is `pending`
+  (`APP_STORE_REVOCATION_LOOKUP_UNAVAILABLE`). The registry is filled by
+  `handleAppStoreServerNotification({ revocations })` (below), so it must be
+  a durable store both read: `createInMemoryAppStoreRevocationRegistry` is
+  for tests and single-process hosts only. The remaining risk: a refund
+  Apple has not notified yet is accepted until the window closes; its
+  notification then reverses the grant.
 - `{ mode: 'ignore' }`: the evidence is not read and the transaction is
   fetched by id for every request.
 
@@ -1057,6 +1074,27 @@ verifies the payload through an `AppStoreServerNotificationVerifier`;
 is the implementation over Apple's library and the same root certificates as
 the purchase verifier, one per environment.
 
+- With the optional `revocations` (an `AppStoreRevocationRecorder`), every
+  `REFUND` and `REVOKE` of the customer's own one-time purchase is recorded
+  there before the ledger is read, granted or not, keyed by the grant's
+  verification id (`createAppStoreVerificationId`: original transaction id
+  for non-consumables, transaction id for consumables). The registry keeps
+  the latest revocation per key: a purchase refunded, reversed, and revoked
+  again refuses every JWS signed before the last revocation, and a
+  redelivery or a late older notification changes nothing. An offline-only purchase verifier reads the same registry, so a
+  pre-refund JWS is refused even when the refund arrived before any grant.
+  A recorder outage (`AppStoreDependencyUnavailableError`) is `retry` (503,
+  `APP_STORE_REVOCATION_REGISTRY_UNAVAILABLE`) before the ledger is touched;
+  any other recorder error is thrown. A `FAMILY_SHARED` revocation is never
+  recorded. A record's `revokedAt` is Apple's `revocationDate`, else the
+  notification's `signedDate`, so a redelivery records the same time. A record may be dropped once `revokedAt` is older
+  than the verifier's `maxSignedAgeMs` plus `clockSkewMs`, since every JWS
+  it refuses (signed at or before that time) is then stale.
+- `REFUND_REVERSED` records nothing and leaves the record in place: the
+  record refuses only a JWS signed before the refund, so after a refund
+  reversed before any grant the client's fresh JWS (no `revocationDate`)
+  is granted by the offline-only verifier, as the Server API mode grants
+  it. A grant the ledger already reversed stays reversed (below).
 - `REFUND` reverses the grant with reason `refund`, keyed
   `app-store:notification:<notificationUUID>`. Non-consumables are found by
   their original transaction id, consumables by their own. `REVOKE` is
@@ -1087,7 +1125,8 @@ the purchase verifier, one per environment.
   Apple's redelivery (an hour later in production) then finds and revokes
   it, and a refund for a grant that never appears is acknowledged at that
   redelivery. A purchase request that starts after the refund is refused by
-  the default Server API purchase mode, which reads the revocation. (A
+  the default Server API purchase mode, which reads the revocation, or by the
+  offline-only mode from the `revocations` record. (A
   pending-revocation record applied by the grant path would close the race
   without a redelivery, but needs a write on every purchase; the bounded
   retry needs none.)
