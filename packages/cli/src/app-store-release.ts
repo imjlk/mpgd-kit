@@ -1495,12 +1495,12 @@ export async function readAppStoreReleaseStatus(
     port.readPhasedRelease(version.id),
     port.listReviewSubmissions(input.appId),
   ]);
-  // The newest submission holding this version.
+  // The newest submission holding this version: open ones first, then by date, until one matches.
   let submission: AppStoreReleaseStatus['submission'];
   const ordered = [...submissions].sort((left, right) =>
     Number(left.state === 'COMPLETE') - Number(right.state === 'COMPLETE')
     || String(right.submittedDate ?? '').localeCompare(String(left.submittedDate ?? '')));
-  for (const candidate of ordered.slice(0, 10)) {
+  for (const candidate of ordered) {
     const items = await port.listReviewSubmissionItems(candidate.id);
     if (items.some((item) => item.appStoreVersionId === version.id)) {
       submission = {
