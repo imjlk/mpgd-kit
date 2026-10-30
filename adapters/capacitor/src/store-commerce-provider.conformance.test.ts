@@ -108,7 +108,7 @@ function createConformanceStoreSdk(context: CommerceConformanceContext): Conform
         finishCalls.push({
           by,
           transactionId: input.transactionId,
-          ledgerEntryId: input.ledgerEntryId,
+          ...(input.ledgerEntryId === undefined ? {} : { ledgerEntryId: input.ledgerEntryId }),
           isConsumable: input.isConsumable,
           result: result.finished ? 'finished' : 'unfinished',
         });
@@ -117,7 +117,7 @@ function createConformanceStoreSdk(context: CommerceConformanceContext): Conform
         finishCalls.push({
           by,
           transactionId: input.transactionId,
-          ledgerEntryId: input.ledgerEntryId,
+          ...(input.ledgerEntryId === undefined ? {} : { ledgerEntryId: input.ledgerEntryId }),
           isConsumable: input.isConsumable,
           result: (error as StoreSdkError).code as CommerceConformanceFinishCall['result'],
         });

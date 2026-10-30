@@ -45,7 +45,7 @@ const reconcilerVectors = readdirSync(reconcilerVectorsDir)
   .map((file) => assertCommerceConformanceVector(
     JSON.parse(readFileSync(new URL(file, reconcilerVectorsDir), 'utf8')),
   ));
-assert.equal(reconcilerVectors.length, 6);
+assert.equal(reconcilerVectors.length, 9);
 const reconcilerResults = await runCommerceConformanceVectors(reconcilerVectors);
 assert.deepEqual(
   reconcilerResults.map((result) => [result.vector, result.status, result.failures]),

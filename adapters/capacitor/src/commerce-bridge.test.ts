@@ -543,11 +543,33 @@ describe('gateway with a commerce provider', () => {
     expect(sdk.finishCalls.at(-1)).toEqual(
       { transactionId: 'tx-1', isConsumable: true, ledgerEntryId: 'le-1', retry: true },
     );
+    // This SDK does not read `revoked`: the gateway does not declare it either.
+    expect(commerce.acceptsRevokedFinish).toBeUndefined();
     await expect(commerce.requestPurchase({
       logicalId: 'nope', idempotencyKey: 'op-2', source: 'shop',
     })).rejects.toMatchObject({ code: 'ITEM_UNAVAILABLE' });
     unsubscribe();
     expect(sdk.requestCalls).toHaveLength(1);
+  });
+
+  it('carries a revoked finish across the bridge path to an SDK that reads it', async () => {
+    const { sdk, provider } = createStoreProvider(createFakeStoreSdk({ revokedFinish: true }));
+    const gateway = createCapacitorPlatformGateway({
+      target: 'android', appVersion: '3', buildId: 'v2', bridge: baseBridge(),
+      providers: [createCommerceServiceProvider({ id: 'store', commerce: provider })],
+    });
+    const commerce = gateway.commerce;
+    if (commerce === undefined) {
+      throw new Error('expected a commerce provider');
+    }
+    expect(commerce.acceptsRevokedFinish).toBe(true);
+    sdk.upsert(fakePurchase({ transactionId: 'tx-9' }));
+    await expect(commerce.finishTransaction?.({
+      transactionId: 'tx-9', ledgerEntryId: 'op-9', isConsumable: true, revoked: true,
+    })).resolves.toEqual({ finished: true });
+    expect(sdk.finishCalls).toEqual([
+      { transactionId: 'tx-9', isConsumable: true, ledgerEntryId: 'op-9', revoked: true },
+    ]);
   });
 
   it('keeps the store code of a pre-launch refusal across the bridge path', async () => {

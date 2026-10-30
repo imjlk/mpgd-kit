@@ -40,6 +40,13 @@ export interface CommerceConformanceProfile {
    * adaptive vectors). The reference harness ignores the flag.
    */
   readonly adaptive?: boolean;
+  /**
+   * The store declares `acceptsRevokedFinish`: it keeps its unfinished
+   * revoked purchases listed, finishes one only on a revoked finish
+   * (`FinishTransactionInput.revoked`), and refuses an ordinary finish of a
+   * revoked purchase (RFC reconciler step 5, the revoked finish).
+   */
+  readonly revokedFinish?: boolean;
 }
 
 export interface CommerceConformanceCatalogEntry {
@@ -274,12 +281,35 @@ export interface CommerceConformanceLedgerEntryExpectation {
   readonly reason?: NonEmptyString;
 }
 
-export interface CommerceConformanceFinishCallExpectation {
+/**
+ * One expected `finishTransaction` call: an ordinary finish, which always
+ * names the grant's ledger entry, or a revoked finish
+ * (`FinishTransactionInput.revoked`), which names the reversed grant when
+ * there was one and none when nothing was granted.
+ */
+export type CommerceConformanceFinishCallExpectation =
+  | CommerceConformanceGrantedFinishCallExpectation
+  | CommerceConformanceRevokedFinishCallExpectation;
+
+export interface CommerceConformanceGrantedFinishCallExpectation {
   readonly by: 'client' | 'host';
   readonly transactionId: NonEmptyString;
+  /** The grant's ledger entry. */
   readonly ledgerEntryId: NonEmptyString;
   readonly isConsumable: boolean;
-  readonly result: 'finished' | CommerceErrorCode;
+  readonly revoked?: false;
+  readonly result: 'finished' | 'unfinished' | CommerceErrorCode;
+}
+
+export interface CommerceConformanceRevokedFinishCallExpectation {
+  readonly by: 'client' | 'host';
+  readonly transactionId: NonEmptyString;
+  /** The reversed grant's ledger entry; absent when nothing was granted. */
+  readonly ledgerEntryId?: NonEmptyString;
+  readonly isConsumable: boolean;
+  /** A revoked finish (`FinishTransactionInput.revoked`). */
+  readonly revoked: true;
+  readonly result: 'finished' | 'unfinished' | CommerceErrorCode;
 }
 
 export interface CommerceConformanceAvailableExpectation {

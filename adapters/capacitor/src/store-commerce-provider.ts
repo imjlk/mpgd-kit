@@ -524,11 +524,15 @@ export function createStoreCommerceProvider(
 
   const finishTransaction = sdk.finishTransaction;
   const restorePurchases = sdk.restorePurchases;
+  /** The SDK reads `revoked` and has a finish to take it. */
+  const revokedFinish = finishTransaction !== undefined && sdk.acceptsRevokedFinish === true;
   const provider: StoreCommerceProvider = {
     store,
     ...(presentation === undefined ? {} : { presentation: presentation.presentation }),
     // `retry` is forwarded to the SDK below.
     ...(finishTransaction === undefined ? {} : { acceptsFinishRetry: true }),
+    // `revoked` is forwarded only to an SDK that reads it.
+    ...(revokedFinish ? { acceptsRevokedFinish: true } : {}),
     getCapabilities,
     async fetchProducts(request: FetchProductsInput = {}): Promise<readonly StoreProduct[]> {
       const type = request.type ?? 'all';
@@ -651,7 +655,16 @@ export function createStoreCommerceProvider(
         const purchase = toStorePurchase(candidate);
         // A revoked purchase is not recoverable, and a pending one is listed
         // only on request; both still reach the reconciler through events.
-        if (purchase.state === 'revoked' || (purchase.state === 'pending' && !includePending)) {
+        // An SDK that finishes revoked transactions keeps its unfinished
+        // revoked consumables listed (the only kind a revoked finish takes):
+        // the reconciler finishes them once the backend answered for them,
+        // and verifies or grants none of them. A revoked purchase of another
+        // kind, or of a SKU the catalog does not map, stays filtered.
+        if (
+          (purchase.state === 'revoked'
+            && !(revokedFinish && bySku.get(candidate.sku)?.kind === 'consumable'))
+          || (purchase.state === 'pending' && !includePending)
+        ) {
           continue;
         }
         purchases.push(purchase);
@@ -663,14 +676,26 @@ export function createStoreCommerceProvider(
         // Finishing is authorized by a ledger entry only; the id is validated
         // before the store hears about it.
         const finish = assertFinishTransactionInput(request);
+        if (finish.revoked === true && !revokedFinish) {
+          // Never an ordinary finish in its place: the SDK cannot tell the
+          // two apart, and this one would run without a grant.
+          return { finished: false };
+        }
         let reported: unknown;
         try {
-          reported = await finishTransaction.call(sdk, {
-            transactionId: finish.transactionId,
-            isConsumable: finish.isConsumable,
-            ledgerEntryId: finish.ledgerEntryId,
-            ...(finish.retry === true ? { retry: true } : {}),
-          });
+          reported = await finishTransaction.call(sdk, finish.revoked === true
+            ? {
+                transactionId: finish.transactionId,
+                isConsumable: true,
+                revoked: true,
+                ...(finish.ledgerEntryId === undefined ? {} : { ledgerEntryId: finish.ledgerEntryId }),
+              }
+            : {
+                transactionId: finish.transactionId,
+                isConsumable: finish.isConsumable,
+                ledgerEntryId: finish.ledgerEntryId,
+                ...(finish.retry === true ? { retry: true } : {}),
+              });
         } catch (error) {
           throw normalize(error);
         }

@@ -388,7 +388,11 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
             }
           };
           const unsubscribe = reconciler.subscribe((event) => {
-            if (event.type === 'failure' || event.record.idempotencyKey !== key) {
+            if (
+              event.type === 'failure'
+              || event.type === 'revoked-finish'
+              || event.record.idempotencyKey !== key
+            ) {
               return;
             }
             if (event.type === 'transition') {

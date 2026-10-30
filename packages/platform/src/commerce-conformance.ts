@@ -213,8 +213,11 @@ export function commerceErrorInfoOfFixture(
 export interface CommerceConformanceFinishCall {
   readonly by: 'client' | 'host';
   readonly transactionId: string;
-  readonly ledgerEntryId: string;
+  /** Absent on a revoked finish of a purchase never granted. */
+  readonly ledgerEntryId?: string;
   readonly isConsumable: boolean;
+  /** A revoked finish (`FinishTransactionInput.revoked`); the store records only `true`. */
+  readonly revoked?: boolean;
   readonly result: 'finished' | 'unfinished' | CommerceErrorCode;
 }
 
@@ -262,7 +265,11 @@ export type CreateCommerceConformanceStoreInput = CommerceConformanceFixtureCont
  * Fake store: answers `launched` unless a `queueRequest` entry is queued,
  * `{ finished: true }` unless a `queueFinish` entry is queued, lists reported
  * purchases until they are finished, and buffers events emitted before the
- * first listener with `createCommerceEventBuffer`.
+ * first listener with `createCommerceEventBuffer`. With `profile.revokedFinish`
+ * it declares `acceptsRevokedFinish`, lists its revoked consumables, refuses
+ * an ordinary finish of a revoked purchase (`unfinished`), and finishes a
+ * revoked consumable only on a revoked finish; one it does not list stays
+ * `unfinished` (the store cannot tell finished from not listed yet).
  */
 export function createCommerceConformanceStore(
   input: CreateCommerceConformanceStoreInput,
@@ -270,6 +277,7 @@ export function createCommerceConformanceStore(
   const capabilities = createCommerceConformanceCapabilities(input.profile);
   const store = input.profile.store;
   const finishOwner = capabilities.lifecycle.finish;
+  const revokedFinish = input.profile.revokedFinish === true;
   const purchases: StorePurchase[] = [];
   const requestQueue: CommerceConformanceRequestResultFixture[] = [];
   const finishQueue: CommerceConformanceFinishResultFixture[] = [];
@@ -314,6 +322,7 @@ export function createCommerceConformanceStore(
 
   const provider: CommerceProvider = {
     store,
+    ...(revokedFinish ? { acceptsRevokedFinish: true } : {}),
     async getCapabilities() {
       return createCommerceConformanceCapabilities(input.profile);
     },
@@ -351,10 +360,15 @@ export function createCommerceConformanceStore(
         return [];
       }
       const includePending = request.includePending ?? false;
-      // A revoked purchase is not recoverable; it reaches the runtime through the event path only.
+      // A revoked purchase is not recoverable; it reaches the runtime through
+      // the event path only, unless the store finishes revoked purchases.
       return purchases.filter(
         (purchase) =>
-          purchase.state !== 'revoked' && (includePending || purchase.state !== 'pending'),
+          (purchase.state !== 'revoked'
+            || (revokedFinish
+              && input.catalog.find((entry) => entry.storeSku === purchase.storeSku)?.kind
+                === 'consumable'))
+          && (includePending || purchase.state !== 'pending'),
       );
     },
     async finishTransaction(request: FinishTransactionInput): Promise<FinishTransactionResult> {
@@ -364,10 +378,17 @@ export function createCommerceConformanceStore(
       const call = {
         by,
         transactionId: request.transactionId,
-        ledgerEntryId: request.ledgerEntryId,
+        ...(request.ledgerEntryId === undefined ? {} : { ledgerEntryId: request.ledgerEntryId }),
         isConsumable: request.isConsumable,
+        ...(request.revoked === true ? { revoked: true as const } : {}),
       } as const;
-      const queued = finishQueue.shift() ?? { finished: true };
+      const listed = purchases.find((purchase) => purchase.transactionId === request.transactionId);
+      const unscripted = !revokedFinish
+        ? { finished: request.revoked !== true }
+        : request.revoked === true
+          ? { finished: listed?.state === 'revoked' && request.isConsumable }
+          : { finished: listed?.state !== 'revoked' };
+      const queued = finishQueue.shift() ?? unscripted;
       if ('error' in queued) {
         finishCalls.push({ ...call, result: queued.error });
         throw new CommerceError(queued.error, { message: 'Fixture finish failure.' });
@@ -775,6 +796,8 @@ export interface CommerceJournalRecord {
   readonly ledgerEntryId?: string;
   readonly error?: CommerceErrorInfo;
   readonly revokedBy?: string;
+  /** Why the backend refused a `rejected` record, when it said. */
+  readonly reason?: string;
   /**
    * Parked as another account's purchase (RFC "Another account's purchase"):
    * the record stays `verifying`, is never sent again except by the player's
@@ -1097,7 +1120,10 @@ export function createCommerceConformanceRuntime(
       return undefined;
     }
     if (response.status === 'rejected') {
-      await write(record, 'rejected', { request });
+      await write(record, 'rejected', {
+        request,
+        ...(response.reason === undefined ? {} : { reason: response.reason }),
+      });
       return undefined;
     }
     if (response.ledgerEntryId === undefined) {
@@ -1221,6 +1247,12 @@ export function createCommerceConformanceRuntime(
         candidate.store === purchase.store
         && candidate.purchase?.transactionId === purchase.transactionId,
     );
+    if (purchase.state === 'revoked') {
+      // A revoked store state never revokes or verifies anything (only the
+      // ledger revokes, step 5): it is noted for the revoked finish.
+      await noteRevoked(purchase, logicalId, record);
+      return;
+    }
     if (record === undefined) {
       const open = openRecordsFor(logicalId);
       if (open.length > 1) {
@@ -1243,9 +1275,6 @@ export function createCommerceConformanceRuntime(
       record = undefined;
     }
     if (record === undefined) {
-      if (purchase.state === 'revoked') {
-        return;
-      }
       const idempotencyKey = await createDerivedPurchaseIdempotencyKey({
         store: purchase.store,
         transactionId: purchase.transactionId,
@@ -1299,7 +1328,112 @@ export function createCommerceConformanceRuntime(
     ) {
       await write(record, 'purchased', { purchase });
     }
-    // Revoked store states never revoke on their own: only the ledger does (step 5).
+  };
+
+  /**
+   * Revoked consumables of a `client`-finish store that declares
+   * `acceptsRevokedFinish`, by transaction id: with this player's record of
+   * the transaction (its key), or none (`undefined`). `finishRevoked`
+   * finishes them once the backend has answered for the record without a
+   * standing grant, or at once without a record.
+   */
+  const revokedReports = new Map<string, string | undefined>();
+  const revokedFinishAsked = new Set<string>();
+  const noteRevoked = async (
+    purchase: StorePurchase,
+    logicalId: CommerceLogicalProductId,
+    known: CommerceJournalRecord | undefined,
+  ): Promise<void> => {
+    if (
+      provider.acceptsRevokedFinish !== true
+      || provider.finishTransaction === undefined
+      || (await provider.getCapabilities()).lifecycle.finish !== 'client'
+      || catalogEntry(logicalId).kind !== 'consumable'
+      || revokedFinishAsked.has(purchase.transactionId)
+    ) {
+      return;
+    }
+    if (known?.state === 'finished') {
+      // The refund notice of a finished consumable: nothing left unfinished.
+      return;
+    }
+    let record = known;
+    if (record === undefined) {
+      // A record this runtime does not hold in memory, under its derived key.
+      const derived = await journal.read(await createDerivedPurchaseIdempotencyKey({
+        store: purchase.store,
+        transactionId: purchase.transactionId,
+        token: purchase.token,
+      }));
+      if (derived !== undefined) {
+        if (
+          derived.playerId !== playerId
+          || derived.purchase?.transactionId !== purchase.transactionId
+        ) {
+          // Another player's record holds the key, or this player's key names
+          // another purchase: not this player's to finish, as the
+          // `@mpgd/game-services` reconciler answers.
+          return;
+        }
+        record = remember(derived);
+      }
+    }
+    if (record === undefined) {
+      // No record: only a revoked consumable bound to this player's own account.
+      if (purchase.accountBinding?.value !== playerId) {
+        return;
+      }
+      revokedReports.set(purchase.transactionId, undefined);
+      return;
+    }
+    revokedReports.set(purchase.transactionId, record.key);
+  };
+  /** Rejection reasons that answer for a revoked purchase. */
+  const revokedRejections: ReadonlySet<string> = new Set([
+    'APP_STORE_TRANSACTION_REVOKED',
+    'LEDGER_GRANT_REVERSED',
+  ]);
+  // Reconciler step 5, then: the revoked finish, granting nothing.
+  const finishRevoked = async (): Promise<void> => {
+    for (const [transactionId, key] of [...revokedReports]) {
+      const record = key === undefined ? undefined : records.get(key);
+      if (key !== undefined) {
+        if (record === undefined) {
+          revokedReports.delete(transactionId);
+          continue;
+        }
+        const answered = record.state === 'revoked'
+          || (record.state === 'rejected' && record.reason !== undefined
+            && revokedRejections.has(record.reason));
+        if (!answered) {
+          if (record.state === 'rejected' || record.state === 'cancelled' || record.state === 'failed') {
+            revokedReports.delete(transactionId);
+          }
+          continue;
+        }
+      }
+      revokedReports.delete(transactionId);
+      revokedFinishAsked.add(transactionId);
+      try {
+        const answer = await provider.finishTransaction?.({
+          transactionId,
+          ...(record?.ledgerEntryId === undefined ? {} : { ledgerEntryId: record.ledgerEntryId }),
+          isConsumable: true,
+          revoked: true,
+        });
+        if (answer?.finished !== true) {
+          // Not counted as asked: the next report asks again.
+          revokedFinishAsked.delete(transactionId);
+        }
+      } catch (error) {
+        if (error instanceof CommerceConformanceScriptError) {
+          throw error;
+        }
+        // Transport-class failure: the next pass asks again.
+        revokedFinishAsked.delete(transactionId);
+        revokedReports.set(transactionId, key);
+      }
+    }
   };
 
   const ingestError = async (
@@ -1479,6 +1613,7 @@ export function createCommerceConformanceRuntime(
       await drive(record, capabilities);
     }
     await revokeReversed();
+    await finishRevoked();
   };
 
   const runUntilIdle = async (): Promise<void> => {
@@ -1556,6 +1691,7 @@ export function createCommerceConformanceRuntime(
       inbox.length = 0;
       records.clear();
       completedFinalizations.clear();
+      revokedReports.clear();
     },
     async reconcile() {
       if (!started) {

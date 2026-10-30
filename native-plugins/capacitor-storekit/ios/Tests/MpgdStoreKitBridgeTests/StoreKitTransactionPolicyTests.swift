@@ -198,6 +198,35 @@ final class StoreKitTransactionPolicyTests: XCTestCase {
             transactionId: "25", appAccountToken: token, in: [.notOneTime, .unverified]))
     }
 
+    func testRevokedFinishTakesOnlyARevokedConsumableOfTheSessionToken() throws {
+        let refunded: Double = 1_700_000_100_000
+        let match = try XCTUnwrap(StoreKitTransactionPolicy.finishableRevoked(
+            transactionId: "71", appAccountToken: token.uppercased(),
+            in: [.unverified, read("71", revokedAtMillis: refunded)]))
+        XCTAssertEqual(match.transactionId, "71")
+        XCTAssertEqual(match.revokedAtMillis, refunded)
+        XCTAssertEqual(StoreKitTransactionPolicy.finishInput(match).id, "71")
+
+        // Still paid: never finished on this path.
+        XCTAssertNil(StoreKitTransactionPolicy.finishableRevoked(
+            transactionId: "72", appAccountToken: token, in: [read("72")]))
+        // A revoked durable is not a refunded consumable.
+        XCTAssertNil(StoreKitTransactionPolicy.finishableRevoked(
+            transactionId: "73", appAccountToken: token,
+            in: [read("73", productId: "remove_ads", type: .nonConsumable, revokedAtMillis: refunded)]))
+        // Another or no token.
+        XCTAssertNil(StoreKitTransactionPolicy.finishableRevoked(
+            transactionId: "74", appAccountToken: token,
+            in: [read("74", token: "0a1c8e2a-4b7d-4c2e-9a1f-0d3b5c7e9f11", revokedAtMillis: refunded)]))
+        XCTAssertNil(StoreKitTransactionPolicy.finishableRevoked(
+            transactionId: "75", appAccountToken: token, in: [read("75", token: nil, revokedAtMillis: refunded)]))
+        XCTAssertNil(StoreKitTransactionPolicy.finishableRevoked(
+            transactionId: "76", appAccountToken: token, in: [.notOneTime, .unverified]))
+        // The ordinary gate still refuses the revoked consumable.
+        XCTAssertNil(StoreKitTransactionPolicy.finishable(
+            transactionId: "71", appAccountToken: token, in: [read("71", revokedAtMillis: refunded)]))
+    }
+
     func testFinishBindingNeedsATokenOrTheExplicitNoTokenFlag() {
         typealias Policy = StoreKitTransactionPolicy
         // The token path of earlier builds, unchanged.

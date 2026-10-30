@@ -479,6 +479,13 @@ describe('typia validators', () => {
     expect(() => assertCommerceBridgeFinishTransactionPayload({
       transactionId: 'tx-1', ledgerEntryId: 'le-1', isConsumable: true,
     })).not.toThrow();
+    // A revoked (refunded) transaction's finish without a grant crosses the bridge as a flag.
+    expect(() => assertCommerceBridgeFinishTransactionPayload({
+      transactionId: 'tx-1', ledgerEntryId: 'le-1', isConsumable: true, revoked: true,
+    })).not.toThrow();
+    expect(() => assertCommerceBridgeFinishTransactionPayload({
+      transactionId: 'tx-1', ledgerEntryId: 'le-1', isConsumable: true, revoked: 'yes',
+    })).toThrow();
   });
 
   it('rejects unknown keys', () => {

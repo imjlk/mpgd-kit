@@ -43,6 +43,16 @@ export interface StoreSdk {
   finishTransaction?(
     input: StoreSdkFinishTransactionInput,
   ): Promise<StoreSdkFinishTransactionResult>;
+  /**
+   * `finishTransaction` reads `revoked`: it finishes a transaction it still
+   * lists as revoked, and only that. `createStoreCommerceProvider` then
+   * declares `CommerceProvider.acceptsRevokedFinish` and keeps the revoked
+   * consumables `getAvailablePurchases` reports (still unfinished in the
+   * store) in its list, so the reconciler can finish them on a later launch; an SDK
+   * without it never receives the field, so a store that would read the call
+   * as an ordinary finish (a consume) is never asked.
+   */
+  readonly acceptsRevokedFinish?: boolean;
   /** Asks the store to resynchronize, for example `AppStore.sync`. */
   restorePurchases?(): Promise<void>;
   addListener<TEvent extends StoreSdkEventName>(
@@ -156,13 +166,33 @@ export interface StoreSdkPurchase {
   readonly raw?: Readonly<Record<string, unknown>>;
 }
 
-export interface StoreSdkFinishTransactionInput {
+/**
+ * What `StoreSdk.finishTransaction` is asked to finish: a purchase the
+ * backend ledger granted, or (only for an SDK that declares
+ * `acceptsRevokedFinish`) a consumable the store revoked while it was still
+ * unfinished, which no grant stands for.
+ */
+export type StoreSdkFinishTransactionInput =
+  | StoreSdkGrantedFinishTransactionInput
+  | StoreSdkRevokedFinishTransactionInput;
+
+export interface StoreSdkGrantedFinishTransactionInput {
   readonly transactionId: string;
   readonly isConsumable: boolean;
   /** `FinishTransactionInput.retry`: an earlier finish of this purchase was asked for. */
   readonly retry?: boolean;
   /** The ledger entry that authorized the finish; a plugin may record it. */
   readonly ledgerEntryId: string;
+  readonly revoked?: false;
+}
+
+/** `RevokedFinishTransactionInput`: finish a revoked consumable, granting nothing. */
+export interface StoreSdkRevokedFinishTransactionInput {
+  readonly transactionId: string;
+  readonly isConsumable: true;
+  readonly revoked: true;
+  /** The reversed grant's ledger entry; absent when nothing was ever granted. */
+  readonly ledgerEntryId?: string;
 }
 
 export interface StoreSdkFinishTransactionResult {

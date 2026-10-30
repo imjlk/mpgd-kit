@@ -228,8 +228,19 @@ export interface GetAvailablePurchasesInput {
   readonly restore?: boolean;
 }
 
-export interface FinishTransactionInput {
+/**
+ * What `finishTransaction` is asked to finish: a purchase the backend ledger
+ * granted (`GrantedFinishTransactionInput`, the only shape most stores ever
+ * receive), or a transaction the store revoked while it was still unfinished
+ * (`RevokedFinishTransactionInput`, only for a provider that declares
+ * `acceptsRevokedFinish`). `revoked` tells them apart.
+ */
+export type FinishTransactionInput = GrantedFinishTransactionInput | RevokedFinishTransactionInput;
+
+/** The finish of a purchase the backend ledger granted. */
+export interface GrantedFinishTransactionInput {
   readonly transactionId: NonEmptyString;
+  /** The ledger entry of the grant: the finish is authorized by it. */
   readonly ledgerEntryId: NonEmptyString;
   readonly isConsumable: boolean;
   /**
@@ -242,6 +253,29 @@ export interface FinishTransactionInput {
    * a provider that declares `acceptsFinishRetry`.
    */
   readonly retry?: boolean;
+  /** Absent (or false) on an ordinary finish. */
+  readonly revoked?: false;
+}
+
+/**
+ * The finish of a consumable the store revoked (refunded) while it was still
+ * unfinished, without any grant. The reconciler sends it once the backend
+ * answered for the purchase without a standing grant (its grant reversed, or
+ * the verify refused as revoked), or for a revoked consumable of the
+ * session's own account it holds no record of; and only to a provider that
+ * declares `acceptsRevokedFinish`. A store that accepts it finishes only a
+ * consumable it still reports as revoked and refuses anything else, so a
+ * purchase it holds as paid is never finished through it.
+ */
+export interface RevokedFinishTransactionInput {
+  readonly transactionId: NonEmptyString;
+  /**
+   * The reversed grant's ledger entry when the backend granted the purchase
+   * before its refund; absent when nothing was ever granted.
+   */
+  readonly ledgerEntryId?: NonEmptyString;
+  readonly isConsumable: true;
+  readonly revoked: true;
 }
 
 export interface FinishTransactionResult {
@@ -289,6 +323,15 @@ export interface CommerceProvider {
    * fields, never receives it.
    */
   readonly acceptsFinishRetry?: boolean;
+  /**
+   * The provider accepts `FinishTransactionInput.revoked`. A caller sends
+   * `revoked` only to a provider that declares this: one built on an earlier
+   * contract would refuse the field, or read the call as an ordinary finish.
+   * Such a provider also lists the store's unfinished revoked consumables
+   * (state `revoked`) in `getAvailablePurchases`, so a later launch finds
+   * them; nothing is verified or granted from them.
+   */
+  readonly acceptsRevokedFinish?: boolean;
   /** Asks the store to resynchronize, for example `AppStore.sync`. */
   restorePurchases?(): Promise<void>;
   /** Designed, not implemented by any reference store provider. */

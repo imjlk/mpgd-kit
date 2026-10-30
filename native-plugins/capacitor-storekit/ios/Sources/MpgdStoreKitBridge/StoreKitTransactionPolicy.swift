@@ -219,6 +219,32 @@ public enum StoreKitTransactionPolicy {
         return nil
     }
 
+    /// The transaction a revoked finish (`finishTransaction` with `revoked`)
+    /// may finish: the verified, **revoked** consumable with this id whose app
+    /// account token equals the session token. The App Store refunded it while
+    /// it was unfinished, so StoreKit keeps it in `Transaction.unfinished` and
+    /// redelivers it at every launch until `finish()`; finishing it grants
+    /// nothing. A transaction that is not revoked (still paid), a durable, and
+    /// another or no token never match, so this path never finishes a
+    /// purchase the player still holds. Read from `Transaction.unfinished`
+    /// only: a finished one has nothing left to finish.
+    public static func finishableRevoked(
+        transactionId: String,
+        appAccountToken: String,
+        in entries: [ReadEntry]
+    ) -> MpgdStoreKitTransaction? {
+        let expected = appAccountToken.lowercased()
+        for entry in entries {
+            guard case .oneTime(let transaction) = entry,
+                  transaction.transactionId == transactionId,
+                  transaction.revokedAtMillis != nil,
+                  transaction.type == .consumable,
+                  transaction.appAccountToken == expected else { continue }
+            return transaction
+        }
+        return nil
+    }
+
     /// The protocol version of the explicit no-token finish
     /// (`finishTransaction` with `withoutAppAccountToken: true`), declared by
     /// `getFinishSupport`. A build from before it answers `UNIMPLEMENTED`

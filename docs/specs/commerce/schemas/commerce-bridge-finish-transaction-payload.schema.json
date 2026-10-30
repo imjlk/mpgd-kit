@@ -8,6 +8,17 @@
   "components": {
     "schemas": {
       "FinishTransactionInput": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/GrantedFinishTransactionInput"
+          },
+          {
+            "$ref": "#/components/schemas/RevokedFinishTransactionInput"
+          }
+        ],
+        "description": "What `finishTransaction` is asked to finish: a purchase the backend ledger\ngranted (`GrantedFinishTransactionInput`, the only shape most stores ever\nreceive), or a transaction the store revoked while it was still unfinished\n(`RevokedFinishTransactionInput`, only for a provider that declares\n`acceptsRevokedFinish`). `revoked` tells them apart."
+      },
+      "GrantedFinishTransactionInput": {
         "type": "object",
         "properties": {
           "transactionId": {
@@ -16,6 +27,7 @@
           },
           "ledgerEntryId": {
             "$ref": "#/components/schemas/NonEmptyString",
+            "description": "The ledger entry of the grant: the finish is authorized by it.",
             "readOnly": true
           },
           "isConsumable": {
@@ -26,6 +38,11 @@
             "type": "boolean",
             "description": "The caller already asked to finish this purchase, in an earlier attempt\nor an earlier session (the reconciler sets it for a `client` finish of a\nrecord that was `finishing` before the call). A store may then read a\nconsumable missing from its unfinished list as one an earlier finish\ncompleted (a lost acknowledgement); a first finish never does. Absent\nmeans a first finish; a store without such a rule ignores it. Sent only to\na provider that declares `acceptsFinishRetry`.",
             "readOnly": true
+          },
+          "revoked": {
+            "const": false,
+            "description": "Absent (or false) on an ordinary finish.",
+            "readOnly": true
           }
         },
         "required": [
@@ -33,11 +50,41 @@
           "ledgerEntryId",
           "isConsumable"
         ],
-        "additionalProperties": false
+        "additionalProperties": false,
+        "description": "The finish of a purchase the backend ledger granted."
       },
       "NonEmptyString": {
         "type": "string",
         "minLength": 1
+      },
+      "RevokedFinishTransactionInput": {
+        "type": "object",
+        "properties": {
+          "transactionId": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "ledgerEntryId": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "description": "The reversed grant's ledger entry when the backend granted the purchase\nbefore its refund; absent when nothing was ever granted.",
+            "readOnly": true
+          },
+          "isConsumable": {
+            "const": true,
+            "readOnly": true
+          },
+          "revoked": {
+            "const": true,
+            "readOnly": true
+          }
+        },
+        "required": [
+          "transactionId",
+          "isConsumable",
+          "revoked"
+        ],
+        "additionalProperties": false,
+        "description": "The finish of a consumable the store revoked (refunded) while it was still\nunfinished, without any grant. The reconciler sends it once the backend\nanswered for the purchase without a standing grant (its grant reversed, or\nthe verify refused as revoked), or for a revoked consumable of the\nsession's own account it holds no record of; and only to a provider that\ndeclares `acceptsRevokedFinish`. A store that accepts it finishes only a\nconsumable it still reports as revoked and refuses anything else, so a\npurchase it holds as paid is never finished through it."
       }
     }
   }

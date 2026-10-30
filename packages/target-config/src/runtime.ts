@@ -949,6 +949,10 @@ export function withTargetAvailability(
         ...(presentationRelay === undefined
           ? {}
           : { presentation: presentationRelay.presentation }),
+        // The finish hints the source accepts: the finish below forwards its
+        // input unchanged, so the reconciler sends them only when declared.
+        ...(commerceSource.acceptsFinishRetry === true ? { acceptsFinishRetry: true } : {}),
+        ...(commerceSource.acceptsRevokedFinish === true ? { acceptsRevokedFinish: true } : {}),
         async getCapabilities() {
           return applyTargetConfigToCommerceCapabilities(
             await commerceSource.getCapabilities(),

@@ -72,6 +72,8 @@ export type {
   FinishTransactionInput,
   FinishTransactionResult,
   GetAvailablePurchasesInput,
+  GrantedFinishTransactionInput,
+  RevokedFinishTransactionInput,
   PurchaseKind,
   PurchaseSource,
   RequestPurchaseInput,
@@ -684,9 +686,10 @@ export interface CommerceEventBuffer {
  * Buffer for events emitted before the first `subscribe` call. Over the limit
  * it drops the oldest recoverable `purchaseUpdated` first: a pending or
  * purchased purchase is still returned by `getAvailablePurchases`. A revoked
- * purchase is not, so revoked `purchaseUpdated`, `purchaseError`, and
- * `subscriptionUpdated` events are dropped oldest-first only when no
- * recoverable `purchaseUpdated` remains.
+ * purchase is listed only by a provider that declares `acceptsRevokedFinish`,
+ * so revoked `purchaseUpdated`, `purchaseError`, and `subscriptionUpdated`
+ * events are dropped oldest-first only when no recoverable `purchaseUpdated`
+ * remains.
  */
 export function createCommerceEventBuffer(
   options: { readonly limit?: number } = {},

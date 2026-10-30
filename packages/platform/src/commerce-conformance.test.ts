@@ -101,13 +101,13 @@ function vectorNamed(name: string): CommerceConformanceVector {
 const clientTokenProfile = vectorNamed('purchase-client-finish').profile;
 const gemsCatalog = vectorNamed('purchase-client-finish').catalog ?? [];
 
-describe("reconciler vectors (another account's purchase)", () => {
+describe("reconciler vectors (another account's purchase, the revoked finish)", () => {
   it('passes every reconciler vector with the reference reconciler', async () => {
     const results = await runCommerceConformanceVectors(reconcilerVectors);
     expect(results.map((result) => [result.vector, result.status, result.failures])).toEqual(
       reconcilerVectors.map((vector) => [vector.vector, 'passed', []]),
     );
-    expect(results).toHaveLength(6);
+    expect(results).toHaveLength(9);
   });
 
   it('fails when a parked record is expected to have ended', async () => {
@@ -699,6 +699,48 @@ describe('commerce conformance runtime', () => {
     expect(result).toMatchObject({ outcome: 'failed', error: { code: 'ITEM_UNAVAILABLE' } });
     expect(store.purchaseUiOpened).toBe(0);
     expect(journal.history('op-1')).toEqual(['requested', 'failed']);
+  });
+
+  it("never finishes a revoked transaction whose derived key another player's record holds", async () => {
+    const profile = {
+      ...clientTokenProfile,
+      authority: { evidence: 'client-token' as const, accountBinding: 'required' as const },
+      revokedFinish: true,
+    };
+    const { runtime, journal, store } = createStoreFixture(profile);
+    const fixture = {
+      transactionId: 'tx-9', storeSku: 'gems.small', token: 'token-9', state: 'revoked' as const,
+    };
+    const key = 'store:fixture.client-token:tx-9';
+    await journal.reserve({
+      key,
+      revision: 0,
+      playerId: 'player-2',
+      store: 'fixture.client-token',
+      logicalId: 'gems_small',
+      kind: 'consumable',
+      origin: 'discovered',
+      state: 'purchased',
+      updatedAt: commerceConformanceDefaultClockStart,
+      purchase: fillCommerceConformancePurchase(
+        { ...fixture, state: 'purchased' },
+        { profile, catalog: gemsCatalog, playerId: 'player-2' },
+      ),
+    });
+    await runtime.start();
+    store.update(fixture);
+    await runtime.runUntilIdle();
+    expect(store.finishCalls).toEqual([]);
+    expect(journal.history(key)).toEqual(['purchased']);
+
+    // Without that record the same own-account report is finished as unrecorded.
+    const clean = createStoreFixture(profile);
+    await clean.runtime.start();
+    clean.store.update(fixture);
+    await clean.runtime.runUntilIdle();
+    expect(clean.store.finishCalls).toEqual([
+      { by: 'client', transactionId: 'tx-9', isConsumable: true, revoked: true, result: 'finished' },
+    ]);
   });
 
   it('keeps a rejected verify terminal and never finishes it', async () => {

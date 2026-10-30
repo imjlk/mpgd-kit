@@ -354,6 +354,47 @@
         "additionalProperties": false
       },
       "CommerceConformanceFinishCallExpectation": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/CommerceConformanceGrantedFinishCallExpectation"
+          },
+          {
+            "$ref": "#/components/schemas/CommerceConformanceRevokedFinishCallExpectation"
+          }
+        ],
+        "description": "One expected `finishTransaction` call: an ordinary finish, which always\nnames the grant's ledger entry, or a revoked finish\n(`FinishTransactionInput.revoked`), which names the reversed grant when\nthere was one and none when nothing was granted."
+      },
+      "CommerceConformanceFinishResultFixture": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "finished": {
+                "type": "boolean",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "finished"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "error": {
+                "$ref": "#/components/schemas/CommerceErrorCode",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "error"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "CommerceConformanceGrantedFinishCallExpectation": {
         "type": "object",
         "properties": {
           "by": {
@@ -373,10 +414,15 @@
           },
           "ledgerEntryId": {
             "$ref": "#/components/schemas/NonEmptyString",
+            "description": "The grant's ledger entry.",
             "readOnly": true
           },
           "isConsumable": {
             "type": "boolean",
+            "readOnly": true
+          },
+          "revoked": {
+            "const": false,
             "readOnly": true
           },
           "result": {
@@ -425,6 +471,9 @@
               },
               {
                 "const": "finished"
+              },
+              {
+                "const": "unfinished"
               }
             ],
             "readOnly": true
@@ -438,36 +487,6 @@
           "result"
         ],
         "additionalProperties": false
-      },
-      "CommerceConformanceFinishResultFixture": {
-        "oneOf": [
-          {
-            "type": "object",
-            "properties": {
-              "finished": {
-                "type": "boolean",
-                "readOnly": true
-              }
-            },
-            "required": [
-              "finished"
-            ],
-            "additionalProperties": false
-          },
-          {
-            "type": "object",
-            "properties": {
-              "error": {
-                "$ref": "#/components/schemas/CommerceErrorCode",
-                "readOnly": true
-              }
-            },
-            "required": [
-              "error"
-            ],
-            "additionalProperties": false
-          }
-        ]
       },
       "CommerceConformanceLedgerEntryExpectation": {
         "type": "object",
@@ -608,6 +627,11 @@
           "adaptive": {
             "type": "boolean",
             "description": "The scenario is finish-owner independent: when a caller-supplied provider\nruns the vector, the runner derives `journal`, `finishCalls`,\n`verifyRequests`, and `available` from the provider's declared\ncapabilities instead of this fixture profile (RFC \"Conformance vectors\",\nadaptive vectors). The reference harness ignores the flag.",
+            "readOnly": true
+          },
+          "revokedFinish": {
+            "type": "boolean",
+            "description": "The store declares `acceptsRevokedFinish`: it keeps its unfinished\nrevoked purchases listed, finishes one only on a revoked finish\n(`FinishTransactionInput.revoked`), and refuses an ordinary finish of a\nrevoked purchase (RFC reconciler step 5, the revoked finish).",
             "readOnly": true
           }
         },
@@ -756,6 +780,101 @@
             "additionalProperties": false
           }
         ]
+      },
+      "CommerceConformanceRevokedFinishCallExpectation": {
+        "type": "object",
+        "properties": {
+          "by": {
+            "oneOf": [
+              {
+                "const": "client"
+              },
+              {
+                "const": "host"
+              }
+            ],
+            "readOnly": true
+          },
+          "transactionId": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "ledgerEntryId": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "description": "The reversed grant's ledger entry; absent when nothing was granted.",
+            "readOnly": true
+          },
+          "isConsumable": {
+            "type": "boolean",
+            "readOnly": true
+          },
+          "revoked": {
+            "const": true,
+            "description": "A revoked finish (`FinishTransactionInput.revoked`).",
+            "readOnly": true
+          },
+          "result": {
+            "oneOf": [
+              {
+                "const": "ACCOUNT_BINDING_REQUIRED"
+              },
+              {
+                "const": "ACTION_REQUIRED"
+              },
+              {
+                "const": "ALREADY_OWNED"
+              },
+              {
+                "const": "CONFIGURATION_REQUIRED"
+              },
+              {
+                "const": "INSUFFICIENT_BALANCE"
+              },
+              {
+                "const": "INVALID_RESPONSE"
+              },
+              {
+                "const": "IN_PROGRESS"
+              },
+              {
+                "const": "ITEM_UNAVAILABLE"
+              },
+              {
+                "const": "NETWORK"
+              },
+              {
+                "const": "NOT_PREPARED"
+              },
+              {
+                "const": "OUTCOME_UNKNOWN"
+              },
+              {
+                "const": "STORE_UNAVAILABLE"
+              },
+              {
+                "const": "UNKNOWN"
+              },
+              {
+                "const": "USER_CANCELLED"
+              },
+              {
+                "const": "finished"
+              },
+              {
+                "const": "unfinished"
+              }
+            ],
+            "readOnly": true
+          }
+        },
+        "required": [
+          "by",
+          "transactionId",
+          "isConsumable",
+          "revoked",
+          "result"
+        ],
+        "additionalProperties": false
       },
       "CommerceConformanceScheduledDebitExpectation": {
         "type": "object",

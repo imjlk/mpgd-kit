@@ -127,6 +127,14 @@ function createFakeProvider(input: {
   readonly withRestore?: boolean;
   /** Declares `acceptsFinishRetry`; defaults to true. */
   readonly acceptsFinishRetry?: boolean;
+  /**
+   * Declares `acceptsRevokedFinish` (defaults to false) and then, as the
+   * StoreKit provider does, keeps unfinished revoked purchases listed. An
+   * unscripted revoked finish finishes only a listed revoked purchase (one
+   * the list does not carry is refused); an unscripted ordinary finish of a
+   * listed revoked purchase is refused.
+   */
+  readonly acceptsRevokedFinish?: boolean;
 } = {}): FakeProvider {
   const store = input.store ?? 'fake-store';
   const capabilities = input.capabilities ?? capabilitiesOf();
@@ -161,6 +169,7 @@ function createFakeProvider(input: {
   const provider: FakeProvider = {
     store,
     ...(input.acceptsFinishRetry === false ? {} : { acceptsFinishRetry: true }),
+    ...(input.acceptsRevokedFinish === true ? { acceptsRevokedFinish: true } : {}),
     available,
     finishCalls,
     get purchaseUiOpened() {
@@ -212,7 +221,8 @@ function createFakeProvider(input: {
       availableRequests.push(request);
       return available.filter(
         (purchase) =>
-          purchase.state !== 'revoked' && (request.includePending === true || purchase.state !== 'pending'),
+          (purchase.state !== 'revoked' || input.acceptsRevokedFinish === true)
+          && (request.includePending === true || purchase.state !== 'pending'),
       );
     },
     ...(input.withFinish === false
@@ -220,7 +230,12 @@ function createFakeProvider(input: {
       : {
           async finishTransaction(request: FinishTransactionInput) {
             finishCalls.push(request);
-            const queued = finishQueue.shift() ?? { finished: true };
+            const listed = available.find((entry) => entry.transactionId === request.transactionId);
+            const queued = finishQueue.shift() ?? {
+              finished: request.revoked === true
+                ? listed?.state === 'revoked'
+                : listed?.state !== 'revoked',
+            };
             if ('throws' in queued) {
               throw queued.throws;
             }
@@ -3951,7 +3966,7 @@ function createBackendApi(purchases: PurchaseVerificationApi): GameServicesBacke
   await host.reconciler.runUntilIdle();
   await host.reconciler.reconcile();
   assertEqual(
-    host.provider.finishCalls.map((call) => call.retry),
+    host.provider.finishCalls.map((call) => ('retry' in call ? call.retry : undefined)),
     [undefined, undefined],
     'a host finish never carries the hint',
   );
@@ -3970,7 +3985,7 @@ function createBackendApi(purchases: PurchaseVerificationApi): GameServicesBacke
   await earlier.reconciler.runUntilIdle();
   await earlier.reconciler.reconcile();
   assertEqual(
-    earlier.provider.finishCalls.map((call) => call.retry),
+    earlier.provider.finishCalls.map((call) => ('retry' in call ? call.retry : undefined)),
     [undefined, undefined],
     'a provider that does not declare acceptsFinishRetry never gets the hint',
   );
@@ -4570,6 +4585,482 @@ function createDroppingJournal(): {
   await h.reconciler.restorePurchases();
   assertEqual(records.get(sharedKey), other, 'the other purchase under the key is untouched');
   assertEqual(backend.requests.length, 1, 'nothing is sent for the report onto that record');
+  await h.reconciler.stop();
+}
+
+// 57. A consumable the store revoked (refunded) while it was still unfinished: once the backend
+// has answered for it without a standing grant (the ledger reversed its grant, step 5, or the
+// verify was refused), it is finished with `revoked: true` and nothing is granted or verified
+// again. While the grant stands, nothing changes. Granted, refunded before its finish:
+{
+  const provider = createFakeProvider({ acceptsRevokedFinish: true });
+  const backend = createFakeBackend({ withLedgerStatus: true });
+  const h = createHarness({ provider, backend });
+  backend.queue({ status: 'granted', ledgerEntryId: 'le-57' });
+  provider.queueFinish({ throws: new Error('app closed before the finish') });
+  await h.reconciler.start();
+  await h.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-57',
+    source: 'shop',
+  });
+  provider.report(purchaseOf({ transactionId: 'tx-57' }));
+  await h.reconciler.runUntilIdle();
+  assertEqual(h.history('op-57').at(-1), 'finishing', 'granted, the finish failed');
+
+  // The App Store refunds it; the ledger has not recorded the refund yet.
+  provider.report(purchaseOf({ transactionId: 'tx-57', state: 'revoked' }));
+  await h.reconciler.reconcile();
+  assertEqual(
+    provider.finishCalls.map((call) => call.revoked),
+    [undefined, undefined],
+    'while the grant stands, only the ordinary finish is asked (and refused)',
+  );
+  assertEqual(h.history('op-57').at(-1), 'finishing', 'the record keeps its grant');
+
+  // The ledger reverses the grant (App Store Server Notifications REFUND).
+  backend.reverse('le-57', 'le-57r');
+  await h.reconciler.reconcile();
+  assertEqual(h.history('op-57').at(-1), 'revoked', 'step 5 revokes the record');
+  assertEqual(
+    provider.finishCalls.at(-1),
+    { transactionId: 'tx-57', ledgerEntryId: 'le-57', isConsumable: true, revoked: true },
+    'then the revoked transaction is finished, naming the reversed grant',
+  );
+  assertEqual(provider.available, [], 'the store no longer lists it');
+  const callsAfter = provider.finishCalls.length;
+  provider.report(purchaseOf({ transactionId: 'tx-57', state: 'revoked' }));
+  await h.reconciler.reconcile();
+  assertEqual(provider.finishCalls.length, callsAfter, 'asked once per session');
+  assertEqual(backend.requests.length, 1, 'nothing is verified again');
+  assertEqual(h.failures, ['finish(op-57)'], 'only the failed ordinary finish was reported');
+  await h.reconciler.stop();
+}
+
+// 57b. Never granted: the verify waited (an outage) until the refund; the backend refuses the
+// revoked transaction, and the refused record's transaction is finished with its key as the
+// answer. The record ends rejected; nothing is granted.
+{
+  const provider = createFakeProvider({ acceptsRevokedFinish: true });
+  const backend = createFakeBackend();
+  const h = createHarness({ provider, backend });
+  backend.queue({ throws: new Error('backend unavailable') });
+  await h.reconciler.start();
+  await h.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-57b',
+    source: 'shop',
+  });
+  provider.report(purchaseOf({ transactionId: 'tx-57b' }));
+  await h.reconciler.runUntilIdle();
+  assertEqual(h.history('op-57b').at(-1), 'verifying', 'the verify waits');
+
+  backend.queue({ status: 'rejected', reason: 'APP_STORE_TRANSACTION_REVOKED' });
+  provider.report(purchaseOf({ transactionId: 'tx-57b', state: 'revoked' }));
+  await h.reconciler.reconcile();
+  assertEqual(
+    h.history('op-57b').at(-1),
+    'rejected',
+    'the backend refused the revoked transaction',
+  );
+  assertEqual(
+    provider.finishCalls,
+    [{ transactionId: 'tx-57b', isConsumable: true, revoked: true }],
+    'the only finish is the revoked one, naming no ledger entry (nothing was granted)',
+  );
+  assertEqual(backend.requests.length, 2, 'the saved request was sent once more, as before');
+  assertEqual(provider.available, [], 'the store no longer lists it');
+  await h.reconciler.stop();
+}
+
+// 57c. Across launches: the revoked transaction is found in the store's list at start (its
+// launch-time event may come before any listener). A refusal (a native build from before the
+// revoked finish, or a list that does not carry it yet) is reported and not counted as asked: the
+// next report asks again; a transport failure is asked again on a later pass; the next launch
+// asks again from the journal.
+{
+  const store = createInMemoryMonetizationOperationStore();
+  const backend = createFakeBackend();
+  const first = createHarness({
+    store,
+    backend,
+    provider: createFakeProvider({ acceptsRevokedFinish: true }),
+  });
+  backend.queue({ status: 'rejected', reason: 'APP_STORE_TRANSACTION_REVOKED' });
+  first.provider.available.push(purchaseOf({ transactionId: 'tx-57c' }));
+  await first.reconciler.start();
+  await first.reconciler.stop();
+  const key = 'store:fake-store:tx-57c';
+
+  const second = createHarness({
+    store,
+    backend,
+    provider: createFakeProvider({ acceptsRevokedFinish: true }),
+  });
+  second.provider.available.push(purchaseOf({ transactionId: 'tx-57c', state: 'revoked' }));
+  second.provider.queueFinish({ finished: false });
+  await second.reconciler.start();
+  second.provider.report(purchaseOf({ transactionId: 'tx-57c', state: 'revoked' }));
+  await second.reconciler.reconcile();
+  assertEqual(
+    second.provider.finishCalls,
+    [
+      { transactionId: 'tx-57c', isConsumable: true, revoked: true },
+      { transactionId: 'tx-57c', isConsumable: true, revoked: true },
+    ],
+    'the refusal is not counted as asked: the next report asks again, and it finishes',
+  );
+  assertEqual(second.failures, [`finish(${key})`], 'the refusal is reported');
+  assertEqual(second.provider.available, [], 'the store no longer lists it');
+  second.provider.report(purchaseOf({ transactionId: 'tx-57c', state: 'revoked' }));
+  await second.reconciler.reconcile();
+  assertEqual(second.provider.finishCalls.length, 2, 'a finished one is asked once per session');
+  await second.reconciler.stop();
+
+  const third = createHarness({
+    store,
+    backend,
+    provider: createFakeProvider({ acceptsRevokedFinish: true }),
+  });
+  third.provider.available.push(purchaseOf({ transactionId: 'tx-57c', state: 'revoked' }));
+  third.provider.queueFinish({ throws: new Error('bridge closed') });
+  await third.reconciler.start();
+  // An unrelated store event runs a pass without reporting the transaction again.
+  third.provider.emit({ type: 'purchaseError', error: { code: 'NETWORK', retryable: true } });
+  await third.reconciler.runUntilIdle();
+  assertEqual(third.provider.finishCalls.length, 1, 'an event pass waits out the retry interval');
+  await third.reconciler.reconcile();
+  assertEqual(
+    third.provider.finishCalls.map((call) => call.revoked),
+    [true, true],
+    'a transport failure is asked again on an explicit pass, and it finishes',
+  );
+  assertEqual(third.provider.available, [], 'the store no longer lists it');
+  assertEqual(third.history(key), [], 'the rejected record is never rewritten');
+  assertEqual(backend.requests.length, 1, 'and never verified again');
+  await third.reconciler.stop();
+}
+
+// 57d. What is never finished as revoked: a revoked purchase with no record when this player's
+// account binding cannot be compared (never journaled or verified either), a durable, a
+// server-finish store, a provider that does not declare `acceptsRevokedFinish` (its records still
+// end revoked), and a record still granted.
+{
+  const backend = createFakeBackend({ withLedgerStatus: true });
+  const h = createHarness({
+    backend,
+    provider: createFakeProvider({ acceptsRevokedFinish: true }),
+  });
+  h.provider.available.push(purchaseOf({ transactionId: 'tx-57-unknown', state: 'revoked' }));
+  backend.queue({ status: 'granted', ledgerEntryId: 'le-57d' });
+  await h.reconciler.start();
+  await h.reconciler.requestPurchase({
+    logicalId: 'remove_ads',
+    idempotencyKey: 'op-57d',
+    source: 'shop',
+  });
+  h.provider.queueFinish({ finished: false });
+  h.provider.report(
+    purchaseOf({ transactionId: 'tx-57d', storeSku: 'remove.ads', logicalId: 'remove_ads' }),
+  );
+  await h.reconciler.runUntilIdle();
+  h.provider.report(
+    purchaseOf({
+      transactionId: 'tx-57d',
+      storeSku: 'remove.ads',
+      logicalId: 'remove_ads',
+      state: 'revoked',
+    }),
+  );
+  backend.reverse('le-57d', 'le-57dr');
+  await h.reconciler.reconcile();
+  assertEqual(h.history('op-57d').at(-1), 'revoked', 'the durable grant is revoked');
+  assertEqual(
+    h.provider.finishCalls.filter((call) => call.revoked === true),
+    [],
+    'neither the unknown revoked purchase nor the durable is finished as revoked',
+  );
+  assertEqual(
+    h.transitions.filter((transition) => transition.startsWith('store:fake-store:tx-57-unknown')),
+    [],
+    'a revoked purchase with no record is never journaled',
+  );
+  assertEqual(backend.requests.length, 1, 'nor verified');
+  await h.reconciler.stop();
+
+  // A backend without the ledger status read: the grant stands as far as the client can tell,
+  // so the refunded transaction stays unfinished and the ordinary finish keeps being refused.
+  const noStatus = createHarness({ provider: createFakeProvider({ acceptsRevokedFinish: true }) });
+  noStatus.backend.queue({ status: 'granted', ledgerEntryId: 'le-57s' });
+  noStatus.provider.queueFinish({ finished: false });
+  await noStatus.reconciler.start();
+  await noStatus.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-57s',
+    source: 'shop',
+  });
+  noStatus.provider.report(purchaseOf({ transactionId: 'tx-57s' }));
+  await noStatus.reconciler.runUntilIdle();
+  noStatus.provider.report(purchaseOf({ transactionId: 'tx-57s', state: 'revoked' }));
+  await noStatus.reconciler.reconcile();
+  assertEqual(noStatus.history('op-57s').at(-1), 'finishing', 'the grant stands');
+  assertEqual(
+    noStatus.provider.finishCalls.map((call) => call.revoked),
+    [undefined, undefined],
+    'only ordinary finishes are asked, never a revoked one',
+  );
+  assertEqual(noStatus.provider.available.length, 1, 'the transaction stays unfinished');
+  await noStatus.reconciler.stop();
+
+  for (const [provider, message] of [
+    [
+      createFakeProvider({
+        acceptsRevokedFinish: true,
+        capabilities: capabilitiesOf({ lifecycle: { finish: 'server' } }),
+      }),
+      'a server-finish store',
+    ],
+    [createFakeProvider(), 'a provider that does not declare acceptsRevokedFinish'],
+  ] as const) {
+    const other = createHarness({ provider });
+    other.backend.queue({ status: 'rejected', reason: 'APP_STORE_TRANSACTION_REVOKED' });
+    await other.reconciler.start();
+    await other.reconciler.requestPurchase({
+      logicalId: 'gems_small',
+      idempotencyKey: 'op-57e',
+      source: 'shop',
+    });
+    other.provider.report(purchaseOf({ transactionId: 'tx-57e' }));
+    await other.reconciler.runUntilIdle();
+    other.provider.report(purchaseOf({ transactionId: 'tx-57e', state: 'revoked' }));
+    await other.reconciler.reconcile();
+    assertEqual(other.history('op-57e').at(-1), 'rejected', `${message}: rejected`);
+    assertEqual(other.provider.finishCalls, [], `${message}: never finished`);
+    await other.reconciler.stop();
+  }
+}
+
+// 57e. A refusal for another reason than the refund keeps the transaction unfinished, even when the
+// store later reports it revoked: only `APP_STORE_TRANSACTION_REVOKED` and `LEDGER_GRANT_REVERSED`
+// answer for a refund.
+{
+  const provider = createFakeProvider({ acceptsRevokedFinish: true });
+  const h = createHarness({ provider });
+  h.backend.queue({ status: 'rejected', reason: 'APP_STORE_PRODUCT_TYPE_MISMATCH' });
+  h.backend.queue({ status: 'rejected', reason: 'LEDGER_GRANT_REVERSED' });
+  await h.reconciler.start();
+  await h.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-57e1',
+    source: 'shop',
+  });
+  provider.report(purchaseOf({ transactionId: 'tx-57e1' }));
+  await h.reconciler.runUntilIdle();
+  await h.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-57e2',
+    source: 'shop',
+  });
+  provider.report(purchaseOf({ transactionId: 'tx-57e2' }));
+  await h.reconciler.runUntilIdle();
+  provider.report(purchaseOf({ transactionId: 'tx-57e1', state: 'revoked' }));
+  provider.report(purchaseOf({ transactionId: 'tx-57e2', state: 'revoked' }));
+  await h.reconciler.reconcile();
+  assertEqual(
+    [h.history('op-57e1').at(-1), h.history('op-57e2').at(-1)],
+    ['rejected', 'rejected'],
+    'both refused',
+  );
+  assertEqual(
+    provider.finishCalls,
+    [{ transactionId: 'tx-57e2', isConsumable: true, revoked: true }],
+    'only the refusal that answers for the refund is finished; the other stays unfinished',
+  );
+  assertEqual(
+    provider.available.map((purchase) => purchase.transactionId),
+    ['tx-57e1'],
+    'the other refused transaction is still listed',
+  );
+  await h.reconciler.stop();
+}
+
+// 57f. A revoked consumable of this player's own account with no record of it (the journal dropped
+// or lost it) is finished without a verify: nothing is journaled, verified, or granted, and a
+// `revoked-finish` event reports it. Another account's, an unbound one, and a durable are left
+// alone; a binding that cannot be read leaves it too.
+{
+  const ownBinding = { kind: 'obfuscated-account-id', value: 'player-1' } as const;
+  let binding: { readonly kind: 'obfuscated-account-id'; readonly value: string } | undefined = ownBinding;
+  const provider = createFakeProvider({ acceptsRevokedFinish: true });
+  const events: CommerceReconcilerEvent[] = [];
+  const h = createHarness({
+    provider,
+    overrides: {
+      accountBinding: () => binding,
+      onEvent(event) {
+        if (event.type === 'revoked-finish' || event.type === 'failure') {
+          events.push(event);
+        }
+      },
+    },
+  });
+  provider.available.push(
+    purchaseOf({ transactionId: 'tx-57f-own', state: 'revoked', accountBinding: ownBinding }),
+    purchaseOf({
+      transactionId: 'tx-57f-other',
+      state: 'revoked',
+      accountBinding: { kind: 'obfuscated-account-id', value: 'player-2' },
+    }),
+    purchaseOf({ transactionId: 'tx-57f-unbound', state: 'revoked' }),
+    purchaseOf({
+      transactionId: 'tx-57f-durable',
+      storeSku: 'remove.ads',
+      logicalId: 'remove_ads',
+      state: 'revoked',
+      accountBinding: ownBinding,
+    }),
+  );
+  await h.reconciler.start();
+  assertEqual(
+    provider.finishCalls,
+    [{ transactionId: 'tx-57f-own', isConsumable: true, revoked: true }],
+    "only this player's own revoked consumable is finished, naming no ledger entry",
+  );
+  assertEqual(
+    events,
+    [{ type: 'revoked-finish', transactionId: 'tx-57f-own', finished: true }],
+    'and the finish is reported without a record',
+  );
+  assertEqual(h.transitions, [], 'nothing is journaled');
+  assertEqual(h.backend.requests.length, 0, 'nothing is verified');
+  assertEqual(
+    provider.available.map((purchase) => purchase.transactionId),
+    ['tx-57f-other', 'tx-57f-unbound', 'tx-57f-durable'],
+    'the others stay unfinished',
+  );
+  await h.reconciler.stop();
+
+  // A binding that cannot be read now leaves it for a later launch.
+  binding = undefined;
+  const later = createHarness({
+    provider: createFakeProvider({ acceptsRevokedFinish: true }),
+    overrides: { accountBinding: () => binding },
+  });
+  later.provider.available.push(
+    purchaseOf({ transactionId: 'tx-57f-wait', state: 'revoked', accountBinding: ownBinding }),
+  );
+  await later.reconciler.start();
+  assertEqual(later.provider.finishCalls, [], 'an unread binding finishes nothing');
+  await later.reconciler.stop();
+
+  // A record under its derived key that the transaction index does not reach (a terminal record,
+  // so no list loads it) takes the record's path: refused for another reason than the refund, its
+  // transaction stays unfinished instead of being finished as unrecorded.
+  binding = ownBinding;
+  const store = createInMemoryMonetizationOperationStore();
+  const first = createHarness({ store });
+  first.backend.queue({ status: 'rejected', reason: 'APP_STORE_PRODUCT_TYPE_MISMATCH' });
+  first.provider.available.push(
+    purchaseOf({ transactionId: 'tx-57f-held', accountBinding: ownBinding }),
+  );
+  await first.reconciler.start();
+  assertEqual(first.history('store:fake-store:tx-57f-held').at(-1), 'rejected', 'refused');
+  await first.reconciler.stop();
+  const { findByTransaction: _index, ...withoutIndex } = store;
+  const second = createHarness({
+    store: withoutIndex,
+    provider: createFakeProvider({ acceptsRevokedFinish: true }),
+    overrides: { accountBinding: () => binding },
+  });
+  second.provider.available.push(
+    purchaseOf({ transactionId: 'tx-57f-held', state: 'revoked', accountBinding: ownBinding }),
+  );
+  await second.reconciler.start();
+  assertEqual(second.provider.finishCalls, [], 'the refused record keeps it unfinished');
+  await second.reconciler.stop();
+}
+
+// 57g. A refund notice of a consumable whose record already finished (`Transaction.updates`
+// delivers it for a finished transaction too) is not noted: nothing is left unfinished, and
+// step 5 still revokes the record when the ledger reversed it. A revoked report never attaches to
+// the player's open attempt for the product (it may be another purchase still in flight, such as
+// an Ask to Buy): an own-account refunded consumable without a record is finished as unrecorded
+// and the attempt stays `launched`. A noted, unrecorded report the store delivers again before
+// its finish is not looked up in the journal again.
+{
+  const ownBinding = { kind: 'obfuscated-account-id', value: 'player-1' } as const;
+  const backend = createFakeBackend({ withLedgerStatus: true });
+  const provider = createFakeProvider({ acceptsRevokedFinish: true });
+  let reads = 0;
+  const store = createInMemoryMonetizationOperationStore();
+  const counted: MonetizationOperationStore = {
+    ...store,
+    async read(key) {
+      reads += 1;
+      return store.read(key);
+    },
+  };
+  const h = createHarness({
+    store: counted,
+    backend,
+    provider,
+    overrides: { accountBinding: () => ownBinding },
+  });
+  backend.queue({ status: 'granted', ledgerEntryId: 'le-57g' });
+  await h.reconciler.start();
+  await h.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-57g',
+    source: 'shop',
+  });
+  provider.report(purchaseOf({ transactionId: 'tx-57g', accountBinding: ownBinding }));
+  await h.reconciler.runUntilIdle();
+  assertEqual(h.history('op-57g').at(-1), 'finished', 'granted and finished');
+  backend.reverse('le-57g', 'le-57gr');
+  provider.report(
+    purchaseOf({ transactionId: 'tx-57g', state: 'revoked', accountBinding: ownBinding }),
+  );
+  await h.reconciler.reconcile();
+  assertEqual(h.history('op-57g').at(-1), 'revoked', 'step 5 still revokes the record');
+  assertEqual(
+    provider.finishCalls.filter((call) => call.revoked === true),
+    [],
+    'the refund notice of a finished consumable asks no revoked finish',
+  );
+
+  // An Ask to Buy attempt waits; an unrelated refunded consumable of the product arrives.
+  await h.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-57g-ask',
+    source: 'shop',
+  });
+  provider.queueFinish({ throws: new Error('bridge closed') });
+  provider.report(
+    purchaseOf({ transactionId: 'tx-57g-old', state: 'revoked', accountBinding: ownBinding }),
+  );
+  await h.reconciler.runUntilIdle();
+  const readsAfterFirst = reads;
+  provider.report(
+    purchaseOf({ transactionId: 'tx-57g-old', state: 'revoked', accountBinding: ownBinding }),
+  );
+  await h.reconciler.runUntilIdle();
+  assertEqual(reads, readsAfterFirst, 'a redelivered, still-noted report reads no journal key');
+  await h.reconciler.reconcile();
+  assertEqual(
+    provider.finishCalls.filter((call) => call.revoked === true).map((call) => call.transactionId),
+    ['tx-57g-old', 'tx-57g-old'],
+    'the refunded consumable is finished as unrecorded (after a transport failure)',
+  );
+  assertEqual(
+    h.history('op-57g-ask'),
+    ['requested', 'launched'],
+    'the open attempt stays launched',
+  );
+  assertEqual(
+    (await h.reconciler.read('op-57g-ask'))?.purchase,
+    undefined,
+    'and the refunded transaction is never attached to it',
+  );
   await h.reconciler.stop();
 }
 

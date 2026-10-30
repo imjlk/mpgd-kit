@@ -36,6 +36,8 @@ export interface FakeStoreSdkOptions {
   readonly availability?: () => Promise<PlatformProviderAvailability>;
   /** Declare `purchasePresentation` (sheet facts). Defaults to false. */
   readonly presentation?: boolean;
+  /** Declare `acceptsRevokedFinish`. Defaults to false. */
+  readonly revokedFinish?: boolean;
 }
 
 export interface FakeStoreSdk extends StoreSdk {
@@ -106,6 +108,7 @@ export function createFakeStoreSdk(options: FakeStoreSdkOptions = {}): FakeStore
       finish: finish ? 'client' : 'server',
       ...options.capabilities,
     },
+    ...(options.revokedFinish === true ? { acceptsRevokedFinish: true } : {}),
     purchases,
     requestCalls,
     finishCalls,

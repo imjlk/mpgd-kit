@@ -226,7 +226,7 @@ function createConformanceHost(context: CommerceConformanceContext): Conformance
           const call = {
             by: 'host' as const,
             transactionId: input.transactionId,
-            ledgerEntryId: input.ledgerEntryId,
+            ...(input.ledgerEntryId === undefined ? {} : { ledgerEntryId: input.ledgerEntryId }),
             isConsumable: input.isConsumable,
           };
           if (host.completeCalls.length > before && native !== undefined) {
@@ -315,7 +315,7 @@ function expectHostFinishDerivation(results: readonly CommerceConformanceVectorR
     const finishCalls = result.adaptive?.expect.finishCalls ?? [];
     expect(finishCalls.length, result.vector).toBeGreaterThan(0);
     expect(
-      finishCalls.every((call) => call.by === 'host' && call.ledgerEntryId.length > 0),
+      finishCalls.every((call) => call.by === 'host' && (call.ledgerEntryId ?? '').length > 0),
       result.vector,
     ).toBe(true);
     expect(

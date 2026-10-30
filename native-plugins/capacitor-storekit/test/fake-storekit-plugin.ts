@@ -81,6 +81,12 @@ export function createFakeStoreKitPlugin(input: {
    */
   readonly presentationSupport?: 'supported' | 'unimplemented' | 'absent';
   /**
+   * How the native finish treats `revoked`: `supported` (default) finishes
+   * only a listed, revoked consumable of the token; `ignored` is a native
+   * build from before the flag, whose ordinary gate refuses it.
+   */
+  readonly revokedFinish?: 'supported' | 'ignored';
+  /**
    * How `getFinishSupport` answers: `supported` (default; the explicit
    * no-token finish), `unimplemented` (a native build from before it, which
    * also refuses a finish call without a token), or `absent` (no such method,
@@ -214,10 +220,11 @@ export function createFakeStoreKitPlugin(input: {
     },
     async finishTransaction(request) {
       const withoutToken = request.withoutAppAccountToken === true;
+      const revoked = request.revoked === true && input.revokedFinish !== 'ignored';
       calls.push(
         `finish:${request.transactionId}:${request.ledgerEntryId}:${
           withoutToken ? 'without-token' : request.appAccountToken
-        }`,
+        }${request.revoked === true ? ':revoked' : ''}`,
       );
       if (withoutToken && finishSupport !== 'supported') {
         // A build from before the no-token match requires a token.
@@ -228,7 +235,9 @@ export function createFakeStoreKitPlugin(input: {
       const script = finishQueue.shift();
       if (script === undefined) {
         // The native match: a token matches only that token; the explicit
-        // no-token match only a non-revoked non-consumable bound to none.
+        // no-token match only a non-revoked non-consumable bound to none. The
+        // ordinary gate refuses a revoked transaction; the revoked one
+        // finishes only an unfinished, revoked consumable.
         const listed = transactions.find((entry) => entry.transactionId === request.transactionId);
         if (withoutToken && listed === undefined) {
           // Native finds no transaction of that id bound to no token.
@@ -241,6 +250,13 @@ export function createFakeStoreKitPlugin(input: {
               || listed.type !== 'non_consumable'
               || listed.revokedAt !== undefined
             : listed.appAccountToken?.toLowerCase() !== request.appAccountToken)
+        ) {
+          return { finished: false };
+        }
+        if (
+          revoked
+            ? listed === undefined || listed.revokedAt === undefined || listed.type !== 'consumable'
+            : listed?.revokedAt !== undefined
         ) {
           return { finished: false };
         }

@@ -58,7 +58,7 @@ describe('commerce conformance vectors', () => {
     expect(vector.steps.length).toBeGreaterThan(0);
   });
 
-  it("ships the six reconciler vectors for another account's purchase", () => {
+  it("ships the reconciler vectors (another account's purchase, the revoked finish)", () => {
     expect(reconcilerVectorFiles).toEqual([
       'another-account-http-parks.json',
       'another-account-legacy-rejected-parks.json',
@@ -66,6 +66,9 @@ describe('commerce conformance vectors', () => {
       'another-account-owner-recovers.json',
       'another-account-restore-resends.json',
       'rejected-other-reason-ends.json',
+      'revoked-refused-never-granted.json',
+      'revoked-unfinished-after-grant.json',
+      'revoked-without-record.json',
     ]);
   });
 
@@ -75,6 +78,29 @@ describe('commerce conformance vectors', () => {
     expect(vector.protocol).toBe(commerceProtocolVersion);
     // Provider-independent scenarios: no provider runs them adaptively.
     expect(vector.profile.adaptive).toBeUndefined();
+  });
+
+  it('requires the ledger entry on every finish expectation except a revoked one', () => {
+    const base = assertCommerceConformanceVector(
+      readVector('revoked-unfinished-after-grant.json', reconcilerVectorsDir),
+    );
+    const withFinishCalls = (finishCalls: unknown): unknown => ({
+      ...base,
+      expect: { ...base.expect, finishCalls },
+    });
+    const call = { by: 'client', transactionId: 'tx-1', isConsumable: true, result: 'finished' };
+    // An ordinary finish always names the grant's ledger entry.
+    expect(isCommerceConformanceVector(withFinishCalls([call]))).toBe(false);
+    expect(isCommerceConformanceVector(withFinishCalls([{ ...call, revoked: false }]))).toBe(false);
+    expect(isCommerceConformanceVector(withFinishCalls([{ ...call, ledgerEntryId: 'le-1' }]))).toBe(true);
+    // A revoked finish names the reversed grant, or none when nothing was granted.
+    expect(isCommerceConformanceVector(withFinishCalls([{ ...call, revoked: true }]))).toBe(true);
+    expect(isCommerceConformanceVector(withFinishCalls([
+      { ...call, revoked: true, ledgerEntryId: 'le-1' },
+    ]))).toBe(true);
+    expect(isCommerceConformanceVector(withFinishCalls([
+      { ...call, revoked: true, ledgerEntryId: '' },
+    ]))).toBe(false);
   });
 
   it('rejects malformed another-account decisions and steps', () => {

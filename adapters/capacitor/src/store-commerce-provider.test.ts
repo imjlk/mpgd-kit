@@ -387,6 +387,22 @@ describe('createStoreCommerceProvider', () => {
       includePending: false,
     });
 
+    // An SDK that finishes revoked transactions keeps its unfinished revoked
+    // ones listed, so the reconciler can finish them on a later launch.
+    const revokedSdk = createFakeStoreSdk({ revokedFinish: true });
+    revokedSdk.upsert(fakePurchase({ transactionId: 'tx-1' }));
+    revokedSdk.upsert(fakePurchase({ transactionId: 'tx-3', state: 'revoked' }));
+    // Only a revoked consumable is kept: a revoked durable, and a revoked
+    // purchase of a SKU the catalog does not map, are never finished as
+    // revoked, so they stay filtered.
+    revokedSdk.upsert(fakePurchase({ transactionId: 'tx-6', sku: 'remove.ads', state: 'revoked' }));
+    revokedSdk.upsert(fakePurchase({ transactionId: 'tx-7', sku: 'legacy.sku', state: 'revoked' }));
+    expect((await createProvider(revokedSdk).getAvailablePurchases())
+      .map((purchase) => [purchase.transactionId, purchase.state])).toEqual([
+      ['tx-1', 'purchased'],
+      ['tx-3', 'revoked'],
+    ]);
+
     sdk.upsert({ ...fakePurchase({ transactionId: 'tx-5' }), quantity: 0 });
     await expect(provider.getAvailablePurchases()).rejects.toMatchObject({
       code: 'INVALID_RESPONSE',
@@ -435,9 +451,33 @@ describe('createStoreCommerceProvider', () => {
       transactionId: 'tx-1', ledgerEntryId: 'le-1', isConsumable: true,
     })).rejects.toMatchObject({ code: 'INVALID_RESPONSE' });
 
+    // An SDK that does not read `revoked` is never asked: the provider does
+    // not declare it, and a caller that sends it anyway gets a refusal, never
+    // an ordinary finish in its place.
+    expect(provider.acceptsRevokedFinish).toBeUndefined();
+    const calls = sdk.finishCalls.length;
+    sdk.upsert(fakePurchase({ transactionId: 'tx-3' }));
+    await expect(provider.finishTransaction?.({
+      transactionId: 'tx-3', ledgerEntryId: 'le-3', isConsumable: true, revoked: true,
+    })).resolves.toEqual({ finished: false });
+    expect(sdk.finishCalls).toHaveLength(calls);
+
+    const revokedSdk = createFakeStoreSdk({ revokedFinish: true });
+    const revokedProvider = createProvider(revokedSdk);
+    expect(revokedProvider.acceptsRevokedFinish).toBe(true);
+    revokedSdk.upsert(fakePurchase({ transactionId: 'tx-4' }));
+    await expect(revokedProvider.finishTransaction?.({
+      transactionId: 'tx-4', ledgerEntryId: 'op-4', isConsumable: true, revoked: true,
+    })).resolves.toEqual({ finished: true });
+    expect(revokedSdk.finishCalls).toEqual([
+      { transactionId: 'tx-4', isConsumable: true, ledgerEntryId: 'op-4', revoked: true },
+    ]);
+
     const serverFinished = createFakeStoreSdk({ finish: false });
     expect(createProvider(serverFinished).finishTransaction).toBeUndefined();
     expect(createProvider(serverFinished).acceptsFinishRetry).toBeUndefined();
+    expect(createProvider(createFakeStoreSdk({ finish: false, revokedFinish: true }))
+      .acceptsRevokedFinish).toBeUndefined();
     expect(() => createProvider(serverFinished, {
       capabilities: { lifecycle: { finish: 'client' } },
     })).toThrow(/no finishTransaction/);

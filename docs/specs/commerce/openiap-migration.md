@@ -112,6 +112,7 @@ on this contract:
 | `getTransactions` | none: `RecoveryReadShim` reads `Transaction.unfinished` and `Transaction.currentEntitlements` (below) | unfinished one-time → `unfinished: true`; current non-consumables not already listed → `unfinished: false`; merged by id; unverified entries skipped one by one; no account filter (TypeScript `admit()`); never `Transaction.all` |
 | `sync` | `syncIOS()` (`AppStore.sync`) | user-initiated only; the reconciler's automatic passes never call it |
 | `finishTransaction` | lookup through `RecoveryReadShim` (unfinished, then `Transaction.all`); the finish itself is `finishTransaction(purchase:isConsumable:)` | verified, one-time, not revoked, `appAccountToken` equals the session token; OpenIAP's own `storeId` check still runs |
+| `finishTransaction` with `revoked` | lookup through `RecoveryReadShim.unfinished()` only; the same OpenIAP finish (it takes the transaction by id from `Transaction.unfinished` and does not check the revocation date) | verified, **revoked**, consumable, `appAccountToken` equals the session token (`finishableRevoked`); anything else answers `finished: false`. A build from before the flag ignores it and refuses the revoked transaction. The `ledgerEntryId` the method requires is the reversed grant's entry, or a `revoked-without-grant:` marker the SDK fills when nothing was granted |
 | revocations | not delivered by OpenIAP 4.0.5 | `RevocationUpdatesShim` (below) |
 
 ### Android
@@ -330,6 +331,7 @@ resolved packages were checked to be the candidates (OpenIAP sources present):
 | iOS rejected query | case 2 (a rejection is no empty list and no `finished: false`) |
 | iOS lost finish reply | StoreSdk lost-acknowledgement test; StoreKit reconciler smoke (two runs, then the transaction listed again); reconciler test 53 |
 | iOS revocation | shim; existing StoreSdk revoked-event tests; server re-verification unchanged |
+| iOS refund before the finish | `testRevokedFinishTakesOnlyARevokedConsumableOfTheSessionToken`; StoreSdk revoked-finish test; StoreKit reconciler smoke (granted then refunded, refused after the refund, older native build); reconciler tests 57-57f; reconciler vectors `revoked-unfinished-after-grant`, `revoked-refused-never-granted`, `revoked-without-record` |
 | Google order id assigned later | Play case 1; reconciler test 46 |
 | Google consume/ack failure after grant | server-owned, unchanged; Worker `googlePlayCheckout` |
 | Late event during an account switch | existing StoreSdk account tests; game `nativeCheckoutOwner` |

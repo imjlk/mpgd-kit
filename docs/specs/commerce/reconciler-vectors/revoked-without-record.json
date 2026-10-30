@@ -1,0 +1,79 @@
+{
+  "vector": "revoked-without-record",
+  "protocol": "2.0.0-draft.1",
+  "summary": "A refunded consumable of the player's own account that the journal holds no record of is finished with revoked: true and no ledger entry, without a verify; nothing is journaled or granted. A refunded durable is left alone and is not listed.",
+  "profile": {
+    "store": "fixture.client-token",
+    "purchase": {
+      "consumable": true,
+      "durable": true,
+      "subscription": false,
+      "quantity": false
+    },
+    "lifecycle": {
+      "availablePurchases": true,
+      "pending": true,
+      "restore": true,
+      "events": true,
+      "finish": "client"
+    },
+    "authority": {
+      "evidence": "client-token",
+      "accountBinding": "required"
+    },
+    "revokedFinish": true
+  },
+  "catalog": [
+    {
+      "logicalId": "gems_small",
+      "kind": "consumable",
+      "storeSku": "gems.small"
+    },
+    {
+      "logicalId": "remove_ads",
+      "kind": "durable",
+      "storeSku": "remove.ads"
+    }
+  ],
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "store",
+      "action": "update",
+      "purchase": {
+        "transactionId": "tx-4",
+        "storeSku": "gems.small",
+        "token": "token-4",
+        "state": "revoked"
+      }
+    },
+    {
+      "actor": "store",
+      "action": "update",
+      "purchase": {
+        "transactionId": "tx-5",
+        "storeSku": "remove.ads",
+        "token": "token-5",
+        "state": "revoked"
+      }
+    }
+  ],
+  "expect": {
+    "journal": {},
+    "verifyRequests": [],
+    "ledger": [],
+    "finishCalls": [
+      {
+        "by": "client",
+        "transactionId": "tx-4",
+        "isConsumable": true,
+        "revoked": true,
+        "result": "finished"
+      }
+    ],
+    "available": []
+  }
+}

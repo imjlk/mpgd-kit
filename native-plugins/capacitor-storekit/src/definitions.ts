@@ -83,11 +83,20 @@ export type StoreKitFinishTransactionInput =
     /** Session app account token; must match the verified transaction. */
     readonly appAccountToken: string;
     readonly withoutAppAccountToken?: never;
+    /**
+     * Finish a transaction StoreKit lists as revoked (refunded) instead:
+     * only an unfinished, revoked consumable bound to `appAccountToken`, and
+     * nothing else. Grants nothing; it stops StoreKit redelivering it. Never
+     * combined with `withoutAppAccountToken`. A native build from before the
+     * flag ignores it and refuses the revoked transaction (`finished: false`).
+     */
+    readonly revoked?: boolean;
   }
   | {
     readonly transactionId: string;
     readonly ledgerEntryId: string;
     readonly appAccountToken?: never;
+    readonly revoked?: never;
     /**
      * Finish a verified, non-revoked non-consumable bound to no app account
      * token (bought or redeemed outside the app). Only a build whose
@@ -125,16 +134,19 @@ export interface CapacitorStoreKitPlugin {
   /** User-initiated App Store account synchronization before restore. */
   sync(): Promise<{ readonly synced: boolean }>;
   /**
-   * Call only after the authenticated backend confirms the ledger grant.
-   * Finishing never grants. Native finishes only a verified, non-revoked,
-   * one-time transaction whose app account token matches `appAccountToken`,
-   * or, with `withoutAppAccountToken: true`, a verified, non-revoked
-   * non-consumable bound to no token. The StoreKit SDK injects the session
-   * token and applies the same match before this call, including for
-   * `commerce.v2.finishTransaction`. Games must not call this plugin method
-   * directly. The token match is not a signed server capability: a caller
-   * who can read `getTransactions` can still supply that token (or the
-   * no-token flag) with a forged ledger entry id.
+   * Call only after the authenticated backend confirms the ledger grant
+   * (with `revoked`: after it answered for a refunded transaction without a
+   * standing grant). Finishing never grants. Native finishes only a
+   * verified, non-revoked, one-time transaction whose app account token
+   * matches `appAccountToken`, or, with `withoutAppAccountToken: true`, a
+   * verified, non-revoked non-consumable bound to no token, or, with
+   * `revoked: true`, only a revoked consumable bound to `appAccountToken`.
+   * The StoreKit SDK injects the session token and applies the same match
+   * before this call, including for `commerce.v2.finishTransaction`. Games
+   * must not call this plugin method directly. The token match is not a
+   * signed server capability: a caller who can read `getTransactions` can
+   * still supply that token (or the no-token flag) with a forged ledger
+   * entry id.
    */
   finishTransaction(input: StoreKitFinishTransactionInput): Promise<{ readonly finished: boolean }>;
   addListener(
