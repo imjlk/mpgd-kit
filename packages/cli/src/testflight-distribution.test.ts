@@ -505,6 +505,18 @@ try {
       'build-not-ready',
     );
     assert.equal(
+      (await readTestFlightBuildStatus(fake({ externalBuildState: 'NOT_READY_FOR_TESTING' }).port, target))
+        .betaReview,
+      'build-not-ready',
+    );
+    await assert.rejects(
+      applyTestFlightDistribution(
+        fake({ externalBuildState: 'NOT_READY_FOR_TESTING' }).port,
+        external,
+      ),
+      /cannot go to external testers yet: .*retry later/u,
+    );
+    assert.equal(
       (await readTestFlightBuildStatus(fake({ processingState: undefined }).port, target)).betaReview,
       'build-not-ready',
     );

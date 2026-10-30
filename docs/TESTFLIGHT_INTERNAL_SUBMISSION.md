@@ -178,8 +178,8 @@ only a build that still waits for its first submission. A submission in a
 the state, and is never submitted over. After adding groups, the membership
 read is retried a few times (about 17 seconds in all) before the assignment
 counts as unconfirmed. `testflight status`
-also reports `build-not-ready` (not uploaded, or still processing: poll
-again) and `build-unusable` (failed processing, expired, or an internal-only
+also reports `build-not-ready` (not uploaded, still processing, or
+`NOT_READY_FOR_TESTING`: poll again) and `build-unusable` (failed processing, expired, or an internal-only
 upload: stop polling and upload a new build), each with a `detail`.
 
 While a review is open or rejected, App Store Connect (and asc) refuse to add

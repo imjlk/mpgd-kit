@@ -847,6 +847,13 @@ function classifyExternalReview(
         kind: 'not-ready',
         detail: 'TestFlight is still processing the build for external testing; retry later.',
       };
+    // Not in Apple's current ExternalBetaState list; asc 5.5.0 still
+    // recognizes it and recommends re-checking, so it is not terminal.
+    case 'NOT_READY_FOR_TESTING':
+      return {
+        kind: 'not-ready',
+        detail: 'TestFlight reports NOT_READY_FOR_TESTING for external testing; retry later.',
+      };
     case 'NOT_APPLICABLE':
       return {
         kind: 'unusable',
