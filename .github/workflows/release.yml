@@ -26,7 +26,7 @@ jobs:
   # strict guard in `publish` stays as the final check against a race.
   preflight:
     if: ${{ (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -56,7 +56,7 @@ jobs:
   build:
     needs: preflight
     if: ${{ needs.preflight.outputs.current == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     # `actions: read` only serves the manual-dispatch guard that inspects ci.yml
     # runs through `gh run list`.
@@ -136,7 +136,7 @@ jobs:
   publish:
     needs: [preflight, build]
     if: ${{ needs.preflight.outputs.current == 'true' && needs.build.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     # Sampo pushes the release branch and tags, opens or updates the release
     # PR, publishes to npm through Trusted Publishing (OIDC), and the trailing
