@@ -389,6 +389,13 @@ export function createAppStoreRevocationLookupOverBinding(
   }
   return {
     async findRevocation({ signal, ...request }) {
+      if (signal.aborted) {
+        // Never call the binding for a verification already given up on.
+        throw new AppStoreDependencyUnavailableError(
+          'The App Store revocation lookup was aborted.',
+          signal.reason,
+        );
+      }
       const answer = await raceAbort(
         Promise.resolve().then(() => binding.findAppStoreRevocation({
           verificationId: request.verificationId,
@@ -425,12 +432,16 @@ export function createAppStoreRevocationLookupOverBinding(
   };
 }
 
-/** `promise`, or a rejection once `signal` aborts (the binding itself cannot be cancelled). */
+/**
+ * `promise`, or a rejection once `signal` aborts (the binding itself cannot
+ * be cancelled). `promise` keeps its handlers either way, so its own later
+ * rejection is never unhandled.
+ */
 function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) {
-    return Promise.reject(signal.reason);
-  }
   return new Promise<T>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(signal.reason);
+    }
     const onAbort = () => reject(signal.reason);
     signal.addEventListener('abort', onAbort, { once: true });
     promise.then(

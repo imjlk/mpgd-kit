@@ -43,6 +43,10 @@ assertEqual(
   'with reopen the durability rule is claimed',
 );
 
+// A registry that partitions by the lookup's environment passes: every
+// lookup names the record's own environment and bundle.
+await runAppStoreRevocationRegistryConformance({ registry: environmentPartitionedRegistry() });
+
 // A registry that remembers per instance fails the durability rule.
 await assertRejects(
   () =>
@@ -145,6 +149,34 @@ await assertRejectsWith(
   AppStoreDependencyUnavailableError,
   'an aborted verification does not wait for the binding',
 );
+const callsBefore = requests.length;
+await assertRejectsWith(
+  () => lookup.findRevocation({ ...request, signal: aborted.signal }),
+  AppStoreDependencyUnavailableError,
+  'an aborted verification is refused again',
+);
+assertEqual(requests.length, callsBefore, 'an aborted verification never calls the binding');
+const unhandled: unknown[] = [];
+const onUnhandled = (reason: unknown) => unhandled.push(reason);
+process.on('unhandledRejection', onUnhandled);
+const late = new AbortController();
+const lateRejection = createAppStoreRevocationLookupOverBinding({
+  findAppStoreRevocation: () =>
+    new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('late')), 5)),
+}).findRevocation({ ...request, signal: late.signal });
+late.abort(new Error('verification timed out'));
+await assertRejectsWith(
+  () => lateRejection,
+  AppStoreDependencyUnavailableError,
+  'an abort while the binding is pending answers unavailable',
+);
+await new Promise((resolve) => setTimeout(resolve, 20));
+process.off('unhandledRejection', onUnhandled);
+assertEqual(
+  unhandled.length,
+  0,
+  'a binding that rejects after the abort leaves no unhandled rejection',
+);
 const slow = new AbortController();
 const pending = createAppStoreRevocationLookupOverBinding({
   findAppStoreRevocation: () => new Promise<never>(() => undefined),
@@ -189,6 +221,25 @@ console.log(
 
 function answering(answer: AppStoreRevocationLookupAnswer): AppStoreRevocationLookupBinding {
   return { findAppStoreRevocation: async () => answer };
+}
+
+function environmentPartitionedRegistry(): AppStoreRevocationRegistry {
+  const partitions = new Map<string, AppStoreRevocationRegistry>();
+  const partition = (environment: string, bundleId: string) => {
+    const key = `${environment}|${bundleId}`;
+    const existing = partitions.get(key);
+    if (existing !== undefined) {
+      return existing;
+    }
+    const created = createInMemoryAppStoreRevocationRegistry();
+    partitions.set(key, created);
+    return created;
+  };
+  return {
+    findRevocation: (input) => partition(input.environment, input.bundleId).findRevocation(input),
+    recordRevocation: (input) =>
+      partition(input.record.environment, input.record.bundleId).recordRevocation(input),
+  };
 }
 
 function firstWriteWinsRegistry(): AppStoreRevocationRegistry {

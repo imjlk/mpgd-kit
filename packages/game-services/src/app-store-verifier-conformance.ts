@@ -176,8 +176,8 @@ export async function runAppStoreRevocationRegistryConformance(
     for (const [index, reader] of readers.entries()) {
       const kept = await reader.findRevocation({
         verificationId: expected?.verificationId ?? recordFor('absent').verificationId,
-        environment: 'Production',
-        bundleId: 'com.example.game',
+        environment: expected?.environment ?? 'Production',
+        bundleId: expected?.bundleId ?? 'com.example.game',
         transactionId: expected?.transactionId ?? `conformance-${runId}-absent`,
         originalTransactionId: expected?.originalTransactionId ?? `conformance-${runId}-absent`,
         signal,
