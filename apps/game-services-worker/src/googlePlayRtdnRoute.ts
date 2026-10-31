@@ -6,7 +6,10 @@ import {
   verifyGooglePubSubPushToken,
   type GameServicesStore,
   type GoogleIdTokenSigningKeys,
+  type GooglePlayVoidedPurchasesClient,
 } from '@mpgd/game-services';
+
+import { readBoundedText } from './boundedBody.js';
 
 /**
  * Google Play Real-time developer notifications, pushed by a Cloud Pub/Sub
@@ -34,13 +37,17 @@ let isolateSigningKeys: GoogleIdTokenSigningKeys | undefined;
 
 /**
  * Mounts `POST /google-play/rtdn` when either RTDN setting is present. With
- * one of the audience, the service account, or the package name missing, the
- * route answers 503 to every push (fail closed: Pub/Sub keeps the messages
- * and redelivers them once the settings are complete).
+ * one of the audience, the service account, or the package name missing, or
+ * without the Voided Purchases client (the in-Worker Play boundary:
+ * `GAME_SERVICES_GOOGLE_PLAY_PUBLISHER_AUTH`), the route answers 503 to every
+ * push (fail closed: Pub/Sub keeps the messages and redelivers them once the
+ * settings are complete). A push is never revoked without the Voided
+ * Purchases API listing it.
  */
 export function createWorkerGooglePlayRtdnFetchHandler(
   env: GooglePlayRtdnEnv,
   store: GameServicesStore,
+  resolveVoidedPurchases: () => GooglePlayVoidedPurchasesClient | undefined,
 ): ((request: Request) => Promise<Response | undefined>) | undefined {
   const audience = env.GAME_SERVICES_GOOGLE_PLAY_RTDN_AUDIENCE?.trim() ?? '';
   const serviceAccountEmail = env.GAME_SERVICES_GOOGLE_PLAY_RTDN_SERVICE_ACCOUNT?.trim() ?? '';
@@ -56,6 +63,21 @@ export function createWorkerGooglePlayRtdnFetchHandler(
     );
     return createGooglePlayRtdnFetchHandler({ configuration: 'incomplete' });
   }
+  let voidedPurchases: GooglePlayVoidedPurchasesClient | undefined;
+  try {
+    voidedPurchases = resolveVoidedPurchases();
+  } catch {
+    // The Play boundary's own settings error; reported where it is built.
+    voidedPurchases = undefined;
+  }
+  if (voidedPurchases === undefined) {
+    console.error(
+      'Google Play RTDN refuses every push: it confirms each void with the Voided Purchases '
+        + 'API, which needs the in-Worker Play boundary (GAME_SERVICES_GOOGLE_PLAY_PACKAGE_NAME '
+        + 'with GAME_SERVICES_GOOGLE_PLAY_PUBLISHER_AUTH).',
+    );
+    return createGooglePlayRtdnFetchHandler({ configuration: 'incomplete' });
+  }
   isolateSigningKeys ??= createGoogleIdTokenSigningKeys();
   return createGooglePlayRtdnFetchHandler({
     store,
@@ -63,6 +85,7 @@ export function createWorkerGooglePlayRtdnFetchHandler(
     audience,
     serviceAccountEmail,
     keys: isolateSigningKeys,
+    voidedPurchases,
   });
 }
 
@@ -75,6 +98,8 @@ export type GooglePlayRtdnFetchHandlerInput =
       readonly audience: string;
       readonly serviceAccountEmail: string;
       readonly keys: GoogleIdTokenSigningKeys;
+      /** The sweep's Voided Purchases API client: every void is confirmed with it. */
+      readonly voidedPurchases: GooglePlayVoidedPurchasesClient;
       /** Milliseconds since the epoch. */
       readonly now?: () => number;
       readonly unmatchedVoidRetryMs?: number;
@@ -136,7 +161,12 @@ export function createGooglePlayRtdnFetchHandler(
       const outcome = await handleGooglePlayDeveloperNotification({
         store: input.store,
         packageName: input.packageName,
+        voidedPurchases: input.voidedPurchases,
         body,
+        // An unwrapped push (payload unwrapping with "write metadata")
+        // carries its message id only in this header.
+        messageId: request.headers.get('x-goog-pubsub-message-id'),
+        signal: AbortSignal.timeout(lookupTimeoutMs),
         now: () => new Date(now()).toISOString(),
         ...(input.unmatchedVoidRetryMs === undefined
           ? {}
@@ -149,7 +179,9 @@ export function createGooglePlayRtdnFetchHandler(
       const orderId = 'orderId' in outcome ? (outcome.orderId ?? '-') : '-';
       const log = outcome.status === 'conflict' || outcome.status === 'rejected'
         ? console.error
-        : console.log;
+        : outcome.status === 'retry'
+          ? console.warn
+          : console.log;
       log('Google Play RTDN', outcome.status, outcome.messageId ?? '-', detail, orderId);
       return json(outcome, googlePlayDeveloperNotificationHttpStatus(outcome));
     } catch (error) {
@@ -166,38 +198,11 @@ export function createGooglePlayRtdnFetchHandler(
 /** RTDN messages are a few hundred bytes; the envelope and base64 add little. */
 const maxBodyBytes = 64 * 1024;
 const keyTimeoutMs = 10_000;
+/** The Voided Purchases API lookup (two pages at most); Pub/Sub's push deadline is longer. */
+const lookupTimeoutMs = 15_000;
 
 function matchesPath(pathname: string): boolean {
   return pathname === googlePlayRtdnPath || pathname === `${googlePlayRtdnPath}/`;
-}
-
-/** The body as text, or undefined once it passes `limit` bytes (chunked bodies included). */
-async function readBoundedText(request: Request, limit: number): Promise<string | undefined> {
-  const reader = request.body?.getReader();
-  if (reader === undefined) {
-    return '';
-  }
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  for (;;) {
-    const next = await reader.read();
-    if (next.done) {
-      break;
-    }
-    size += next.value.byteLength;
-    if (size > limit) {
-      await reader.cancel().catch(() => undefined);
-      return undefined;
-    }
-    chunks.push(next.value);
-  }
-  const bytes = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return new TextDecoder().decode(bytes);
 }
 
 function json(body: unknown, status: number, headers: Record<string, string> = {}): Response {

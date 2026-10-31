@@ -12,7 +12,11 @@ import {
   verifyGooglePubSubPushToken,
   type GoogleIdTokenSigningKeys,
 } from './google-play-rtdn.js';
-import { sweepGooglePlayVoidedPurchases } from './google-play-store-server.js';
+import {
+  sweepGooglePlayVoidedPurchases,
+  type GooglePlayVoidedPurchase,
+  type GooglePlayVoidedPurchasesClient,
+} from './google-play-store-server.js';
 import { createInMemoryGameServicesStore, type GameServicesStore } from './server.js';
 
 const packageName = 'com.example.game';
@@ -314,47 +318,137 @@ const keys = fakeKeys({ 'google-key-1': googleKey.publicJwk });
     }),
     { status: 'rejected', reason: 'GOOGLE_PLAY_RTDN_NOTIFICATION_INVALID', messageId: 'm' },
   );
+  const unwrapped = decodeGooglePlayDeveloperNotificationPush(
+    { version: '1.0', packageName, eventTimeMillis: '1761868800000', testNotification: {} },
+    { messageId: 'header-id' },
+  );
+  assert.equal(unwrapped.status, 'decoded', 'an unwrapped push is the notification itself');
+  assert.equal(unwrapped.messageId, 'header-id');
+  assert.equal(
+    decodeGooglePlayDeveloperNotificationPush({ packageName, testNotification: {} }).status,
+    'decoded',
+    'without the metadata header too',
+  );
+  assert.equal(
+    decodeGooglePlayDeveloperNotificationPush(
+      { packageName, testNotification: {} },
+      { messageId: 'bad id with spaces' },
+    ).messageId,
+    undefined,
+    'a header that is not a message id is dropped',
+  );
+  assert.equal(
+    decodeGooglePlayDeveloperNotificationPush({ message: 'x', packageName }).status,
+    'rejected',
+    'a body with a message field is never read as unwrapped',
+  );
 }
 
 // --- Notifications against the ledger -------------------------------------------
 {
   const store = createInMemoryGameServicesStore();
   const grant = await grantToken(store, 'voided-token');
-  const handle = (notification: Record<string, unknown>, now = nowMs) =>
+  // The Voided Purchases API as the sweep reads it: entries by token, with
+  // the time Google recorded each void (the API filters on that).
+  const listed = new Map<string, GooglePlayVoidedPurchase & { readonly recordedAt: number }>();
+  const lookups: { startTimeMillis: number; endTimeMillis: number; pageToken?: string }[] = [];
+  let apiDown = false;
+  let pad = 0;
+  const voidedPurchases: GooglePlayVoidedPurchasesClient = {
+    async listVoidedPurchases(input) {
+      lookups.push({
+        startTimeMillis: input.startTimeMillis,
+        endTimeMillis: input.endTimeMillis,
+        ...(input.pageToken === undefined ? {} : { pageToken: input.pageToken }),
+      });
+      if (apiDown) {
+        throw new Error('Google Play Publisher request failed (HTTP 429).');
+      }
+      const inWindow = [...listed.values()]
+        .filter((entry) =>
+          input.startTimeMillis <= entry.recordedAt && entry.recordedAt <= input.endTimeMillis,
+        )
+        .map(({ recordedAt: _recordedAt, ...entry }) => entry);
+      // `pad` other voids fill the first page, so the match is on the second.
+      const filler = Array.from({ length: pad }, (_, index) => ({ purchaseToken: `other-${index}` }));
+      return input.pageToken === undefined && pad > 0
+        ? { voidedPurchases: filler, nextPageToken: 'page-2' }
+        : { voidedPurchases: inWindow };
+    },
+  };
+  const list = (purchaseToken: string, extra: Partial<GooglePlayVoidedPurchase> = {}) => {
+    listed.set(purchaseToken, {
+      purchaseToken,
+      orderId: `GPA.${purchaseToken}`,
+      voidedTimeMillis: String(nowMs - 60_000),
+      voidedSource: 1,
+      voidedReason: 7,
+      recordedAt: nowMs - 30_000,
+      ...extra,
+    });
+  };
+  const handle = (
+    notification: Record<string, unknown>,
+    options: { readonly now?: number; readonly body?: unknown; readonly messageId?: string } = {},
+  ) =>
     handleGooglePlayDeveloperNotification({
       store,
       packageName,
-      body: push({
+      voidedPurchases,
+      body: options.body ?? push({
         version: '1.0',
         packageName,
         eventTimeMillis: String(nowMs - 5_000),
         ...notification,
       }),
-      now: () => new Date(now).toISOString(),
+      ...(options.messageId === undefined ? {} : { messageId: options.messageId }),
+      signal: new AbortController().signal,
+      now: () => new Date(options.now ?? nowMs).toISOString(),
     });
   const voided = (purchaseToken: string, extra: Record<string, unknown> = {}) => ({
     voidedPurchaseNotification: {
       purchaseToken,
-      orderId: 'GPA.1234-5678',
+      orderId: `GPA.${purchaseToken}`,
       productType: 2,
       refundType: 1,
       ...extra,
     },
   });
 
+  // A push alone never revokes: the void must be listed by Google.
+  const forged = await handle(voided('voided-token'));
+  assert.deepEqual(forged, {
+    status: 'retry',
+    reason: 'GOOGLE_PLAY_RTDN_VOID_NOT_LISTED',
+    messageId: 'message-1',
+    orderId: 'GPA.voided-token',
+  });
+  assert.equal(googlePlayDeveloperNotificationHttpStatus(forged), 503);
+  assert.equal((await findEntitlementRevocationsChunked(store, [grant.ledgerEntryId])).length, 0);
+  assert.deepEqual(
+    lookups.at(-1),
+    { startTimeMillis: nowMs - 5_000 - 15 * 60_000, endTimeMillis: nowMs },
+    'one lookup in a window around the event time, up to now',
+  );
+  const notListedLate = await handle(voided('voided-token'), { now: nowMs + 3_600_000 });
+  assert.equal(notListedLate.status, 'ignored', 'past the bound a void not listed is acknowledged');
+
+  list('voided-token');
   const revoked = await handle(voided('voided-token'));
   assert.equal(revoked.status, 'revoked');
   assert.equal(revoked.status === 'revoked' && revoked.alreadyProcessed, false);
-  assert.equal(revoked.status === 'revoked' && revoked.orderId, 'GPA.1234-5678');
+  assert.equal(revoked.status === 'revoked' && revoked.orderId, 'GPA.voided-token');
   assert.equal(googlePlayDeveloperNotificationHttpStatus(revoked), 200);
   const [revocation] = await findEntitlementRevocationsChunked(store, [grant.ledgerEntryId]);
-  assert.equal(revocation?.reason, 'voided');
+  assert.equal(revocation?.reason, 'chargeback', 'the listed voidedReason (7) is kept');
   assert.equal(
     revocation?.revokedAt,
-    new Date(nowMs - 5_000).toISOString(),
-    'revoked at the event time',
+    new Date(nowMs - 60_000).toISOString(),
+    'at voidedTimeMillis',
   );
-  assert.equal(revocation?.payload.googlePlayOrderId, 'GPA.1234-5678');
+  assert.equal(revocation?.payload.googlePlayVoidedSource, 1);
+  assert.equal(revocation?.payload.googlePlayVoidedReason, 7);
+  assert.equal(revocation?.payload.googlePlayOrderId, 'GPA.voided-token');
 
   const again = await handle(voided('voided-token'));
   assert.equal(
@@ -369,15 +463,7 @@ const keys = fakeKeys({ 'google-key-1': googleKey.publicJwk });
 
   // The sweep reads the same void later: the RTDN entry answers it.
   const sweep = await sweepGooglePlayVoidedPurchases({
-    client: {
-      async listVoidedPurchases() {
-        return {
-          voidedPurchases: [
-            { purchaseToken: 'voided-token', orderId: 'GPA.1234-5678', voidedReason: 1 },
-          ],
-        };
-      },
-    },
+    client: voidedPurchases,
     store,
     packageName,
     startTimeMillis: nowMs - 3_600_000,
@@ -387,35 +473,71 @@ const keys = fakeKeys({ 'google-key-1': googleKey.publicJwk });
   });
   assert.equal(sweep.revoked, 0);
   assert.equal(sweep.alreadyProcessed, 1, 'a sweep after the RTDN is a no-op');
-  assert.equal((await findEntitlementRevocationsChunked(store, [grant.ledgerEntryId])).length, 1);
+  const [afterSweep, ...extra] = await findEntitlementRevocationsChunked(store, [
+    grant.ledgerEntryId,
+  ]);
+  assert.equal(extra.length, 0);
+  assert.deepEqual(afterSweep, revocation, 'the entry is the one the sweep would have written');
 
-  // An unknown token is redelivered for an hour after the event, then acknowledged.
+  // A lookup failure (quota, outage) is redelivered, never revoked unconfirmed.
+  apiDown = true;
+  const down = await handle(voided('voided-token'));
+  assert.equal(down.status, 'retry');
+  assert.equal(down.status === 'retry' && down.reason, 'GOOGLE_PLAY_RTDN_VOIDED_LOOKUP_FAILED');
+  apiDown = false;
+
+  // Listed, but the grant is not on this ledger yet: redelivered for an hour.
+  list('not-granted-yet');
   const unknown = await handle(voided('not-granted-yet'));
   assert.equal(unknown.status, 'retry');
+  assert.equal(unknown.status === 'retry' && unknown.reason, 'GOOGLE_PLAY_RTDN_GRANT_NOT_FOUND');
   assert.equal(googlePlayDeveloperNotificationHttpStatus(unknown), 503);
-  const late = await handle(voided('not-granted-yet'), nowMs + 3_600_000);
-  assert.deepEqual(late, {
-    status: 'ignored',
-    reason: 'GOOGLE_PLAY_RTDN_GRANT_NOT_FOUND',
-    messageId: 'message-1',
-    orderId: 'GPA.1234-5678',
-  });
-  const noEventTime = await handleGooglePlayDeveloperNotification({
-    store,
-    packageName,
-    body: push({ packageName, ...voided('not-granted-yet') }),
-  });
+  const late = await handle(voided('not-granted-yet'), { now: nowMs + 3_600_000 });
+  assert.equal(late.status, 'ignored', 'then acknowledged');
+  const noEventTime = await handle({}, { body: push({ packageName, ...voided('never-listed') }) });
   assert.equal(
     noEventTime.status,
     'ignored',
     'without an event time there is no bound: acknowledge',
   );
-  // The grant shows up while Pub/Sub redelivers: the redelivery revokes it.
   const lateGrant = await grantToken(store, 'not-granted-yet');
   const redelivered = await handle(voided('not-granted-yet'));
-  assert.equal(redelivered.status, 'revoked');
+  assert.equal(redelivered.status, 'revoked', 'the grant shows up while Pub/Sub redelivers');
   assert.equal(
     (await findEntitlementRevocationsChunked(store, [lateGrant.ledgerEntryId])).length,
+    1,
+  );
+
+  // A busy window: the match on the second page is found.
+  const paged = await grantToken(store, 'paged-token');
+  list('paged-token');
+  pad = 1000;
+  const lookupsBefore = lookups.length;
+  assert.equal((await handle(voided('paged-token'))).status, 'revoked');
+  assert.equal(lookups.length - lookupsBefore, 2, 'two pages, two queries');
+  assert.equal(lookups.at(-1)?.pageToken, 'page-2');
+  pad = 0;
+  assert.equal((await findEntitlementRevocationsChunked(store, [paged.ledgerEntryId])).length, 1);
+
+  // An unwrapped push (payload unwrapping): the notification is the body.
+  const unwrappedGrant = await grantToken(store, 'unwrapped-token');
+  list('unwrapped-token');
+  const unwrapped = await handle(
+    {},
+    {
+      body: {
+        version: '1.0',
+        packageName,
+        eventTimeMillis: String(nowMs - 5_000),
+        ...voided('unwrapped-token'),
+      },
+      messageId: 'header-message-9',
+    },
+  );
+  assert.equal(unwrapped.status, 'revoked');
+  assert.equal(unwrapped.messageId, 'header-message-9', 'the id comes from the header');
+  assert.equal(
+    (await findEntitlementRevocationsChunked(store, [unwrappedGrant.ledgerEntryId])).length,
     1,
   );
 
@@ -425,6 +547,8 @@ const keys = fakeKeys({ 'google-key-1': googleKey.publicJwk });
     return 'reason' in outcome ? outcome.reason : outcome.status;
   };
   const kept = await grantToken(store, 'kept-token');
+  list('kept-token');
+  const lookupsBeforeIgnored = lookups.length;
   assert.equal(
     await reasonOf(voided('kept-token', { refundType: 2 })),
     'GOOGLE_PLAY_RTDN_PARTIAL_REFUND',
@@ -442,7 +566,6 @@ const keys = fakeKeys({ 'google-key-1': googleKey.publicJwk });
     await reasonOf(voided('kept-token', { refundType: 9 })),
     'GOOGLE_PLAY_RTDN_REFUND_TYPE_UNKNOWN',
   );
-  assert.equal((await findEntitlementRevocationsChunked(store, [kept.ledgerEntryId])).length, 0);
   assert.equal(await reasonOf({ testNotification: { version: '1.0' } }), 'GOOGLE_PLAY_RTDN_TEST');
   assert.equal(
     await reasonOf({
@@ -464,22 +587,20 @@ const keys = fakeKeys({ 'google-key-1': googleKey.publicJwk });
     await reasonOf({ voidedPurchaseNotification: { orderId: 'GPA.no-token', productType: 2 } }),
     'GOOGLE_PLAY_RTDN_PURCHASE_TOKEN_MISSING',
   );
-  const foreign = await handleGooglePlayDeveloperNotification({
-    store,
-    packageName,
-    body: push({ packageName: 'com.other.game', ...voided('kept-token') }),
-  });
+  const foreign = await handle(
+    {},
+    {
+      body: push({ packageName: 'com.other.game', ...voided('kept-token') }),
+    },
+  );
   assert.deepEqual(foreign, {
     status: 'ignored',
     reason: 'GOOGLE_PLAY_RTDN_PACKAGE_MISMATCH',
     messageId: 'message-1',
   });
+  assert.equal(lookups.length, lookupsBeforeIgnored, 'nothing ignored spends API quota');
   assert.equal((await findEntitlementRevocationsChunked(store, [kept.ledgerEntryId])).length, 0);
-  const malformed = await handleGooglePlayDeveloperNotification({
-    store,
-    packageName,
-    body: { message: {} },
-  });
+  const malformed = await handle({}, { body: { message: {} } });
   assert.equal(malformed.status, 'rejected');
   assert.equal(
     googlePlayDeveloperNotificationHttpStatus(malformed),
@@ -490,22 +611,20 @@ const keys = fakeKeys({ 'google-key-1': googleKey.publicJwk });
     handleGooglePlayDeveloperNotification({
       store,
       packageName,
+      voidedPurchases,
       body: {},
+      signal: new AbortController().signal,
       unmatchedVoidRetryMs: -1,
     }),
     RangeError,
   );
 
   // The sweep first, the RTDN second: the RTDN answers the sweep's entry.
+  listed.delete('kept-token');
   const swept = await grantToken(store, 'swept-token');
+  list('swept-token', { voidedReason: 1 });
   const sweptFirst = await sweepGooglePlayVoidedPurchases({
-    client: {
-      async listVoidedPurchases() {
-        return {
-          voidedPurchases: [{ purchaseToken: 'swept-token', voidedReason: 7 }],
-        };
-      },
-    },
+    client: voidedPurchases,
     store,
     packageName,
     startTimeMillis: nowMs - 3_600_000,
@@ -516,26 +635,23 @@ const keys = fakeKeys({ 'google-key-1': googleKey.publicJwk });
   assert.equal(sweptFirst.revoked, 1);
   const rtdnSecond = await handle(voided('swept-token'));
   assert.equal(rtdnSecond.status === 'revoked' && rtdnSecond.alreadyProcessed, true);
-  const [sweptRevocation, ...more] = await findEntitlementRevocationsChunked(store, [
-    swept.ledgerEntryId,
-  ]);
-  assert.equal(more.length, 0);
-  assert.equal(sweptRevocation?.reason, 'chargeback', 'the sweep\u2019s reason is kept');
+  assert.equal((await findEntitlementRevocationsChunked(store, [swept.ledgerEntryId])).length, 1);
 
-  // A far-future event time never dates the revocation ahead of the clock.
-  const future = await grantToken(store, 'future-token');
-  await handleGooglePlayDeveloperNotification({
-    store,
-    packageName,
-    body: push({
-      packageName,
-      eventTimeMillis: String(nowMs + 86_400_000),
-      ...voided('future-token'),
-    }),
-    now: () => new Date(nowMs).toISOString(),
-  });
-  const [futureRevocation] = await findEntitlementRevocationsChunked(store, [future.ledgerEntryId]);
-  assert.equal(futureRevocation?.revokedAt, new Date(nowMs).toISOString());
+  // A far-future event time: the lookup window still ends at now.
+  const lookupsBeforeFuture = lookups.length;
+  await handle(
+    {},
+    {
+      body: push({
+        packageName,
+        eventTimeMillis: String(nowMs + 86_400_000),
+        ...voided('kept-token'),
+      }),
+    },
+  );
+  assert.deepEqual(lookups.slice(lookupsBeforeFuture), [
+    { startTimeMillis: nowMs - 15 * 60_000, endTimeMillis: nowMs },
+  ]);
 }
 
 console.log('Google Play RTDN tests passed.');

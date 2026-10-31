@@ -2,6 +2,7 @@ import { Point, verify as verifySecp256k1 } from '@noble/secp256k1';
 
 import type { AdPlacementEntry } from '@mpgd/catalog';
 
+import { decodeBase64, decodeBase64Url } from './base64.js';
 import type {
   EvidenceVerificationDecision,
   GameServicesEvidenceVerifier,
@@ -162,7 +163,13 @@ export async function importAdMobSsvPublicKey(
 ): Promise<AdMobSsvPublicKey> {
   requireNonEmptyString(base64Spki, 'base64Spki');
 
-  const spki = decodeBase64(base64Spki);
+  // ASCII whitespace is dropped, as atob's forgiving decode always did.
+  const spki = decodeBase64(base64Spki.replace(/[\t\n\f\r ]/gu, ''));
+
+  if (spki === undefined) {
+    throw new Error('base64Spki must be base64.');
+  }
+
   const parsed = parseAdMobSsvSubjectPublicKeyInfo(spki);
 
   if (parsed === undefined) {
@@ -809,38 +816,6 @@ function readGlobalSubtleCrypto(): SubtleCrypto {
   }
 
   return subtle;
-}
-
-function decodeBase64(input: string): Uint8Array<ArrayBuffer> {
-  const decoded = atob(input);
-  const output = new Uint8Array(decoded.length);
-
-  for (let index = 0; index < decoded.length; index += 1) {
-    output[index] = decoded.charCodeAt(index);
-  }
-
-  return output;
-}
-
-function decodeBase64Url(input: string): Uint8Array<ArrayBuffer> | undefined {
-  if (!/^[A-Za-z0-9_-]+$/.test(input)) {
-    return undefined;
-  }
-
-  const remainder = input.length % 4;
-
-  if (remainder === 1) {
-    return undefined;
-  }
-
-  const base64 = input.replaceAll('-', '+').replaceAll('_', '/')
-    + '='.repeat((4 - remainder) % 4);
-
-  try {
-    return decodeBase64(base64);
-  } catch {
-    return undefined;
-  }
 }
 
 function readParameter(parameters: URLSearchParams, name: string): string {

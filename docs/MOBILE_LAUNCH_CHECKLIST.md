@@ -208,8 +208,11 @@ production` prints what it lacks and fails on contradictions
       `GAME_SERVICES_GOOGLE_PLAY_RTDN_AUDIENCE` and
       `GAME_SERVICES_GOOGLE_PLAY_RTDN_SERVICE_ACCOUNT` to the subscription's
       ([setup](./CLOUDFLARE_WORKER_DEPLOY.md#google-play-real-time-developer-notifications)).
-      Keep the voided purchases sweep on: RTDN is the fast path, the sweep
-      the backstop for a lost push.
+      It needs the in-Worker Play boundary above: each void is confirmed
+      with the Voided Purchases API before it is revoked (one query per
+      voided notification, from the same daily quota as the sweep). Keep the
+      voided purchases sweep on: RTDN is the fast path, the sweep the
+      backstop for a lost push.
 
 ## 5. Identity and account deletion
 

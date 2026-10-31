@@ -841,20 +841,30 @@ order id, to be revoked by hand.
 The Worker mounts `POST /google-play/rtdn` for Google Play Real-time
 developer notifications (RTDN) delivered by a Cloud Pub/Sub push
 subscription. A `voidedPurchaseNotification` for a fully refunded or voided
-one-time product revokes the grant within seconds of Google's push, through
-the same `revokeGooglePlayVoidedPurchase` path and key as the sweep, so a
-redelivered push and the sweep's later read of the same token both answer
-the first `revoke` entry (`alreadyProcessed`).
+one-time product is a trigger, not proof: the Worker looks the purchase
+token up with the Voided Purchases API (the sweep's client, one query over a
+window from 15 minutes before the notification's event time to now) and
+revokes the grant with the listed entry. The revocation goes through the
+same `revokeGooglePlayVoidedPurchase` path and key as the sweep and records
+the same reason (`chargeback` for `voidedReason` 7), source, and void time;
+a redelivered push and the sweep's later read of the same token both answer
+the first `revoke` entry (`alreadyProcessed`). A message published to the
+topic by anyone but Google cannot revoke a purchase Google did not void.
 
 **The sweep stays required.** Pub/Sub delivers at least once and can drop a
 message for good (a wrong push endpoint or audience past the subscription's
 retention, a topic that Play Console stopped publishing to, a deleted
 subscription). Keep `MPGD_GOOGLE_PLAY_VOIDED_SWEEP_MINUTES` on; RTDN is the
-fast path, the sweep is the backstop. A void whose RTDN arrived first is
-recorded with reason `voided` and the push's event time: the RTDN carries no
-`voidedReason`, so a chargeback revoked this way is not labelled
-`chargeback`, and the sweep's later read does not relabel it (the ledger is
-append-only).
+fast path, the sweep is the backstop.
+
+**Quota.** Google allows 6,000 Voided Purchases API queries a day and 30 in
+any 30 seconds per package, shared by the sweep and this route
+([Voided Purchases API](https://developers.google.com/android-publisher/voided-purchases)).
+A voided notification costs one query (a second only when more than 1,000
+voids share its window); every other kind costs none. The sweep uses about
+24 a day once caught up. A void Google does not list yet is redelivered with
+the subscription's retry policy (10 to 600 seconds below), about ten
+queries over its hour; a `429` is a lookup failure, answered `503`.
 
 ```toml
 [vars]
@@ -864,14 +874,14 @@ GAME_SERVICES_GOOGLE_PLAY_RTDN_AUDIENCE = "https://<worker-host>/google-play/rtd
 GAME_SERVICES_GOOGLE_PLAY_RTDN_SERVICE_ACCOUNT = "play-rtdn-push@<project-id>.iam.gserviceaccount.com"
 ```
 
-Either RTDN setting mounts the route. With one of the three missing, the
+Either RTDN setting mounts the route. With one of the three missing, or
+without the in-Worker Play boundary (`GAME_SERVICES_GOOGLE_PLAY_PACKAGE_NAME`
+with `GAME_SERVICES_GOOGLE_PLAY_PUBLISHER_AUTH` and the account binding or
+the unbound opt-in), whose Voided Purchases client confirms each void, the
 route answers `503` to every push (logged at startup), so Pub/Sub keeps the
-messages until the settings are complete. The route only finds grants the
-in-Worker Play boundary verified (the same rule as the sweep), so it runs
-next to that boundary's settings: `GAME_SERVICES_GOOGLE_PLAY_PACKAGE_NAME`
-requires `GAME_SERVICES_GOOGLE_PLAY_PUBLISHER_AUTH` and the account binding
-(or the unbound opt-in), and without them the purchase routes answer `500`.
-It revokes in the Worker's store: D1 in production.
+messages until the settings are complete. It never revokes unconfirmed. Like
+the sweep, it only finds grants that boundary verified, and it revokes in
+the Worker's store: D1 in production.
 
 **Authentication.** Every push must carry the OIDC token an authenticated
 push subscription sends (`Authorization: Bearer <JWT>`). The Worker checks
@@ -885,8 +895,16 @@ response's `max-age`), the issuer (`https://accounts.google.com` or
 The email check matters: any Google service account can mint a token for any
 audience. A push that fails is answered `401` and not acknowledged; a Google
 key outage is `503`. There is no shared-secret fallback. The token proves the
-push came from your subscription, not who published to the topic: keep
-publish rights on the topic to Google Play's service account.
+push came from your subscription, not who published to the topic; the Voided
+Purchases API lookup is what makes a revocation Google's.
+
+**Push formats.** Both are read: the default wrapped body
+(`{ "message": { "data": "<base64 DeveloperNotification>", "messageId": … },
+"subscription": … }`) and an unwrapped one (payload unwrapping on: the body is
+the `DeveloperNotification` JSON itself, with a top-level `packageName`).
+An unwrapped push carries its message id only in the `x-goog-pubsub-message-id`
+header, sent when "write metadata" is on
+([Payload unwrapping](https://cloud.google.com/pubsub/docs/payload-unwrapping)).
 
 **Responses.** Pub/Sub acknowledges a `102`, `200`, `201`, `202`, or `204` and
 redelivers on anything else
@@ -894,9 +912,10 @@ redelivers on anything else
 
 | Push | Answer |
 | --- | --- |
-| Voided one-time product, full refund (`refundType` 1), grant found | `200 revoked` (`alreadyProcessed` on a repeat) |
-| Voided, grant not on this ledger, event less than an hour old | `503` (redelivered: a purchase may still be writing its grant) |
-| Voided, grant not found after that hour, or no event time | `200 ignored` |
+| Voided one-time product, full refund (`refundType` 1), listed by the Voided Purchases API, grant found | `200 revoked` (`alreadyProcessed` on a repeat) |
+| Voided, not listed yet, or grant not on this ledger, event less than an hour old | `503` (redelivered: Google lists voids with some lag, and a purchase may still be writing its grant) |
+| Voided, not listed or grant not found after that hour, or no event time | `200 ignored`; the sweep reads the void again |
+| The Voided Purchases API lookup failed (outage, quota) | `503` |
 | Quantity-based partial refund (`refundType` 2) | `200 ignored`, logged with the order id; the grant stays, as with the sweep |
 | Voided subscription (`productType` 1), `subscriptionNotification` | `200 ignored`: the kit sells no Play subscriptions |
 | `testNotification`, `oneTimeProductNotification`, other kinds | `200 ignored`, logged: purchases are granted only when the game verifies them |
@@ -924,9 +943,9 @@ Console; see
    (`service-<project-number>@gcp-sa-pubsub.iam.gserviceaccount.com`) mint
    tokens for it (`roles/iam.serviceAccountTokenCreator`).
 4. Create the push subscription with authentication and an explicit
-   audience, keeping the default wrapped payload (do not enable payload
-   unwrapping), and an exponential retry policy so a `503` waits between
-   redeliveries:
+   audience (wrapped is the default; payload unwrapping works too, with
+   "write metadata" for the message id in logs), and an exponential retry
+   policy so a `503` waits between redeliveries:
 
    ```sh
    gcloud pubsub subscriptions create play-rtdn-worker \

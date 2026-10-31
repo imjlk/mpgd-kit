@@ -258,9 +258,10 @@ head_sampling_rate = 1
 # Google Play real-time developer notifications (refunds within seconds; the
 # sweep above stays on as the backstop): mounts POST /google-play/rtdn for an
 # authenticated Cloud Pub/Sub push subscription. Every push's OIDC token is
-# verified against Google's keys, this audience, and this service account;
-# with either set and the other (or GAME_SERVICES_GOOGLE_PLAY_PACKAGE_NAME)
-# missing, the route answers 503. See
+# verified against Google's keys, this audience, and this service account, and
+# every void is confirmed with the Voided Purchases API before it is revoked;
+# with either set and the other, or the in-Worker Play boundary above, missing,
+# the route answers 503. See
 # docs/CLOUDFLARE_WORKER_DEPLOY.md#google-play-real-time-developer-notifications.
 # Under [vars]:
 # GAME_SERVICES_GOOGLE_PLAY_RTDN_AUDIENCE = "https://<worker-host>/google-play/rtdn"

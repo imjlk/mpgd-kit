@@ -464,7 +464,11 @@ function buildWorkerFetchHandler(
     : createAdMobSsvCallbackFetchHandler(admobConfig);
   const notificationsFetch = createNotificationsFetchHandler(env, corsHeaders);
   const appStoreNotificationsFetch = createWorkerAppStoreNotificationsFetchHandler(env, httpStore);
-  const googlePlayRtdnFetch = createWorkerGooglePlayRtdnFetchHandler(env, httpStore);
+  const googlePlayRtdnFetch = createWorkerGooglePlayRtdnFetchHandler(
+    env,
+    httpStore,
+    () => createWorkerStoreServerDependencies(env).googlePlay?.voidedPurchases,
+  );
   const accountDeletionFetch = createAccountDeletionFetchHandler({
     // The deletion confirmation travels in its own header (browser targets preflight it).
     corsHeaders: {

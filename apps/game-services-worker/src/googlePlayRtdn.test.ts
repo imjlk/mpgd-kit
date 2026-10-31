@@ -6,6 +6,7 @@ import {
   findEntitlementRevocationsChunked,
   GoogleIdTokenKeysUnavailableError,
   type GoogleIdTokenSigningKeys,
+  type GooglePlayVoidedPurchase,
   type GooglePlayVoidedPurchasesClient,
 } from '@mpgd/game-services';
 import { Miniflare } from 'miniflare';
@@ -48,12 +49,43 @@ try {
     },
   };
   const nowMs = Date.now();
+  // The Voided Purchases API the sweep and the RTDN route share: what Google
+  // lists, by when it recorded each void.
+  const listed = new Map<string, GooglePlayVoidedPurchase & { readonly recordedAt: number }>();
+  let apiDown = false;
+  let lookups = 0;
+  const voidedPurchases: GooglePlayVoidedPurchasesClient = {
+    async listVoidedPurchases(input) {
+      lookups += 1;
+      if (apiDown) {
+        throw new Error('Google Play Publisher request failed (HTTP 429).');
+      }
+      return {
+        voidedPurchases: [...listed.values()]
+          .filter((entry) =>
+            input.startTimeMillis <= entry.recordedAt && entry.recordedAt <= input.endTimeMillis,
+          )
+          .map(({ recordedAt: _recordedAt, ...entry }) => entry),
+      };
+    },
+  };
+  const list = (purchaseToken: string, voidedReason = 1) => {
+    listed.set(purchaseToken, {
+      purchaseToken,
+      orderId: `GPA.${purchaseToken}`,
+      voidedTimeMillis: String(nowMs - 1_500),
+      voidedSource: 0,
+      voidedReason,
+      recordedAt: nowMs - 1_000,
+    });
+  };
   const rtdnFetch = createGooglePlayRtdnFetchHandler({
     store,
     packageName,
     audience,
     serviceAccountEmail,
     keys,
+    voidedPurchases,
     now: () => nowMs,
   });
   const token = (claims: Record<string, unknown> = {}) =>
@@ -69,34 +101,52 @@ try {
     });
   const post = async (
     notification: Record<string, unknown> | string,
-    options: { readonly authorization?: string | null; readonly method?: string } = {},
+    options: {
+      readonly authorization?: string | null;
+      readonly method?: string;
+      /** Payload unwrapping with "write metadata": the notification is the body. */
+      readonly unwrappedMessageId?: string;
+    } = {},
   ) => {
     const authorization = options.authorization === undefined
       ? `Bearer ${await token()}`
       : options.authorization;
+    const developerNotification = typeof notification === 'string'
+      ? undefined
+      : {
+          version: '1.0',
+          packageName,
+          eventTimeMillis: String(nowMs - 2_000),
+          ...notification,
+        };
     const body = typeof notification === 'string'
       ? notification
-      : JSON.stringify({
-          message: {
-            data: btoa(
-              JSON.stringify({
-                version: '1.0',
-                packageName,
-                eventTimeMillis: String(nowMs - 2_000),
-                ...notification,
-              }),
-            ),
-            messageId: `message-${Math.random()}`,
-            publishTime: new Date(nowMs).toISOString(),
-          },
-          subscription: 'projects/example-project/subscriptions/play-rtdn',
-        });
+      : options.unwrappedMessageId !== undefined
+        ? JSON.stringify(developerNotification)
+        : JSON.stringify({
+            message: {
+              data: btoa(
+                JSON.stringify({
+                  version: '1.0',
+                  packageName,
+                  eventTimeMillis: String(nowMs - 2_000),
+                  ...notification,
+                }),
+              ),
+              messageId: `message-${Math.random()}`,
+              publishTime: new Date(nowMs).toISOString(),
+            },
+            subscription: 'projects/example-project/subscriptions/play-rtdn',
+          });
     const response = await rtdnFetch(
       new Request(`${baseUrl}${googlePlayRtdnPath}`, {
         method: options.method ?? 'POST',
         headers: {
           'content-type': 'application/json',
           ...(authorization === null ? {} : { authorization }),
+          ...(options.unwrappedMessageId === undefined
+            ? {}
+            : { 'x-goog-pubsub-message-id': options.unwrappedMessageId }),
         },
         ...(options.method === 'GET' ? {} : { body }),
       }),
@@ -148,14 +198,30 @@ try {
 
   // --- A voided purchase revokes the D1 grant -------------------------------------
   const grant = await grantToken('refunded-token');
+  const unconfirmed = await post(voided('refunded-token'));
+  assert.equal(unconfirmed.status, 503, 'a push Google does not list yet is redelivered');
+  assert.equal(unconfirmed.body.reason, 'GOOGLE_PLAY_RTDN_VOID_NOT_LISTED');
+  assert.equal(
+    (await findEntitlementRevocationsChunked(store, [grant.ledgerEntryId])).length,
+    0,
+    'a push alone never revokes',
+  );
+  apiDown = true;
+  const lookupFailed = await post(voided('refunded-token'));
+  assert.equal(lookupFailed.status, 503, 'a Voided Purchases API failure is redelivered');
+  assert.equal(lookupFailed.body.reason, 'GOOGLE_PLAY_RTDN_VOIDED_LOOKUP_FAILED');
+  apiDown = false;
+  list('refunded-token', 7);
   const first = await post(voided('refunded-token'));
   assert.equal(first.status, 200, 'a revocation is acknowledged');
   assert.equal(first.body.status, 'revoked');
   assert.equal(first.body.alreadyProcessed, false);
   const revocations = await findEntitlementRevocationsChunked(store, [grant.ledgerEntryId]);
   assert.equal(revocations.length, 1, 'the D1 ledger holds the revoke entry');
-  assert.equal(revocations[0]?.reason, 'voided');
+  assert.equal(revocations[0]?.reason, 'chargeback', 'the listed voidedReason is recorded');
+  assert.equal(revocations[0]?.revokedAt, new Date(nowMs - 1_500).toISOString());
   assert.equal(revocations[0]?.payload.googlePlayOrderId, 'GPA.refunded-token');
+  assert.equal(revocations[0]?.payload.googlePlayVoidedSource, 0);
   const duplicate = await post(voided('refunded-token'));
   assert.equal(duplicate.status, 200);
   assert.equal(duplicate.body.alreadyProcessed, true, 'a duplicate delivery is idempotent');
@@ -164,23 +230,6 @@ try {
 
   // --- The sweep then reads the same void: a no-op ----------------------------------
   {
-    const voidRecordedAt = nowMs - 1_000;
-    const voidedPurchases: GooglePlayVoidedPurchasesClient = {
-      async listVoidedPurchases(input) {
-        return {
-          voidedPurchases: input.startTimeMillis <= voidRecordedAt && voidRecordedAt <= input.endTimeMillis
-            ? [
-                {
-                  purchaseToken: 'refunded-token',
-                  orderId: 'GPA.refunded-token',
-                  voidedTimeMillis: String(voidRecordedAt),
-                  voidedReason: 1,
-                },
-              ]
-            : [],
-        };
-      },
-    };
     const report = await runScheduledStoreServer(
       { MPGD_STORE: 'd1', DB: db },
       { cron: '* * * * *' },
@@ -204,6 +253,7 @@ try {
   }
 
   // --- A token the ledger does not know yet is redelivered, within a bound -------------
+  list('in-flight-token');
   const unknown = await post(voided('in-flight-token'));
   assert.equal(unknown.status, 503, 'Pub/Sub redelivers while the grant may still be written');
   assert.equal(unknown.body.reason, 'GOOGLE_PLAY_RTDN_GRANT_NOT_FOUND');
@@ -226,8 +276,22 @@ try {
   assert.equal(stale.status, 200, 'a void older than the bound is acknowledged');
   assert.equal(stale.body.status, 'ignored');
 
+  // --- An unwrapped push (payload unwrapping) ------------------------------------------------
+  const unwrappedGrant = await grantToken('unwrapped-token');
+  list('unwrapped-token');
+  const unwrapped = await post(voided('unwrapped-token'), { unwrappedMessageId: '1234567890' });
+  assert.equal(unwrapped.status, 200);
+  assert.equal(unwrapped.body.status, 'revoked', 'the notification as the body is read');
+  assert.equal(unwrapped.body.messageId, '1234567890', 'with the message id header');
+  assert.equal(
+    (await findEntitlementRevocationsChunked(store, [unwrappedGrant.ledgerEntryId])).length,
+    1,
+  );
+
   // --- Everything else is acknowledged ---------------------------------------------------
   const kept = await grantToken('kept-token');
+  list('kept-token');
+  const lookupsBeforeIgnored = lookups;
   for (const notification of [
     { testNotification: { version: '1.0' } },
     {
@@ -250,6 +314,7 @@ try {
     assert.equal(response.body.status, 'ignored', JSON.stringify(response.body));
   }
   assert.equal((await findEntitlementRevocationsChunked(store, [kept.ledgerEntryId])).length, 0);
+  assert.equal(lookups, lookupsBeforeIgnored, 'acknowledged kinds spend no API quota');
   for (const malformed of ['not json', JSON.stringify({ message: { data: '%%%' } }), '{}']) {
     const response = await post(malformed);
     assert.equal(response.status, 200, 'a malformed push is acknowledged, not redelivered forever');
@@ -286,10 +351,30 @@ try {
       503,
       'the package name is required with them',
     );
+    const noVoidedClient = createWorkerFetchHandler({
+      MPGD_STORE: 'd1',
+      DB: db,
+      GAME_SERVICES_GOOGLE_PLAY_PACKAGE_NAME: packageName,
+      GAME_SERVICES_GOOGLE_PLAY_RTDN_AUDIENCE: audience,
+      GAME_SERVICES_GOOGLE_PLAY_RTDN_SERVICE_ACCOUNT: serviceAccountEmail,
+    } satisfies GameServicesWorkerEnv);
+    const unconfirmable = await noVoidedClient(request());
+    assert.equal(unconfirmable.status, 503, 'without the Voided Purchases client it fails closed');
+    assert.deepEqual(await unconfirmable.json(), { error: 'GOOGLE_PLAY_RTDN_NOT_CONFIGURED' });
     const configured = createWorkerFetchHandler({
       MPGD_STORE: 'd1',
       DB: db,
       GAME_SERVICES_GOOGLE_PLAY_PACKAGE_NAME: packageName,
+      GAME_SERVICES_GOOGLE_PLAY_PUBLISHER_AUTH: {
+        async getAccessToken() {
+          throw new Error('no Play call in this test');
+        },
+      },
+      GAME_SERVICES_GOOGLE_PLAY_ACCOUNT_BINDING: {
+        async resolveObfuscatedAccountId() {
+          return null;
+        },
+      },
       GAME_SERVICES_GOOGLE_PLAY_RTDN_AUDIENCE: audience,
       GAME_SERVICES_GOOGLE_PLAY_RTDN_SERVICE_ACCOUNT: serviceAccountEmail,
     } satisfies GameServicesWorkerEnv);

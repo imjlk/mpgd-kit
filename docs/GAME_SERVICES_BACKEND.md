@@ -1208,19 +1208,26 @@ port), a Google issuer, the subscription's audience, its service account
 email with `email_verified`, and `exp`/`iat`
 ([Authenticate push subscriptions](https://cloud.google.com/pubsub/docs/authenticate-push-subscriptions));
 a key outage throws `GoogleIdTokenKeysUnavailableError`.
-`handleGooglePlayDeveloperNotification` decodes the Pub/Sub envelope and its
-base64 `DeveloperNotification`
+`handleGooglePlayDeveloperNotification` decodes the push (the wrapped
+Pub/Sub envelope with its base64 `DeveloperNotification`, or an unwrapped body
+that is the notification itself, its message id passed from the
+`x-goog-pubsub-message-id` header)
 ([RTDN reference](https://developer.android.com/google/play/billing/rtdn-reference)),
-checks `packageName`, and revokes a `voidedPurchaseNotification` of a
-one-time product (`productType` 2) with a full refund (`refundType` 1, or
-absent) through `revokeGooglePlayVoidedPurchase`: the same key as the sweep,
-so either one coming second answers `alreadyProcessed`. The RTDN carries no
-`voidedReason`, so it records `voided` at the notification's
-`eventTimeMillis`. A quantity-based partial refund is ignored, as the sweep
-(which lists full refunds) ignores it. A void for a grant this ledger does
-not hold is `retry` for `unmatchedVoidRetryMs` after its event (1 hour by
-default, at most 6), then `ignored`. Test, subscription, one-time product
-purchase, and other notifications are `ignored`; a malformed message is
+checks `packageName`, and treats a `voidedPurchaseNotification` of a one-time
+product (`productType` 2) with a full refund (`refundType` 1, or absent) as a
+trigger: it looks the token up with the `voidedPurchases` client (the
+sweep's `GooglePlayVoidedPurchasesClient`, one query over a window from 15
+minutes before `eventTimeMillis` to now, a second page only for more than
+1,000 voids) and revokes the listed entry through
+`revokeGooglePlayVoidedPurchase`. The ledger gets what the sweep would
+record (reason, source, void time, key), so either one coming second answers
+`alreadyProcessed`, and a forged push cannot revoke a purchase Google did not
+void. A void not listed yet, or whose grant this ledger does not hold, is
+`retry` for `unmatchedVoidRetryMs` after its event (1 hour by default, at
+most 6), then `ignored`; a lookup failure is `retry`. A quantity-based
+partial refund is ignored without a lookup, as the sweep (which lists full
+refunds) ignores it. Test, subscription, one-time product purchase, and other
+notifications are `ignored` and spend no quota; a malformed message is
 `rejected`. `googlePlayDeveloperNotificationHttpStatus` answers `503` for
 `retry` and `200` for everything else, so Pub/Sub acknowledges what a
 redelivery cannot change. The sweep stays required: a push can be lost. The
