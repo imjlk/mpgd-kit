@@ -2795,10 +2795,31 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         && provider.delivery.sendBatch !== undefined
         && members.length >= (capability.minRecipients ?? 2)
         && !isInsideNotificationHoldWindow(capability.holdWindow, nowMs());
-      const barrier = createNotificationBatchBarrier<NotificationRemoteDeliveryRequest, NotificationRemoteDeliveryAnswer>(
-        members.length,
-        (requests) => flushBulk(provider, requests, calls),
-      );
+      const barrier = createNotificationBatchBarrier<
+        { readonly request: NotificationRemoteDeliveryRequest; readonly gatedAt: number },
+        NotificationRemoteDeliveryAnswer
+      >(members.length, async (items) => {
+        // A recipient whose claim may have run out while the batch gathered
+        // is not sent: another holder may own its row by now. Nothing was
+        // sent, so it waits a moment and is replayed (its own claim settles
+        // only while it still holds the row).
+        const now = nowMs();
+        const fresh = items.filter((item) => now - item.gatedAt < leaseMs / 2);
+        const answers = await flushBulk(provider, fresh.map((item) => item.request), calls);
+        let next = 0;
+        return items.map((item): NotificationRemoteDeliveryAnswer => {
+          if (now - item.gatedAt < leaseMs / 2) {
+            next += 1;
+            return answers[next - 1] ?? { status: 'ambiguous' };
+          }
+          report(
+            new Error('A bulk recipient waited for its batch past half its claim lease; it is not sent now.'),
+            'dispatch.stale',
+            { sendKey: item.request.sendKey, provider: provider.entry.provider, rowKey: item.request.idempotencyKey },
+          );
+          return { status: 'rate-limited', retryAfterSeconds: 1 };
+        });
+      });
       await Promise.all(members.map(async ({ entry, index, row }) => {
         const slot = state[index];
         if (slot === undefined) {
@@ -2822,7 +2843,10 @@ export function createNotificationService(input: CreateNotificationServiceInput)
             }
             // The slot goes back while the batch gathers, so the barrier never waits on a recipient that cannot run.
             release();
-            const answer = await barrier.arrive(deliveryRequestOf(recipient, request, topic, decision, at));
+            const answer = await barrier.arrive({
+              request: deliveryRequestOf(recipient, request, topic, decision, at),
+              gatedAt: at,
+            });
             await limiter.acquire();
             holding = true;
             return answer;
@@ -2896,6 +2920,11 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         ? Math.max(0, Math.floor(options.maxRecipients))
         : Number.POSITIVE_INFINITY,
     };
+    const lookups = {
+      left: typeof options.maxLookups === 'number' && Number.isFinite(options.maxLookups)
+        ? Math.max(0, Math.floor(options.maxLookups))
+        : Number.POSITIVE_INFINITY,
+    };
     const elapsed = input.elapsedMs ?? (() => globalThis.performance.now());
     const startedAt = elapsed();
     // Recipients are prepared concurrently: their takes are made one at a
@@ -2929,6 +2958,12 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       const limiter = createNotificationLimiter(bulkConcurrency);
       await Promise.all(bulk.recipients.slice(start, end).map(async (recipient, offset) => {
         const index = start + offset;
+        // Every recipient's key is read once; past the read budget, none is.
+        if (lookups.left <= 0) {
+          answers[index] = { notAttempted: 'count-budget' };
+          return;
+        }
+        lookups.left -= 1;
         await limiter.acquire();
         try {
           const made = await prepareBulkRecipient(

@@ -141,8 +141,10 @@ export interface GameServicesNotificationsEnv {
   /**
    * Recipients one `deliverNotificationBulk` call attempts at most; the rest
    * answer `not-attempted` (`count-budget`), and the same call retried sends
-   * them. 500 by default: a recipient costs about 20 D1 calls and identity
-   * lookups, so 500 fit under the Workers Paid cap of 10,000 subrequests per
+   * them. 400 by default: an attempt costs about 20 D1 calls and identity
+   * lookups, and the call also reads the keys of up to five times as many
+   * recipients (one D1 read each, for players a retry finds already sent),
+   * so a call stays under the Workers Paid cap of 10,000 subrequests per
    * invocation (as of 2026-02-11).
    */
   readonly MPGD_NOTIFICATIONS_BULK_RECIPIENTS?: string;
@@ -858,13 +860,16 @@ export async function deliverWorkerNotification(env: GameServicesNotificationsEn
 }
 
 /** Recipients one bulk call attempts by default (`MPGD_NOTIFICATIONS_BULK_RECIPIENTS`). */
-export const defaultWorkerNotificationBulkRecipients = 500;
+export const defaultWorkerNotificationBulkRecipients = 400;
+/** Recipients' keys one bulk call reads, per recipient it may attempt. */
+const workerNotificationBulkLookupsPerRecipient = 5;
 
 /**
  * The bulk send a game server or operator tool makes through the service
  * binding (BK1), like `deliverWorkerNotification`: never a fetch route, so
  * no client session can reach it. At most `MPGD_NOTIFICATIONS_BULK_RECIPIENTS`
- * recipients are attempted per call.
+ * recipients are attempted per call, and at most five times as many keys
+ * are read.
  */
 export async function deliverWorkerNotificationBulk(
   env: GameServicesNotificationsEnv,
@@ -875,7 +880,10 @@ export async function deliverWorkerNotificationBulk(
   const maxRecipients = Number.isSafeInteger(asked) && asked >= 1
     ? asked
     : defaultWorkerNotificationBulkRecipients;
-  return readyService(env).deliverBulk(input, { maxRecipients });
+  return readyService(env).deliverBulk(input, {
+    maxRecipients,
+    maxLookups: maxRecipients * workerNotificationBulkLookupsPerRecipient,
+  });
 }
 
 /**

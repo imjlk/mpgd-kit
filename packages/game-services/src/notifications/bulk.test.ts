@@ -93,6 +93,7 @@ async function setup(options: {
   readonly start?: string;
   readonly players?: readonly string[];
   readonly elapsedMs?: () => number;
+  readonly resolve?: (player: string, time: ReturnType<typeof clock>) => Promise<string>;
 }) {
   const time = clock(options.start ?? '2026-11-01T03:00:00Z');
   const store = createInMemoryNotificationStore();
@@ -103,7 +104,8 @@ async function setup(options: {
       { entry: options.entry ?? entry, delivery: options.provider, targets: ['platform-target'] },
     ]),
     catalog: { defaultLocale: 'ko', topicsFor: () => [topic] },
-    resolvePlatformRecipient: ({ player }) => `u-${player}`,
+    resolvePlatformRecipient: ({ player }) =>
+      options.resolve === undefined ? `u-${player}` : options.resolve(player, time),
     now: time.now,
     ...(options.elapsedMs === undefined ? {} : { elapsedMs: options.elapsedMs }),
     onError: (error, context) => {
@@ -437,6 +439,46 @@ const statuses = (result: NotificationBulkDeliveryResult) =>
     statuses(result).map((row) => row[2] ?? row[1]),
     ['delivered', 'delivered', 'delivered', 'delivered', 'time-budget'],
   );
+}
+
+// The read budget bounds the keys one call looks up, in request order.
+{
+  const fake = bulkProvider({ maxRecipients: 10, perRecipientOutcomes: true });
+  const { service } = await setup({ provider: fake.provider, players: players(4) });
+  const result = await service.deliverBulk(bulkInput('event-14', players(4)), { maxLookups: 2 });
+  assert.deepEqual(
+    statuses(result).map((row) => row[2] ?? row[1]),
+    ['delivered', 'delivered', 'count-budget', 'count-budget'],
+  );
+}
+
+// A recipient whose claim may have run out while its batch gathered is not sent with it.
+{
+  const fake = bulkProvider({ maxRecipients: 10, minRecipients: 2, perRecipientOutcomes: true });
+  let p3Reads = 0;
+  const { service, reports } = await setup({
+    provider: fake.provider,
+    players: players(3),
+    resolve: async (player, time) => {
+      if (player === 'p3' && (p3Reads += 1) === 2) {
+        // p1 and p2 have gated and wait for the batch; p3's gate runs 200 s later (the lease is 300 s).
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        time.advance(200);
+      }
+      return `u-${player}`;
+    },
+  });
+  const result = await service.deliverBulk(bulkInput('event-15', players(3)));
+  assert.deepEqual(statuses(result), [
+    ['p1', 'deferred', 'provider-rate-limited'],
+    ['p2', 'deferred', 'provider-rate-limited'],
+    ['p3', 'delivered', undefined],
+  ]);
+  assert.deepEqual(
+    [fake.batches.length, fake.singles.map((request) => request.idempotencyKey)],
+    [0, ['event-15:p3']],
+  );
+  assert.equal(reports.filter((report) => report.startsWith('dispatch.stale: ')).length, 2);
 }
 
 // Malformed bulk sends fail as a whole; the registry checks each bulk capability once.

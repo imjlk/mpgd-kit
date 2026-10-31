@@ -3017,7 +3017,10 @@ announcements and event pushes.
       call. A batch gathers its calls only when it has at least the
       provider's minimum and is outside its hold window; otherwise each
       recipient is sent and settled on its own, so no claim waits past its
-      lease on a queue of single calls. A refused player never reaches the provider and has its own
+      lease on a queue of single calls. A recipient that waited for its
+      batch past half its claim lease is not sent with it (another holder
+      may own its row by now): it answers `rate-limited`, which proves
+      nothing was sent, and is replayed. A refused player never reaches the provider and has its own
       answer. Copy is rendered per recipient by the gate, so the
       server-side locale resolver (open question 4) applies to bulk sends
       wherever it plugs into the gate's content.
@@ -3084,8 +3087,9 @@ announcements and event pushes.
     and 25,000 per app per day (the `rate`: the excess is `not-attempted`).
 - **The game-services Worker.** `deliverNotificationBulk(input)` on the
   service binding, beside `deliverNotification`, is never a fetch route. It
-  attempts at most `MPGD_NOTIFICATIONS_BULK_RECIPIENTS` players a call (500
-  by default) and runs inline. Devvit's backend bridge serves no bulk
+  attempts at most `MPGD_NOTIFICATIONS_BULK_RECIPIENTS` players a call (400
+  by default), reads at most five times as many keys (`maxLookups`), and
+  runs inline. Devvit's backend bridge serves no bulk
   method.
 - **Left to follow-ups.**
   - Due replays of bulk rows (deferred, rate-limited, ambiguous) go one by

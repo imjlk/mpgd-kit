@@ -597,11 +597,12 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   never a client route: one topic to many players through one provider,
   each player a single send with its own key and gate check (see the
   [notifications guide](NOTIFICATIONS.md#bulk-sends)). It attempts at most
-  `MPGD_NOTIFICATIONS_BULK_RECIPIENTS` players per call (500 by default: a
-  player costs about 20 D1 calls and identity lookups, which keeps a call
-  under the Workers Paid cap of 10,000 subrequests per invocation); the
-  rest answer `not-attempted`, and the same call again sends them. It runs
-  inline, not through the queue.
+  `MPGD_NOTIFICATIONS_BULK_RECIPIENTS` players per call (400 by default: an
+  attempt costs about 20 D1 calls and identity lookups) and reads the keys
+  of at most five times as many (one D1 read each, for players a retry
+  finds already sent), which keeps a call under the Workers Paid cap of
+  10,000 subrequests per invocation; the rest answer `not-attempted`, and
+  a later call sends them. It runs inline, not through the queue.
 - **Scheduler.** Each cron run fires the due server reminders as sends
   through the policy gate, pushes the consent notices nobody recorded by
   seven days before they are due (Korean rules, through the catalog's

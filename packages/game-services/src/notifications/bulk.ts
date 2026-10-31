@@ -67,6 +67,13 @@ export interface NotificationBulkDeliverOptions {
    * the ledger does not count.
    */
   readonly maxRecipients?: number;
+  /**
+   * Recipients whose key one call reads at most, in the order of the
+   * request, whether or not they then need an attempt; the rest answer
+   * `not-attempted` (`count-budget`). It bounds the ledger reads of a large
+   * retry, which `maxRecipients` does not.
+   */
+  readonly maxLookups?: number;
 }
 
 /** Why a recipient was not attempted in this call; the same call retried attempts it. */
@@ -75,7 +82,7 @@ export type NotificationBulkNotAttemptedReason =
   | 'provider-rate'
   /** The call's wall-time budget ran out before this recipient's batch. */
   | 'time-budget'
-  /** The host's per-call recipient budget ran out. */
+  /** The host's per-call recipient or read budget ran out. */
   | 'count-budget';
 
 export type NotificationBulkRecipientResult =
