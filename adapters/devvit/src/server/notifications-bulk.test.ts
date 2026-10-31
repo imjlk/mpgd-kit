@@ -279,6 +279,7 @@ describe('Devvit bulk sends through the service', () => {
       limit: 500,
     });
     expect(first.next).toBe('cursor-2');
+    expect(first.pending).toEqual([]);
     expect(first.complete).toBe(true);
     expect(first.result?.summary).toMatchObject({ delivered: 1, suppressed: 2 });
     expect(calls).toEqual([{ title: 'Live event', body: 'A live event started.', userIds: ['t2_a'] }]);
@@ -289,7 +290,7 @@ describe('Devvit bulk sends through the service', () => {
       topic: 'live-event',
       after: 'cursor-2',
     });
-    expect(last).toEqual({ complete: true });
+    expect(last).toEqual({ pending: [], complete: true });
     expect(listed).toEqual([{ limit: 500 }, { limit: 1_000, after: 'cursor-2' }]);
     await expect(runDevvitNotificationBulkPage({
       service,
@@ -298,6 +299,31 @@ describe('Devvit bulk sends through the service', () => {
       topic: 'live-event',
       limit: 1_001,
     })).rejects.toThrow(RangeError);
+  });
+
+  it('answers the users a budget left as pending, and sends them without reading the list again', async () => {
+    const { service, store, now, plugin, calls, listed } = setup(['t2_a', 't2_b']);
+    // t2_b, first on the page, turned the topic off: it takes the call's one attempt.
+    await store.appendConsent({
+      player: 't2_b',
+      record: { kind: 'topic-preference', topic: 'live-event', state: 'withdrawn', source: 'player' },
+      at: now.value,
+    });
+    const paged = {
+      ...plugin,
+      listOptedInUsers: async (input: { limit?: number; after?: string | undefined }) => {
+        listed.push(input);
+        return { userIds: ['t2_b', 't2_a'], next: 'cursor-2' };
+      },
+    };
+    const page = { service, notifications: paged, idempotencyKey: 'campaign-2', topic: 'live-event', options: { maxRecipients: 1 } };
+    const first = await runDevvitNotificationBulkPage(page);
+    expect([first.pending, first.complete, first.next]).toEqual([['t2_a'], false, 'cursor-2']);
+    const again = await runDevvitNotificationBulkPage({ ...page, pending: first.pending });
+    expect([again.pending, again.complete, again.next]).toEqual([[], true, undefined]);
+    expect(again.result?.summary.delivered).toBe(1);
+    expect(calls.map((call) => call.userIds)).toEqual([['t2_a']]);
+    expect(listed).toHaveLength(1);
   });
 
   it('serves no bulk send to a player session over the backend bridge', async () => {

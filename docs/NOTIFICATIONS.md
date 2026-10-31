@@ -368,9 +368,9 @@ const result = await service.deliverBulk({
   `runDevvitNotificationBulkPage` sends one page of `listOptedInUsers`
   through `deliverBulk`: Devvit's opt-in list only picks the audience, and
   the kit's gate, with the send-time `isOptedIn` read, still decides each
-  user. Call it from a scheduler task or a moderator action with the
-  `next` cursor it answers, and run the same page again while it answers
-  `complete: false`.
+  user. Call it from a scheduler task or a moderator action: run the
+  `pending` users it answers (budgets, the daily app limit, retryable
+  failures) again until none are left, then the page at the `next` cursor.
 - **Copy.** A bulk send uses the topic's catalog copy or target mapping, as
   any send does. Apps in Toss functional messages never carry advertising;
   the gate refuses an `advertising` topic there before any call.

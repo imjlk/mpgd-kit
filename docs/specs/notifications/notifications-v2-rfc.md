@@ -3014,7 +3014,10 @@ announcements and event pushes.
       sent, `delivered` with `alreadyProcessed`, and replays only platform
       rows whose lease ended) or planned through the gate, then stored.
     - The gate runs again per row immediately before the batch's provider
-      call. A refused player never reaches the provider and has its own
+      call. A batch gathers its calls only when it has at least the
+      provider's minimum and is outside its hold window; otherwise each
+      recipient is sent and settled on its own, so no claim waits past its
+      lease on a queue of single calls. A refused player never reaches the provider and has its own
       answer. Copy is rendered per recipient by the gate, so the
       server-side locale resolver (open question 4) applies to bulk sends
       wherever it plugs into the gate's content.
@@ -3073,7 +3076,9 @@ announcements and event pushes.
   - **`runDevvitNotificationBulkPage`.** It sends one `listOptedInUsers`
     page (at most 1,000 users, oldest opt-in first, resumed with the `next`
     cursor; "The default and maximum limit is 1,000" in the 0.15 guide)
-    through `deliverBulk`. The kit's gate, with its send-time `isOptedIn`
+    through `deliverBulk`, and answers the users still owed an attempt
+    (not attempted, or failed with a retryable error) as `pending`, which a
+    later run sends without reading the list again. The kit's gate, with its send-time `isOptedIn`
     read and the kit's own records, stays authoritative. Devvit's limits
     hold: 2 per user per day (the provider limit suppresses the excess)
     and 25,000 per app per day (the `rate`: the excess is `not-attempted`).

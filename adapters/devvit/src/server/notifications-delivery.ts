@@ -870,19 +870,27 @@ export interface RunDevvitNotificationBulkPageInput {
   readonly after?: string;
   /** Users per page, 1 to 1,000 (the most `listOptedInUsers` and `enqueue` take); 1,000 by default. */
   readonly limit?: number;
+  /**
+   * The `pending` users an earlier run of this page answered: they are sent
+   * again without reading the list, and `next` is not answered.
+   */
+  readonly pending?: readonly string[];
   readonly options?: NotificationBulkDeliverOptions;
 }
 
 export interface DevvitNotificationBulkPageResult {
-  /** The bulk send's answer for this page; `undefined` when the page named no user. */
+  /** The bulk send's answer for these users; `undefined` when there were none. */
   readonly result?: NotificationBulkDeliveryResult;
-  /** The cursor of the next page; `undefined` once the list is done. */
+  /** The cursor of the next page; `undefined` once the list is done, and on a `pending` run. */
   readonly next?: string;
   /**
-   * Whether every user on the page was attempted. While it is false, run the
-   * same page again (the same `after`) later: users already sent answer from
-   * the ledger, and the rest are sent once the budgets allow.
+   * The users still owed an attempt: not attempted (a budget or Devvit's
+   * daily app limit) or failed with a retryable error. Run again with them
+   * as `pending` before moving to `next`; users already sent answer from the
+   * ledger, and refused ones are not tried again.
    */
+  readonly pending: readonly string[];
+  /** Whether `pending` is empty. */
   readonly complete: boolean;
 }
 
@@ -893,10 +901,11 @@ export interface DevvitNotificationBulkPageResult {
  * kit's own records (topic preference, frequency, quiet hours), so a user
  * opted in on Devvit whom the gate refuses is not sent to. Devvit's limits
  * hold per user (2 a day, the entry's provider limit, which suppresses the
- * excess) and per app (25,000 a day, the entry's `rate`: users past it answer
- * `not-attempted`, `provider-rate`, and are sent when the same page runs
- * again after the window frees). Run it from a scheduler task or a
- * moderator action on the Devvit server, never from a player's request.
+ * excess) and per app (25,000 a day, the entry's `rate`: users past it are
+ * `pending`, `not-attempted` with `provider-rate`, until the window frees).
+ * Run it from a scheduler task or a moderator action on the Devvit server,
+ * never from a player's request: run the `pending` users again until none
+ * are left, then the `next` page.
  */
 export async function runDevvitNotificationBulkPage(
   input: RunDevvitNotificationBulkPageInput,
@@ -907,23 +916,32 @@ export async function runDevvitNotificationBulkPage(
       `limit must be an integer from 1 to ${devvitNotificationEnqueueMaxRecipients}.`,
     );
   }
-  const list = input.notifications.listOptedInUsers;
-  if (list === undefined) {
-    throw new TypeError('The Devvit notifications client has no listOptedInUsers.');
+  let userIds: readonly unknown[];
+  let next: string | undefined;
+  if (input.pending === undefined) {
+    const list = input.notifications.listOptedInUsers;
+    if (list === undefined) {
+      throw new TypeError('The Devvit notifications client has no listOptedInUsers.');
+    }
+    const page = await list.call(input.notifications, {
+      limit,
+      ...(input.after === undefined ? {} : { after: input.after }),
+    });
+    userIds = Array.isArray(page?.userIds) ? page.userIds : [];
+    next = typeof page?.next === 'string' && page.next.length > 0 && userIds.length > 0
+      ? page.next
+      : undefined;
+  } else {
+    userIds = input.pending.slice(0, limit);
   }
-  const page = await list.call(input.notifications, {
-    limit,
-    ...(input.after === undefined ? {} : { after: input.after }),
-  });
-  const userIds = Array.isArray(page?.userIds) ? page.userIds : [];
-  const next = typeof page?.next === 'string' && page.next.length > 0 && userIds.length > 0
-    ? page.next
-    : undefined;
   const players = [
-    ...new Set(userIds.filter((id) => typeof id === 'string' && devvitUserIdPattern.test(id))),
+    ...new Set(
+      userIds.filter((id): id is string => typeof id === 'string' && devvitUserIdPattern.test(id)),
+    ),
   ];
+  const left = input.pending === undefined ? [] : input.pending.slice(limit);
   if (players.length === 0) {
-    return { ...(next === undefined ? {} : { next }), complete: true };
+    return { ...(next === undefined ? {} : { next }), pending: left, complete: left.length === 0 };
   }
   const result = await input.service.deliverBulk(
     {
@@ -936,9 +954,18 @@ export async function runDevvitNotificationBulkPage(
     },
     input.options,
   );
+  const pending = [
+    ...result.recipients
+      .filter((recipient) =>
+        recipient.status === 'not-attempted'
+        || (recipient.status === 'failed' && recipient.error.retryable))
+      .map((recipient) => recipient.player),
+    ...left,
+  ];
   return {
     result,
     ...(next === undefined ? {} : { next }),
-    complete: result.summary.notAttempted === 0,
+    pending,
+    complete: pending.length === 0,
   };
 }

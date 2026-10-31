@@ -2702,12 +2702,10 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       || requests.length < (capability.minRecipients ?? 2)
       || isInsideNotificationHoldWindow(capability.holdWindow, nowMs())
     ) {
-      const answers: NotificationRemoteDeliveryAnswer[] = [];
-      for (const request of requests) {
-        calls.single += 1;
-        answers.push(await sendOne(provider, request));
-      }
-      return answers;
+      // Fewer than the minimum after the gate (the round would have sent one
+      // by one otherwise): side by side, so no claim waits on the others' calls.
+      calls.single += requests.length;
+      return Promise.all(requests.map((request) => sendOne(provider, request)));
     }
     const answers: NotificationRemoteDeliveryAnswer[] = [];
     for (let start = 0; start < requests.length; start += capability.maxRecipients) {
@@ -2777,8 +2775,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     calls: { batch: number; single: number },
   ): Promise<BulkAnswer[]> => {
     const limiter = createNotificationLimiter(bulkConcurrency);
-    // Only a provider with a bulk path gathers calls; any other sends each recipient as its gate allows it.
-    const gathers = provider.delivery.bulk !== undefined && provider.delivery.sendBatch !== undefined;
+    const capability = provider.delivery.bulk;
     const state = prepared.map((entry) => ({
       refusals: [...entry.refusals],
       errors: [] as { readonly error: unknown; readonly rowKey: string; readonly provider: string }[],
@@ -2790,6 +2787,14 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       const members = prepared
         .map((entry, index) => ({ entry, index, row: entry.rows[round] }))
         .filter((member): member is typeof member & { readonly row: NotificationSendRow } => member.row !== undefined);
+      // Only a provider with a bulk path gathers calls, for a round of at
+      // least its minimum and outside its hold window. Any other round sends
+      // each recipient as its gate allows it and settles it at once, so no
+      // claim waits on a queue of single calls past its lease.
+      const gathers = capability !== undefined
+        && provider.delivery.sendBatch !== undefined
+        && members.length >= (capability.minRecipients ?? 2)
+        && !isInsideNotificationHoldWindow(capability.holdWindow, nowMs());
       const barrier = createNotificationBatchBarrier<NotificationRemoteDeliveryRequest, NotificationRemoteDeliveryAnswer>(
         members.length,
         (requests) => flushBulk(provider, requests, calls),
