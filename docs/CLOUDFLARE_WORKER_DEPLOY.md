@@ -843,8 +843,8 @@ developer notifications (RTDN) delivered by a Cloud Pub/Sub push
 subscription. A `voidedPurchaseNotification` for a fully refunded or voided
 one-time product is a trigger, not proof: the Worker looks the purchase
 token up with the Voided Purchases API (the sweep's client, one query over a
-window from 15 minutes before the notification's event time to now) and
-revokes the grant with the listed entry. The revocation goes through the
+window from 15 minutes before the notification's event time to the earlier
+of now and six hours after it) and revokes the grant with the listed entry. The revocation goes through the
 same `revokeGooglePlayVoidedPurchase` path and key as the sweep and records
 the same reason (`chargeback` for `voidedReason` 7), source, and void time;
 a redelivered push and the sweep's later read of the same token both answer
@@ -864,7 +864,10 @@ A voided notification costs one query (a second only when more than 1,000
 voids share its window); every other kind costs none. The sweep uses about
 24 a day once caught up. A void Google does not list yet is redelivered with
 the subscription's retry policy (10 to 600 seconds below), about ten
-queries over its hour; a `429` is a lookup failure, answered `503`.
+queries over its hour. A `429` (or any lookup failure, a stuck token service
+included) is answered `503`, so Pub/Sub backs off and redelivers with that
+policy; refund volume stays far below 30 queries in 30 seconds, so the
+Worker keeps no rate limiter of its own.
 
 ```toml
 [vars]

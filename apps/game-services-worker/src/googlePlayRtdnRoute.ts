@@ -103,6 +103,8 @@ export type GooglePlayRtdnFetchHandlerInput =
       /** Milliseconds since the epoch. */
       readonly now?: () => number;
       readonly unmatchedVoidRetryMs?: number;
+      /** The Voided Purchases API lookup's deadline, token service included; 15 s by default. */
+      readonly lookupTimeoutMs?: number;
     };
 
 export function createGooglePlayRtdnFetchHandler(
@@ -166,7 +168,9 @@ export function createGooglePlayRtdnFetchHandler(
         // An unwrapped push (payload unwrapping with "write metadata")
         // carries its message id only in this header.
         messageId: request.headers.get('x-goog-pubsub-message-id'),
-        signal: AbortSignal.timeout(lookupTimeoutMs),
+        // Bounds the token service as well as the Play request, so a stuck
+        // binding answers 503 before Pub/Sub's push deadline.
+        signal: AbortSignal.timeout(input.lookupTimeoutMs ?? lookupTimeoutMs),
         now: () => new Date(now()).toISOString(),
         ...(input.unmatchedVoidRetryMs === undefined
           ? {}

@@ -566,7 +566,11 @@ export async function handleGooglePlayDeveloperNotification(
   if (purchaseToken.length === 0) {
     return { status: 'rejected', reason: 'GOOGLE_PLAY_RTDN_PURCHASE_TOKEN_MISSING', ...withId };
   }
-  const productType = readInteger(voided.productType, 3);
+  // Absent fields keep their documented default; a present value that does
+  // not parse is unknown, never read as the default.
+  const productType = voided.productType === undefined
+    ? undefined
+    : (readInteger(voided.productType, 3) ?? -1);
   if (productType === googlePlayRtdnProductType.subscription) {
     return { status: 'ignored', reason: 'GOOGLE_PLAY_RTDN_SUBSCRIPTION_VOIDED', ...withOrder };
   }
@@ -574,7 +578,9 @@ export async function handleGooglePlayDeveloperNotification(
     return { status: 'ignored', reason: 'GOOGLE_PLAY_RTDN_PRODUCT_TYPE_UNKNOWN', ...withOrder };
   }
   // Absent: a notification from before partial refunds, which voided the whole purchase.
-  const refundType = readInteger(voided.refundType, 3) ?? googlePlayRtdnRefundType.fullRefund;
+  const refundType = voided.refundType === undefined
+    ? googlePlayRtdnRefundType.fullRefund
+    : (readInteger(voided.refundType, 3) ?? -1);
   if (refundType !== googlePlayRtdnRefundType.fullRefund) {
     return {
       status: 'ignored',

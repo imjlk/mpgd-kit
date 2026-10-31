@@ -508,6 +508,18 @@ const keys = fakeKeys({ 'google-key-1': googleKey.publicJwk });
     1,
   );
 
+  // An absent refundType keeps its documented meaning: a full refund.
+  const absentRefund = await grantToken(store, 'absent-refund-token');
+  list('absent-refund-token');
+  assert.equal(
+    (await handle(voided('absent-refund-token', { refundType: undefined }))).status,
+    'revoked',
+  );
+  assert.equal(
+    (await findEntitlementRevocationsChunked(store, [absentRefund.ledgerEntryId])).length,
+    1,
+  );
+
   // A busy window: the match on the second page is found.
   const paged = await grantToken(store, 'paged-token');
   list('paged-token');
@@ -566,6 +578,19 @@ const keys = fakeKeys({ 'google-key-1': googleKey.publicJwk });
     await reasonOf(voided('kept-token', { refundType: 9 })),
     'GOOGLE_PLAY_RTDN_REFUND_TYPE_UNKNOWN',
   );
+  for (const refundType of ['full', null, 1.5, '', { value: 1 }]) {
+    assert.equal(
+      await reasonOf(voided('kept-token', { refundType })),
+      'GOOGLE_PLAY_RTDN_REFUND_TYPE_UNKNOWN',
+      `a refundType that does not parse (${JSON.stringify(refundType)}) is not a full refund`,
+    );
+  }
+  for (const productType of ['one-time', null]) {
+    assert.equal(
+      await reasonOf(voided('kept-token', { productType })),
+      'GOOGLE_PLAY_RTDN_PRODUCT_TYPE_UNKNOWN',
+    );
+  }
   assert.equal(await reasonOf({ testNotification: { version: '1.0' } }), 'GOOGLE_PLAY_RTDN_TEST');
   assert.equal(
     await reasonOf({

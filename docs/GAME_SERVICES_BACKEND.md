@@ -1217,7 +1217,8 @@ checks `packageName`, and treats a `voidedPurchaseNotification` of a one-time
 product (`productType` 2) with a full refund (`refundType` 1, or absent) as a
 trigger: it looks the token up with the `voidedPurchases` client (the
 sweep's `GooglePlayVoidedPurchasesClient`, one query over a window from 15
-minutes before `eventTimeMillis` to now, a second page only for more than
+minutes before `eventTimeMillis` to the earlier of now and six hours after
+it, a second page only for more than
 1,000 voids) and revokes the listed entry through
 `revokeGooglePlayVoidedPurchase`. The ledger gets what the sweep would
 record (reason, source, void time, key), so either one coming second answers

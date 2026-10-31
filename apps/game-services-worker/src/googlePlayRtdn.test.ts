@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 
 import {
   createGooglePlayProductVerificationId,
+  createGooglePlayPublisherClient,
   findEntitlementRevocationsChunked,
   GoogleIdTokenKeysUnavailableError,
   type GoogleIdTokenSigningKeys,
@@ -275,6 +276,52 @@ try {
   });
   assert.equal(stale.status, 200, 'a void older than the bound is acknowledged');
   assert.equal(stale.body.status, 'ignored');
+
+  // --- A stuck token service answers 503 at the lookup deadline -------------------------
+  {
+    const stuckFetch = createGooglePlayRtdnFetchHandler({
+      store,
+      packageName,
+      audience,
+      serviceAccountEmail,
+      keys,
+      // The Worker's composition: the publisher client over a token service
+      // binding that never answers (a binding call takes no signal).
+      voidedPurchases: createGooglePlayPublisherClient({
+        getAccessToken: () => new Promise<string>(() => undefined),
+        fetch: async () => {
+          throw new Error('no Play request without a token');
+        },
+      }),
+      lookupTimeoutMs: 50,
+      now: () => nowMs,
+    });
+    const started = Date.now();
+    const stuck = await stuckFetch(
+      new Request(`${baseUrl}${googlePlayRtdnPath}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${await token()}` },
+        body: JSON.stringify({
+          message: {
+            data: btoa(
+              JSON.stringify({
+                packageName,
+                eventTimeMillis: String(nowMs - 2_000),
+                ...voided('in-flight-token'),
+              }),
+            ),
+            messageId: 'stuck-1',
+          },
+        }),
+      }),
+    );
+    assert.equal(stuck?.status, 503, 'a stuck token service is redelivered, not held');
+    assert.equal(
+      (await stuck?.json() as { reason?: string }).reason,
+      'GOOGLE_PLAY_RTDN_VOIDED_LOOKUP_FAILED',
+    );
+    assert.ok(Date.now() - started < 5_000, 'it answers at the lookup deadline');
+  }
 
   // --- An unwrapped push (payload unwrapping) ------------------------------------------------
   const unwrappedGrant = await grantToken('unwrapped-token');
