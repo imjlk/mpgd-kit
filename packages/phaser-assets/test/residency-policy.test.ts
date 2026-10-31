@@ -95,6 +95,30 @@ describe('residency policy', () => {
     expect(policy.snapshot().groups.map((group) => group.id)).toEqual(['a', 'b', 'c']);
   });
 
+  it('drops an unclaimed prefetch that measures over its estimate instead of evicting warm groups', () => {
+    const policy = createResidencyPolicy({ budgetBytes: 100 });
+    loadAll(policy, 'screen', ['warm'], 80);
+    policy.release('screen');
+    expect(policy.prefetch(['speculative'])).toEqual(['speculative']); // estimate 0 fits
+    expect(policy.loaded('speculative', 80)).toEqual(['speculative']);
+    expect(policy.state('speculative')).toBeUndefined();
+    expect(policy.state('warm')).toBe('resident');
+    // a prefetch that fits after measuring is kept
+    expect(policy.prefetch(['small'])).toEqual(['small']);
+    expect(policy.loaded('small', 20)).toEqual([]);
+    expect(policy.state('small')).toBe('resident');
+  });
+
+  it('a prefetch claimed before it finishes loads as demanded and may evict warm groups', () => {
+    const policy = createResidencyPolicy({ budgetBytes: 100 });
+    loadAll(policy, 'screen', ['warm'], 80);
+    policy.release('screen');
+    policy.prefetch(['next']);
+    policy.claim('screen', ['next']);
+    expect(policy.loaded('next', 80)).toEqual(['warm']);
+    expect(policy.state('next')).toBe('resident');
+  });
+
   it('a prefetched group becomes owned when claimed and is not loaded twice', () => {
     const policy = createResidencyPolicy({ budgetBytes: 48 * MiB, estimateBytes: () => TEXTURE_2048 });
     expect(policy.prefetch(['a'])).toEqual(['a']);

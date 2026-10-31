@@ -51,7 +51,10 @@ export interface PhaserResidencyOptions {
 }
 
 export interface PhaserResidencyClaimOptions {
-  /** Abort waiting. The claim is dropped if it is still the owner's latest; an in-flight load keeps going and stays cached. */
+  /**
+   * Abort waiting. The claim is dropped if it is still the owner's latest; an in-flight load keeps going and stays
+   * cached. An already-aborted signal rejects without changing any claim.
+   */
   readonly signal?: AbortSignal;
 }
 
@@ -469,10 +472,7 @@ export function createPhaserResidency(
     if (!signal) {
       return promise;
     }
-    if (signal.aborted) {
-      onAbort();
-      return Promise.reject(signal.reason);
-    }
+    promise.catch(() => undefined);
     return new Promise<void>((resolve, reject) => {
       const stop = (): void => {
         onAbort();
@@ -497,6 +497,10 @@ export function createPhaserResidency(
       ensureLive();
       if (!owner) {
         return Promise.reject(new Error('Residency owner must be a non-empty string'));
+      }
+      if (claimOptions.signal?.aborted) {
+        // Nothing has started yet: leave the owner's previous claim untouched.
+        return Promise.reject(claimOptions.signal.reason);
       }
       let ids: string[];
       try {

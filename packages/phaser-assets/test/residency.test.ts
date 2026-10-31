@@ -301,6 +301,46 @@ describe('phaser residency', () => {
     expect(f.residency.snapshot().groups[0]?.owners).toEqual([]);
   });
 
+  it('an already-aborted signal rejects without starting work or changing claims', async () => {
+    const f = setup([set('a'), set('b')], { budgetBytes: 64 * MiB });
+    const a = f.residency.claim('screen', ['a']);
+    await f.flush();
+    await a;
+    const abort = new AbortController();
+    abort.abort(new Error('gone'));
+    await expect(f.residency.claim('screen', ['b'], { signal: abort.signal })).rejects.toThrow('gone');
+    await Promise.resolve();
+    expect(f.queue).toEqual([]);
+    expect(f.residency.snapshot().groups.map((group) => [group.id, group.owners])).toEqual([['a', ['screen']]]);
+    // dispose with no pending aggregate must not surface an unhandled rejection
+    f.residency.dispose();
+  });
+
+  it('an abort during a load that later fails does not leave an unhandled rejection', async () => {
+    const f = setup([set('a')]);
+    f.failing.add('a-atlas');
+    const abort = new AbortController();
+    const claim = f.residency.claim('screen', ['a'], { signal: abort.signal });
+    abort.abort(new Error('left'));
+    await expect(claim).rejects.toThrow('left');
+    await f.flush();
+    expect(f.residency.snapshot().groups).toEqual([]);
+  });
+
+  it('unloads a prefetched group that measures over its estimate instead of evicting warm groups', async () => {
+    const f = setup([set('warm'), set('extra', { estimateBytes: 0 })], { budgetBytes: 24 * MiB });
+    const warm = f.residency.claim('screen', ['warm']);
+    await f.flush();
+    await warm;
+    f.residency.release('screen');
+    expect(f.residency.prefetch(['extra'])).toEqual(['extra']);
+    await f.flush();
+    expect(f.residency.isResident(['warm'])).toBe(true);
+    expect(f.residency.isResident(['extra'])).toBe(false);
+    expect(f.textures.has('extra-atlas')).toBe(false);
+    expect(f.caches.json.has('extra-data')).toBe(false);
+  });
+
   it('an aborted older claim does not drop a newer claim by the same owner', async () => {
     const f = setup([set('a'), set('b')], { budgetBytes: 64 * MiB });
     const abort = new AbortController();

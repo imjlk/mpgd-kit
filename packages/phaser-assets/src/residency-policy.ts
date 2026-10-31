@@ -49,9 +49,12 @@ export interface ResidencyPolicy {
   claim(owner: string, groupIds: readonly string[]): ResidencyPlan;
   /** Drop every claim of `owner`. Nothing is evicted until room is needed. */
   release(owner: string): void;
-  /** Speculative loads: returns the unknown groups that fit in the free budget, in order. Never evicts. */
+  /** Speculative loads: returns the unknown groups that fit in the free budget, in order. Never evicts others. */
   prefetch(groupIds: readonly string[]): readonly string[];
-  /** A load finished. Records the real size and returns groups to evict. */
+  /**
+   * A load finished. Records the real size and returns groups to evict. An unclaimed prefetch that no longer fits
+   * returns only itself, so speculative loads never displace warm groups.
+   */
   loaded(groupId: string, bytes: number): readonly string[];
   /** A load failed. Forgets the group; its claims are dropped with it. */
   failed(groupId: string): void;
@@ -73,6 +76,8 @@ interface Entry {
   readonly owners: Set<string>;
   used: number;
   state: ResidencyGroupState;
+  /** Admitted by `prefetch` and not claimed since; discarded instead of evicting others if it measures too large. */
+  speculative: boolean;
 }
 
 export function createResidencyPolicy(options: ResidencyPolicyOptions): ResidencyPolicy {
@@ -124,11 +129,12 @@ export function createResidencyPolicy(options: ResidencyPolicyOptions): Residenc
       for (const id of wanted) {
         let entry = entries.get(id);
         if (!entry) {
-          entry = { bytes: estimate(id), owners: new Set(), used: 0, state: 'loading' };
+          entry = { bytes: estimate(id), owners: new Set(), used: 0, state: 'loading', speculative: false };
           entries.set(id, entry);
           load.push(id);
         }
         entry.owners.add(owner);
+        entry.speculative = false;
         entry.used = ++clock;
       }
       return { load, evict: trim() };
@@ -150,7 +156,7 @@ export function createResidencyPolicy(options: ResidencyPolicyOptions): Residenc
           continue;
         }
         sum += bytes;
-        entries.set(id, { bytes, owners: new Set(), used: ++clock, state: 'loading' });
+        entries.set(id, { bytes, owners: new Set(), used: ++clock, state: 'loading', speculative: true });
         load.push(id);
       }
       return load;
@@ -160,8 +166,16 @@ export function createResidencyPolicy(options: ResidencyPolicyOptions): Residenc
       if (!entry) {
         return [];
       }
+      const measured = checkBytes(bytes, `loaded(${groupId})`);
+      const speculative = entry.speculative && entry.owners.size === 0;
       entry.state = 'resident';
-      entry.bytes = checkBytes(bytes, `loaded(${groupId})`);
+      entry.speculative = false;
+      entry.bytes = measured;
+      if (speculative && total() > budget) {
+        // A prefetch that measured larger than its estimate must not displace warm groups: drop it instead.
+        entries.delete(groupId);
+        return [groupId];
+      }
       return trim();
     },
     failed(groupId) {

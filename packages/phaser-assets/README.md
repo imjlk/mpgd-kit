@@ -587,6 +587,8 @@ Rules:
   bytes exceed the budget. `release(owner)` keeps groups cached.
 - **Keep-warm and eviction.** Unowned resident groups stay until room is needed,
   then go least-recently-used first.
+  A prefetch that measures larger than its estimate and no longer fits is dropped
+  rather than displacing warm groups.
 - **Make room before load.** A claim evicts against the groups' `estimateBytes`
   before queueing files, so swapping screens does not hold old and new sets at once.
   Measured bytes replace the estimate after load.
@@ -600,6 +602,7 @@ Rules:
 - **Failure.** If one file fails, its group's claim rejects, the files that did load
   are removed, and the next claim retries. Aborting a claim's `signal` drops that
   claim (if it is still the owner's latest); the load itself continues and stays cached.
+  An already-aborted signal rejects without starting work or changing claims.
 - **Eviction cleanup.** `onEvict` runs before removal. Then attachments are
   disposed, their `textureKey` is removed, and textures, JSON and binary caches,
   sounds and audio are unloaded. Errors are collected by `takeCleanupErrors()`.
