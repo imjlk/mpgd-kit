@@ -683,6 +683,22 @@ async function rejection(work: Promise<unknown>): Promise<GameServicesNotificati
   const registry = await client.getProviders();
   assert.deepEqual(registry.providers, [fcm]);
   assert.deepEqual(registry.targets, { android: 'fcm', ait: 'apps-in-toss', reddit: 'devvit' });
+  // What was left out is listed, with its id when it has one.
+  assert.deepEqual(
+    registry.unreadable?.map((entry) => entry.provider),
+    ['apps-in-toss', undefined, 'devvit'],
+  );
+  assert.ok(
+    registry.unreadable?.every((entry) => entry.issue.length > 0 && entry.issue.length <= 512),
+  );
+  assert.match(registry.unreadable?.[0]?.issue ?? '', /addressing/u);
+  assert.equal(
+    registry.unreadable?.[1] !== undefined && 'provider' in registry.unreadable[1],
+    false,
+  );
+  // Nothing left out: no field.
+  body = { protocolVersion: '2.0.0-draft.1', providers: [fcm], targets: { android: 'fcm' } };
+  assert.equal('unreadable' in await client.getProviders(), false);
   // The registry itself outside the contract still fails as a whole.
   body = { protocolVersion: '2.0.0-draft.1', providers: {}, targets: {} };
   const broken = await rejection(client.getProviders());

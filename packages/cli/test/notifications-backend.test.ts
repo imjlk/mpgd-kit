@@ -408,10 +408,13 @@ try {
     await ait.runtime.getPermission({ topics: ['daily-ready'] });
     // (This fake Worker answers every route with the registry, so the consent read fails too.)
     const leftOut = reported.filter((entry) =>
-      /names provider/u.test(String((entry as unknown[])[1])),
+      /cannot be read/u.test(String((entry as unknown[])[1])),
     );
     assert.equal(leftOut.length, 1);
-    assert.match(String((leftOut[0] as unknown[])[1]), /names provider ait-functional for ait/u);
+    assert.match(
+      String((leftOut[0] as unknown[])[1]),
+      /entry for provider ait-functional \(ait\) cannot be read: .*purposes/u,
+    );
     console.error = () => undefined;
   }
 
