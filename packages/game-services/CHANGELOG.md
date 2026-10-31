@@ -1,5 +1,11 @@
 # @mpgd/game-services
 
+## 0.33.1 — 2026-10-31
+
+### Patch changes
+
+- Updated dependencies: catalog@0.15.0
+
 ## 0.33.0 — 2026-10-30
 
 ### Changed

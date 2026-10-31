@@ -1,5 +1,11 @@
 # @mpgd/catalog
 
+## 0.15.0 — 2026-10-31
+
+### Added
+
+- [1ee9b22e](https://github.com/imjlk/mpgd-kit/commit/1ee9b22e8816b820ef481a225382011988bda921) The store presence file's `appStore` section takes `copyright` (the version's copyright line) and `review` (App Review contact, notes, and a demo account named by environment variables, never by value), read by `mpgd store release`. `assertStorePresence` checks the contact email and phone (with its country code), the 4,000-character notes limit, and that `demoAccount.nameEnv` and `passwordEnv` are distinct environment variable names. New exports: `AppStorePresenceReview`, `AppStorePresenceReviewContact` and `AppStorePresenceDemoAccount`. — Thanks @imjlk!
+
 ## 0.14.2 — 2026-10-30
 
 ### Patch changes
