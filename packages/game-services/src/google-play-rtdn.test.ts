@@ -6,6 +6,7 @@ import {
   createGoogleIdTokenSigningKeys,
   decodeGooglePlayDeveloperNotificationPush,
   googleIdTokenJwksUrl,
+  googleIdTokenKeyStaleGraceMs,
   GoogleIdTokenKeysUnavailableError,
   googlePlayDeveloperNotificationHttpStatus,
   handleGooglePlayDeveloperNotification,
@@ -279,6 +280,61 @@ const keys = fakeKeys({ 'google-key-1': googleKey.publicJwk });
   );
 }
 
+// --- The stale-key grace -----------------------------------------------------------
+{
+  const signal = new AbortController().signal;
+  let clock = 0;
+  let up = true;
+  let fetches = 0;
+  const source = createGoogleIdTokenSigningKeys({
+    now: () => clock,
+    fetch: async () => {
+      fetches += 1;
+      return up
+        ? Response.json(
+            { keys: [{ ...googleKey.publicJwk, kid: 'held' }] },
+            { headers: { 'cache-control': 'max-age=3600' } },
+          )
+        : new Response('unavailable', { status: 503 });
+    },
+  });
+  const held = () => source.getSigningKey({ kid: 'held', signal });
+  assert.equal((await held())?.n, googleKey.publicJwk.n);
+  const expiresAt = 3_600_000;
+  up = false;
+
+  clock = expiresAt + 60_000;
+  assert.equal(
+    (await held())?.n,
+    googleKey.publicJwk.n,
+    'expired but within the grace: the held key answers when the refresh fails',
+  );
+  assert.equal(fetches, 2, 'after trying a refresh');
+  clock += 1_000;
+  assert.equal((await held())?.n, googleKey.publicJwk.n, 'and while the refresh is throttled');
+  assert.equal(fetches, 2);
+
+  clock = expiresAt + googleIdTokenKeyStaleGraceMs + 1;
+  await assert.rejects(
+    held(),
+    GoogleIdTokenKeysUnavailableError,
+    'past the grace, an outage is unavailable (503), not the old key',
+  );
+  assert.equal(fetches, 3);
+  clock += 1_000;
+  await assert.rejects(
+    held(),
+    GoogleIdTokenKeysUnavailableError,
+    'and a throttled lookup past the grace finds no key to answer with',
+  );
+  assert.equal(fetches, 3, 'without another fetch');
+
+  clock += 60_000;
+  up = true;
+  assert.equal((await held())?.n, googleKey.publicJwk.n, 'the keys are read again once up');
+  assert.equal(fetches, 4);
+}
+
 // --- Envelope decoding ---------------------------------------------------------
 {
   const decoded = decodeGooglePlayDeveloperNotificationPush(
@@ -408,7 +464,8 @@ const keys = fakeKeys({ 'google-key-1': googleKey.publicJwk });
   const voided = (purchaseToken: string, extra: Record<string, unknown> = {}) => ({
     voidedPurchaseNotification: {
       purchaseToken,
-      orderId: `GPA.${purchaseToken}`,
+      // What the push claims; only the listed entry's order id is used.
+      orderId: `GPA.claimed-by-push-${purchaseToken}`,
       productType: 2,
       refundType: 1,
       ...extra,
@@ -417,12 +474,15 @@ const keys = fakeKeys({ 'google-key-1': googleKey.publicJwk });
 
   // A push alone never revokes: the void must be listed by Google.
   const forged = await handle(voided('voided-token'));
-  assert.deepEqual(forged, {
-    status: 'retry',
-    reason: 'GOOGLE_PLAY_RTDN_VOID_NOT_LISTED',
-    messageId: 'message-1',
-    orderId: 'GPA.voided-token',
-  });
+  assert.deepEqual(
+    forged,
+    {
+      status: 'retry',
+      reason: 'GOOGLE_PLAY_RTDN_VOID_NOT_LISTED',
+      messageId: 'message-1',
+    },
+    'an unconfirmed push names no order id',
+  );
   assert.equal(googlePlayDeveloperNotificationHttpStatus(forged), 503);
   assert.equal((await findEntitlementRevocationsChunked(store, [grant.ledgerEntryId])).length, 0);
   assert.deepEqual(
@@ -437,7 +497,11 @@ const keys = fakeKeys({ 'google-key-1': googleKey.publicJwk });
   const revoked = await handle(voided('voided-token'));
   assert.equal(revoked.status, 'revoked');
   assert.equal(revoked.status === 'revoked' && revoked.alreadyProcessed, false);
-  assert.equal(revoked.status === 'revoked' && revoked.orderId, 'GPA.voided-token');
+  assert.equal(
+    revoked.status === 'revoked' && revoked.orderId,
+    'GPA.voided-token',
+    'the order id is the listed entry\u2019s, not the push\u2019s',
+  );
   assert.equal(googlePlayDeveloperNotificationHttpStatus(revoked), 200);
   const [revocation] = await findEntitlementRevocationsChunked(store, [grant.ledgerEntryId]);
   assert.equal(revocation?.reason, 'chargeback', 'the listed voidedReason (7) is kept');
@@ -484,11 +548,17 @@ const keys = fakeKeys({ 'google-key-1': googleKey.publicJwk });
   const down = await handle(voided('voided-token'));
   assert.equal(down.status, 'retry');
   assert.equal(down.status === 'retry' && down.reason, 'GOOGLE_PLAY_RTDN_VOIDED_LOOKUP_FAILED');
+  assert.equal('orderId' in down, false);
   apiDown = false;
 
   // Listed, but the grant is not on this ledger yet: redelivered for an hour.
   list('not-granted-yet');
   const unknown = await handle(voided('not-granted-yet'));
+  assert.equal(
+    unknown.status === 'retry' && unknown.orderId,
+    'GPA.not-granted-yet',
+    'a listed void names the listed order id',
+  );
   assert.equal(unknown.status, 'retry');
   assert.equal(unknown.status === 'retry' && unknown.reason, 'GOOGLE_PLAY_RTDN_GRANT_NOT_FOUND');
   assert.equal(googlePlayDeveloperNotificationHttpStatus(unknown), 503);
@@ -555,6 +625,7 @@ const keys = fakeKeys({ 'google-key-1': googleKey.publicJwk });
 
   const reasonOf = async (notification: Record<string, unknown>) => {
     const outcome = await handle(notification);
+    assert.equal('orderId' in outcome, false, 'nothing unconfirmed carries an order id');
     assert.equal(googlePlayDeveloperNotificationHttpStatus(outcome), 200, JSON.stringify(outcome));
     return 'reason' in outcome ? outcome.reason : outcome.status;
   };

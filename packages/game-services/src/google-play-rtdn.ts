@@ -73,15 +73,25 @@ const jwksMaxCacheMs = 24 * 60 * 60 * 1000;
  * `kid` or an endpoint outage cannot drive one fetch per request.
  */
 const jwksMinRefreshMs = 60 * 1000;
+/**
+ * How long past its cache expiry a held key still verifies while Google's
+ * key endpoint cannot be read (an outage, or the refresh throttle). Six
+ * hours rides out a long endpoint outage without dropping pushes, and is the
+ * longest a push is retried (`maxUnmatchedVoidRetryMs`); past it a key Google
+ * may have withdrawn is no longer trusted and pushes answer 503 until the
+ * keys can be read again.
+ */
+export const googleIdTokenKeyStaleGraceMs = 6 * 60 * 60 * 1000;
 
 /**
  * Reads Google's ID token keys from `googleIdTokenJwksUrl`, cached for the
  * response's `Cache-Control: max-age` (one minute to a day; an hour without
  * one) and refreshed early for a key id it does not hold: Google rotates its
- * keys. Fetches, failed ones included, are at least a minute apart; in
- * between, an expired cache still answers and an outage is
- * `GoogleIdTokenKeysUnavailableError`. One instance per isolate shares the
- * cache.
+ * keys. Fetches, failed ones included, are at least a minute apart. While
+ * the keys cannot be read (an outage, or between throttled fetches), a held
+ * key answers for `googleIdTokenKeyStaleGraceMs` past its cache expiry; past
+ * that, an outage is `GoogleIdTokenKeysUnavailableError` and a throttled
+ * lookup finds no key. One instance per isolate shares the cache.
  */
 export function createGoogleIdTokenSigningKeys(
   options: GoogleIdTokenSigningKeysOptions = {},
@@ -117,6 +127,12 @@ export function createGoogleIdTokenSigningKeys(
     return load;
   };
 
+  /** A held key within its cache lifetime plus the stale grace. */
+  const heldKey = (kid: string): JsonWebKey | undefined =>
+    cached !== undefined && now() < cached.expiresAt + googleIdTokenKeyStaleGraceMs
+      ? cached.keys.get(kid)
+      : undefined;
+
   return {
     async getSigningKey({ kid, signal }) {
       const known = cached?.keys.get(kid);
@@ -126,11 +142,12 @@ export function createGoogleIdTokenSigningKeys(
       let load = pending;
       if (load === undefined) {
         if (now() - fetchedAt < jwksMinRefreshMs) {
-          // Throttled: answer from what is held. A key Google published
-          // before still verifies (it rotates rarely); otherwise the last
-          // fetch either lacked the key or failed.
-          if (known !== undefined) {
-            return known;
+          // Throttled: answer from what is held, within the stale grace.
+          // Otherwise the last fetch lacked the key, failed, or the held key
+          // is too old to trust.
+          const held = heldKey(kid);
+          if (held !== undefined) {
+            return held;
           }
           if (lastFetchFailed) {
             throw new GoogleIdTokenKeysUnavailableError(
@@ -144,7 +161,9 @@ export function createGoogleIdTokenSigningKeys(
       try {
         return (await load).get(kid);
       } catch (error) {
-        const stale = cached?.keys.get(kid);
+        // Google rotates its keys rarely: a key it published before still
+        // verifies through an outage, within the stale grace.
+        const stale = heldKey(kid);
         if (stale !== undefined) {
           return stale;
         }
@@ -472,6 +491,10 @@ export const googlePlayRtdnLookupLeadMs = 15 * 60 * 1000;
 /** Voided Purchases API pages one notification reads at most (a page holds up to 1,000 voids). */
 export const googlePlayRtdnLookupMaxPages = 2;
 
+/**
+ * Every outcome's `orderId` is the order id of the matched Voided Purchases
+ * API entry, never the push body's: it is absent until Google lists the void.
+ */
 export type GooglePlayDeveloperNotificationOutcome =
   /** The grant was reversed (or already had been: a redelivery, or the sweep came first). */
   | {
@@ -558,10 +581,9 @@ export async function handleGooglePlayDeveloperNotification(
   if (!isRecord(voided)) {
     return { status: 'ignored', reason: ignoredKindReason(notification), ...withId };
   }
-  const orderId = typeof voided.orderId === 'string' && voided.orderId.length > 0
-    ? voided.orderId
-    : undefined;
-  const withOrder = { ...withId, ...(orderId === undefined ? {} : { orderId }) };
+  // The push is unconfirmed: nothing from its body (the order id included)
+  // reaches an outcome, a log, or the ledger. The order id an outcome names
+  // is the listed entry's.
   const purchaseToken = typeof voided.purchaseToken === 'string' ? voided.purchaseToken : '';
   if (purchaseToken.length === 0) {
     return { status: 'rejected', reason: 'GOOGLE_PLAY_RTDN_PURCHASE_TOKEN_MISSING', ...withId };
@@ -572,10 +594,10 @@ export async function handleGooglePlayDeveloperNotification(
     ? undefined
     : (readInteger(voided.productType, 3) ?? -1);
   if (productType === googlePlayRtdnProductType.subscription) {
-    return { status: 'ignored', reason: 'GOOGLE_PLAY_RTDN_SUBSCRIPTION_VOIDED', ...withOrder };
+    return { status: 'ignored', reason: 'GOOGLE_PLAY_RTDN_SUBSCRIPTION_VOIDED', ...withId };
   }
   if (productType !== undefined && productType !== googlePlayRtdnProductType.oneTime) {
-    return { status: 'ignored', reason: 'GOOGLE_PLAY_RTDN_PRODUCT_TYPE_UNKNOWN', ...withOrder };
+    return { status: 'ignored', reason: 'GOOGLE_PLAY_RTDN_PRODUCT_TYPE_UNKNOWN', ...withId };
   }
   // Absent: a notification from before partial refunds, which voided the whole purchase.
   const refundType = voided.refundType === undefined
@@ -587,7 +609,7 @@ export async function handleGooglePlayDeveloperNotification(
       reason: refundType === googlePlayRtdnRefundType.quantityBasedPartialRefund
         ? 'GOOGLE_PLAY_RTDN_PARTIAL_REFUND'
         : 'GOOGLE_PLAY_RTDN_REFUND_TYPE_UNKNOWN',
-      ...withOrder,
+      ...withId,
     };
   }
   const now = input.now ?? (() => new Date().toISOString());
@@ -601,10 +623,13 @@ export async function handleGooglePlayDeveloperNotification(
   // no bound: acknowledge, the sweep reads the void.
   const recent = eventTimeMillis !== undefined
     && Math.abs(nowMillis - eventTimeMillis) < unmatchedVoidRetryMs;
-  const unmatched = (reason: string): GooglePlayDeveloperNotificationOutcome =>
+  const unmatched = (
+    reason: string,
+    confirmed: { readonly messageId?: string; readonly orderId?: string } = withId,
+  ): GooglePlayDeveloperNotificationOutcome =>
     recent
-      ? { status: 'retry', reason, ...withOrder }
-      : { status: 'ignored', reason, ...withOrder };
+      ? { status: 'retry', reason, ...confirmed }
+      : { status: 'ignored', reason, ...confirmed };
 
   let listed: GooglePlayVoidedPurchase | undefined;
   try {
@@ -618,11 +643,17 @@ export async function handleGooglePlayDeveloperNotification(
     });
   } catch {
     // The client's errors carry no token or URL; the host logs the outcome.
-    return { status: 'retry', reason: 'GOOGLE_PLAY_RTDN_VOIDED_LOOKUP_FAILED', ...withOrder };
+    return { status: 'retry', reason: 'GOOGLE_PLAY_RTDN_VOIDED_LOOKUP_FAILED', ...withId };
   }
   if (listed === undefined) {
     return unmatched('GOOGLE_PLAY_RTDN_VOID_NOT_LISTED');
   }
+  const withOrder = {
+    ...withId,
+    ...(typeof listed.orderId === 'string' && listed.orderId.length > 0
+      ? { orderId: listed.orderId }
+      : {}),
+  };
   const outcome = await revokeGooglePlayVoidedPurchase({
     store: input.store,
     packageName,
@@ -638,7 +669,7 @@ export async function handleGooglePlayDeveloperNotification(
     };
   }
   if (outcome.status === 'grant_not_found') {
-    return unmatched('GOOGLE_PLAY_RTDN_GRANT_NOT_FOUND');
+    return unmatched('GOOGLE_PLAY_RTDN_GRANT_NOT_FOUND', withOrder);
   }
   if (outcome.status === 'invalid') {
     return { status: 'rejected', reason: outcome.reason, ...withId };

@@ -1024,7 +1024,8 @@ the Worker's store: D1 in production.
 push subscription sends (`Authorization: Bearer <JWT>`). The Worker checks
 the RS256 signature against Google's published keys
 (`https://www.googleapis.com/oauth2/v3/certs`, cached per isolate for the
-response's `max-age`), the issuer (`https://accounts.google.com` or
+response's `max-age`; while that endpoint is down a held key keeps
+verifying for at most six hours past its expiry, then pushes answer `503`), the issuer (`https://accounts.google.com` or
 `accounts.google.com`), the audience, the `email` claim against
 `GAME_SERVICES_GOOGLE_PLAY_RTDN_SERVICE_ACCOUNT` with `email_verified`, and
 `exp`/`iat` with a minute of clock skew
@@ -1053,15 +1054,16 @@ redelivers on anything else
 | Voided, not listed yet, or grant not on this ledger, event less than an hour old | `503` (redelivered: Google lists voids with some lag, and a purchase may still be writing its grant) |
 | Voided, not listed or grant not found after that hour, or no event time | `200 ignored`; the sweep reads the void again |
 | The Voided Purchases API lookup failed (outage, quota) | `503` |
-| Quantity-based partial refund (`refundType` 2) | `200 ignored`, logged with the order id; the grant stays, as with the sweep |
+| Quantity-based partial refund (`refundType` 2) | `200 ignored`, logged; the grant stays, as with the sweep |
 | Voided subscription (`productType` 1), `subscriptionNotification` | `200 ignored`: the kit sells no Play subscriptions |
 | `testNotification`, `oneTimeProductNotification`, other kinds | `200 ignored`, logged: purchases are granted only when the game verifies them |
 | Another package, a malformed envelope or payload, a body over 64 KiB | `200` (`ignored` or `rejected`), so it is not redelivered until retention runs out |
 | A ledger conflict | `200 conflict`, logged at error |
 | Unauthenticated | `401`; incomplete settings `503`; a store error `500` |
 
-The log line names the Pub/Sub message id, the outcome, and the order id;
-the purchase token is never logged. Revocations are keyed by the purchase
+The log line names the Pub/Sub message id, the outcome, and, once the
+Voided Purchases API lists the void, its order id (never one the push body
+claims); the purchase token is never logged. Revocations are keyed by the purchase
 token, so a redelivery needs no message id bookkeeping.
 
 **Setup** (Google Cloud project of the app's Play Console link, then Play

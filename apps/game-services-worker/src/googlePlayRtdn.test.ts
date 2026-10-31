@@ -158,7 +158,7 @@ try {
   const voided = (purchaseToken: string, extra: Record<string, unknown> = {}) => ({
     voidedPurchaseNotification: {
       purchaseToken,
-      orderId: `GPA.${purchaseToken}`,
+      orderId: 'GPA.claimed-by-push',
       productType: 2,
       refundType: 1,
       ...extra,
@@ -222,6 +222,12 @@ try {
   assert.equal(revocations[0]?.reason, 'chargeback', 'the listed voidedReason is recorded');
   assert.equal(revocations[0]?.revokedAt, new Date(nowMs - 1_500).toISOString());
   assert.equal(revocations[0]?.payload.googlePlayOrderId, 'GPA.refunded-token');
+  assert.equal(
+    first.body.orderId,
+    'GPA.refunded-token',
+    'the listed order id, not the push\u2019s',
+  );
+  assert.equal('orderId' in unconfirmed.body, false, 'an unconfirmed push names no order id');
   assert.equal(revocations[0]?.payload.googlePlayVoidedSource, 0);
   const duplicate = await post(voided('refunded-token'));
   assert.equal(duplicate.status, 200);
