@@ -604,8 +604,10 @@ function buildWorkerNotifications(env: GameServicesNotificationsEnv): WorkerNoti
 
 /**
  * The copy binding as the service's resolver: the project's answer, else
- * the catalog's copy for the locale. A call counts toward a cron run's
- * subrequests.
+ * the catalog's copy for the locale. The call is charged to a cron run's
+ * subrequests before it is made, so a run out of budget never calls the
+ * binding, and its `NotificationCronBudgetExhausted` passes through the
+ * service unwrapped, as a store call's does.
  */
 export function workerNotificationCopyResolver(
   binding: GameServicesNotificationsCopyBinding,
@@ -1057,7 +1059,16 @@ export const defaultNotificationCronSubrequestBudget = 1_000;
 const estimatedStoreOperationsPerDueItem = 12;
 const maxProviderFetchesPerSend = 4;
 const estimatedOperationsPerDueItem = estimatedStoreOperationsPerDueItem + maxProviderFetchesPerSend;
-/** A send asks the copy binding at its first check and again before the provider call. */
+/**
+ * Copy binding calls one due item may make. The service keeps one answer
+ * per topic, provider, target, locale, notice variant, and template data for
+ * the whole run, so a reminder's first check and its dispatch, and its
+ * recipients in one locale, share a call. A round still handles up to its
+ * batch of schedule entries and its batch of due sends, which can be
+ * different sends needing their own calls, and a player's devices may span
+ * two locales: two per item covers both. Actual calls are counted; this only
+ * keeps a round from starting when it may not fit.
+ */
 const copyBindingCallsPerDueItem = 2;
 
 function operationsPerDueItemOf(env: GameServicesNotificationsEnv): number {
@@ -1079,11 +1090,16 @@ const cronInvocation = new AsyncLocalStorage<NotificationCronBudget>();
 const lastCronOperations = new WeakMap<object, number>();
 const endpointWritesBySession = new Map<string, number[]>();
 
-class NotificationCronBudgetExhausted extends Error {
-  override readonly name = 'NotificationCronBudgetExhausted';
-
+/**
+ * A `NotificationError` (retryable) so that the copy resolver lets it through
+ * as the budget's own failure instead of a copy outage; the service rethrows
+ * a resolver's `NotificationError` as is.
+ */
+class NotificationCronBudgetExhausted extends NotificationError {
   constructor() {
-    super('Notifications cron subrequest budget is exhausted; this run stops.');
+    super('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', {
+      message: 'Notifications cron subrequest budget is exhausted; this run stops.',
+    });
   }
 }
 

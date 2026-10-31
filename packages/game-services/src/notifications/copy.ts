@@ -59,8 +59,9 @@ export interface NotificationCopyResolverInput {
  * answers `undefined` when it has none: the send is then skipped as
  * `unavailable: copy-missing`, never sent with empty text. The answer's
  * `{{name}}` placeholders are filled from the send's template data, as
- * catalog copy is. A resolver that throws fails the attempt as a host
- * that cannot answer does, and the send is retried.
+ * catalog copy is. A resolver that throws fails the attempt, and the send
+ * is retried: a `NotificationError` keeps its own code, and any other throw
+ * is a copy outage (`NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`).
  */
 export type NotificationCopyResolver = (
   input: NotificationCopyResolverInput,
@@ -145,7 +146,12 @@ function copyIssue(answer: unknown, input: NotificationCopyResolverInput): strin
     return 'the copy resolver answered a blank title or body';
   }
   if (input.notice !== undefined) {
-    const issues = notificationNoticeTextIssues({ title, body }, input.notice.variant);
+    // Every notice variant follows the same text rules (`notificationNoticeCopyIssues`
+    // applies them to each one); the path names the answer as notices.copy would.
+    const issues = notificationNoticeTextIssues(
+      { title, body },
+      `notices.copy[${JSON.stringify(input.locale ?? input.defaultLocale)}][${JSON.stringify(input.notice.variant)}]`,
+    );
     if (issues.length > 0) {
       return `the copy resolver's notice text breaks the notice rules: ${issues
         .map((issue) => `${issue.path}: ${issue.message}`)

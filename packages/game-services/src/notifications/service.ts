@@ -461,6 +461,9 @@ interface Recipient {
   readonly timeZone?: string;
 }
 
+/** Copy resolver answers kept for one invocation (`copyFor`). */
+type NotificationCopyCache = Map<string, Promise<NotificationResolvedCopy>>;
+
 type RowChange =
   | { readonly kind: 'remove' }
   | { readonly kind: 'set'; readonly row: NotificationSendRow };
@@ -566,15 +569,25 @@ export function createNotificationService(input: CreateNotificationServiceInput)
    * The copy the resolver answers for a recipient's send. It is asked only
    * once the gate, deciding with `copyStandIn`, allowed the recipient with
    * content from copy (`notificationContentSource` is `catalog`), so the
-   * stand-in never reaches a provider. `cache` keeps one answer per target
-   * and locale for one send. A resolver failure is a host that cannot
-   * answer now; an answer that cannot be sent is reported and is no copy.
+   * stand-in never reaches a provider.
+   *
+   * `cache` lives for one invocation (one `deliver`, one queued job, one
+   * `dispatchDue`, or one scheduler run) and keeps one answer per topic,
+   * provider, target, locale, notice variant, and template data, so the
+   * recipients and rows that share them share one resolver call, and a
+   * send's first check and its provider call in the same invocation do too.
+   * The template data is part of the key because the resolver is given it.
+   *
+   * A `NotificationError` the resolver throws keeps its own code and passes
+   * through (the Worker's cron budget does); any other throw is a copy
+   * outage (`NotificationCopyUnavailableError`). An answer that cannot be
+   * sent is reported and is no copy.
    */
   const copyFor = async (
     recipient: Recipient,
     request: NotificationStoredSendRequest,
     origin: NotificationSendOrigin,
-    cache: Map<string, Promise<NotificationResolvedCopy>>,
+    cache: NotificationCopyCache,
   ): Promise<NotificationResolvedCopy> => {
     const topic = topicFor(recipient.provider, recipient.target, request.topic, origin);
     if (topic === undefined) {
@@ -582,7 +595,20 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     }
     const provider = recipient.provider.entry.provider;
     const locale = request.locale ?? recipient.locale;
-    const key = JSON.stringify([provider, recipient.target ?? null, locale ?? null]);
+    const key = JSON.stringify([
+      topic.id,
+      provider,
+      recipient.target ?? null,
+      locale ?? null,
+      origin.kind === 'notice' ? origin.variant : null,
+      request.templateData === undefined
+        ? null
+        : Object.entries(request.templateData).sort(([left], [right]) => (left < right
+            ? -1
+            : left > right
+              ? 1
+              : 0)),
+    ]);
     let resolved = cache.get(key);
     if (resolved === undefined) {
       resolved = (async () => {
@@ -597,6 +623,9 @@ export function createNotificationService(input: CreateNotificationServiceInput)
             ...(origin.kind === 'notice' ? { notice: { variant: origin.variant } } : {}),
           });
         } catch (error) {
+          if (error instanceof NotificationError) {
+            throw error;
+          }
           throw new NotificationCopyUnavailableError(topic.id, { cause: error });
         }
         const where = { sendKey: request.idempotencyKey, provider };
@@ -1054,6 +1083,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     origin: NotificationSendOrigin,
     at: number,
     queuedUntil?: number,
+    copies: NotificationCopyCache = new Map(),
   ): Promise<{ readonly rows: NotificationSendRow[]; readonly refusals: NotificationDeliveryRefusal[] }> => {
     const recipients = await recipientsOf(request, at, origin);
     if (recipients.length === 0) {
@@ -1067,7 +1097,6 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     }>();
     const rows: NotificationSendRow[] = [];
     const refusals: NotificationDeliveryRefusal[] = [];
-    const copies = new Map<string, Promise<NotificationResolvedCopy>>();
     let checked = 0;
     let hostFailure: unknown;
     for (const recipient of recipients) {
@@ -1082,8 +1111,11 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       // A host that cannot answer is skipped; the send fails only when no
       // provider could be checked and none passed. The copy resolver is
       // asked only for a recipient the gate would allow, once per target and
-      // locale, and its failure counts as a host's.
+      // locale. Its failure fails the whole check rather than skipping the
+      // recipients of one locale, which would store a send that never
+      // reaches them.
       let decision: NotificationDeliveryDecision;
+      let resolvingCopy = false;
       try {
         const evaluate = (
           permission: NotificationPermissionState | undefined,
@@ -1104,14 +1136,15 @@ export function createNotificationService(input: CreateNotificationServiceInput)
           : undefined;
         decision = early?.decision ?? evaluate(permission).decision;
         if (decision.status === 'allowed' && decision.content.source === 'catalog') {
+          resolvingCopy = true;
           decision = evaluate(permission, await copyFor(recipient, request, origin, copies)).decision;
         }
         checked += 1;
       } catch (error) {
         if (
-          error instanceof NotificationError
+          !resolvingCopy
+          && error instanceof NotificationError
           && error.code === 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE'
-          && !(error instanceof NotificationCopyUnavailableError)
         ) {
           hostFailure ??= error;
           continue;
@@ -1246,6 +1279,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     provider: string,
     rowKey: string,
     mode: RunMode,
+    copies: NotificationCopyCache = new Map(),
   ): Promise<{ readonly refusal?: NotificationDeliveryRefusal }> => {
     let claimed: {
       readonly send: NotificationStoredSend;
@@ -1360,7 +1394,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         && evaluated.decision.status === 'allowed'
         && evaluated.decision.content.source === 'catalog'
       ) {
-        const resolvedCopy = await copyFor(recipient, send.request, send.origin, new Map());
+        const resolvedCopy = await copyFor(recipient, send.request, send.origin, copies);
         // The resolver took time: the gate decides again at the time of the
         // call, so a window that opened meanwhile (the night window) holds it.
         at = nowMs();
@@ -1633,13 +1667,14 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     sendKey: string,
     rows: readonly NotificationSendRow[],
     mode: RunMode,
+    copies: NotificationCopyCache = new Map(),
   ): Promise<{ readonly refusals: NotificationDeliveryRefusal[]; readonly failed: number }> => {
     const refusals: NotificationDeliveryRefusal[] = [];
     let callerError: unknown;
     const errors: { readonly error: unknown; readonly row: NotificationSendRow }[] = [];
     for (const row of rows) {
       try {
-        const { refusal } = await runRow(sendKey, row.provider, row.key, mode);
+        const { refusal } = await runRow(sendKey, row.provider, row.key, mode, copies);
         if (refusal !== undefined) {
           refusals.push(refusal);
         }
@@ -1675,9 +1710,11 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     version: string,
     at: number,
   ): Promise<NotificationDeliveryOutcome> => {
+    // One copy cache for the first check and the inline provider calls.
+    const copies: NotificationCopyCache = new Map();
     let planned: Awaited<ReturnType<typeof plan>>;
     try {
-      planned = await plan(send.request, send.origin, at);
+      planned = await plan(send.request, send.origin, at, undefined, copies);
     } catch (error) {
       // Nothing was sent: the key is released so a retry evaluates again.
       try {
@@ -1717,7 +1754,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       }
       return notificationSendOutcome(stored) ?? { status: 'in-flight' };
     }
-    const ran = await runInline(send.key, queued, 'job');
+    const ran = await runInline(send.key, queued, 'job', copies);
     return settle(send.key, [...refusals, ...ran.refusals]);
   };
 
@@ -1806,6 +1843,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
   const dispatchDueRows = async (
     options: { readonly limit?: number } = {},
     pace: ReturnType<typeof paceBudgets> = paceBudgets(),
+    copies: NotificationCopyCache = new Map(),
   ) => {
     const limit = batchLimit(options.limit);
     const keys = await store.listDueSends({ at: formatNotificationInstant(nowMs()), limit });
@@ -1853,7 +1891,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
           results.push({ sendKey, outcome: await settle(sendKey, []) });
           continue;
         }
-        const ran = await runInline(sendKey, due, 'due');
+        const ran = await runInline(sendKey, due, 'due', copies);
         if (ran.failed > 0) {
           failed += 1;
         }
@@ -1935,11 +1973,12 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     created: { readonly send: NotificationStoredSend; readonly version: string },
     at: number,
     dueAt: number,
+    copies: NotificationCopyCache = new Map(),
   ): Promise<{ readonly outcome: NotificationDeliveryOutcome; readonly stored: boolean } | undefined> => {
     const { send, version } = created;
     let planned: Awaited<ReturnType<typeof plan>>;
     try {
-      planned = await plan(send.request, send.origin, at, Math.min(dueAt, at));
+      planned = await plan(send.request, send.origin, at, Math.min(dueAt, at), copies);
     } catch (error) {
       await releaseQuietly(send.key, version);
       if (error instanceof NotificationSendInputError) {
@@ -2092,6 +2131,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
   const fireReminder = async (
     held: NotificationVersionedScheduleEntry,
     reminder: NotificationStoredReminder,
+    copies: NotificationCopyCache = new Map(),
   ): Promise<NotificationDueResult | 'busy' | 'stale' | undefined> => {
     const { player } = held.entry;
     const at = nowMs();
@@ -2171,7 +2211,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       // The rows are due when the entry was: a past fireAt counts from its
       // set time. A pending reminder always has a due time (runScheduler
       // takes only entries with one); fireAt only satisfies the type.
-      result = await storeItemRows(made.created, at, Date.parse(held.entry.dueAt ?? reminder.fireAt));
+      result = await storeItemRows(made.created, at, Date.parse(held.entry.dueAt ?? reminder.fireAt), copies);
     } catch (error) {
       if (error instanceof NotificationError && error.code === 'NOTIFICATIONS_INVALID_INPUT') {
         // A send that cannot be made as asked fails once.
@@ -2271,6 +2311,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
   const checkNotices = async (
     held: NotificationVersionedScheduleEntry,
     check: NotificationNoticeCheck,
+    copies: NotificationCopyCache = new Map(),
   ): Promise<NotificationDueResult[]> => {
     const { player } = held.entry;
     if (!carriesNotices() || noticeTopic === undefined) {
@@ -2348,7 +2389,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         continue;
       }
       try {
-        const result = await storeItemRows(made.created, at, seoulMidnight(sendFrom));
+        const result = await storeItemRows(made.created, at, seoulMidnight(sendFrom), copies);
         if (result === undefined) {
           // Another run took the key over: its push is looked at again.
           waiting = true;
@@ -2557,6 +2598,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
   const runScheduleEntries = async (
     limit: number,
     touched: Map<string, NotificationDeliveryOutcome>,
+    copies: NotificationCopyCache = new Map(),
   ): Promise<{
     readonly listed: number;
     readonly handled: number;
@@ -2581,13 +2623,13 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         }
         const { item } = held.entry;
         if (item.kind === 'notices') {
-          for (const result of await checkNotices(held, item)) {
+          for (const result of await checkNotices(held, item, copies)) {
             touched.set(result.sendKey, result.outcome);
           }
         } else if (item.firedAt !== undefined) {
           await forgetFiredReminder(held, item);
         } else {
-          const result = await fireReminder(held, item);
+          const result = await fireReminder(held, item, copies);
           if (result === 'busy') {
             // Another run holds its send, or a live claim of other content
             // still occupies the key: it waits a minute, so the next round
@@ -3150,14 +3192,17 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       const touched = new Map<string, NotificationDeliveryOutcome>();
       // One pace for the whole run: rows taken in an earlier round count.
       const pace = paceBudgets();
+      // One copy cache for the whole run: a reminder's first check and its
+      // dispatch, and recipients that share a locale, share a resolver call.
+      const copies: NotificationCopyCache = new Map();
       let failed = 0;
       for (;;) {
         let more: boolean;
         let progressed: boolean;
         try {
-          const entries = await runScheduleEntries(limit, touched);
+          const entries = await runScheduleEntries(limit, touched, copies);
           failed += entries.failed;
-          const dispatched = await dispatchDueRows({ limit }, pace);
+          const dispatched = await dispatchDueRows({ limit }, pace, copies);
           failed += dispatched.failed;
           for (const result of dispatched.results) {
             touched.set(result.sendKey, result.outcome);

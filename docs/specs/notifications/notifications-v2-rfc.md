@@ -3148,7 +3148,10 @@ that also removes commerce v1.
      `copy.resolve` and skips the recipient as `unavailable: copy-missing`
      ([gate step 9](#policy-gate)), never a send with empty or placeholder
      text.
-   - **A resolver that throws** fails the attempt with
+   - **A resolver that throws** fails the attempt. A `NotificationError`
+     keeps its own code and passes through as is (the Worker's cron
+     subrequest budget does, so a run out of budget stops as it does at a
+     store call); any other throw is a copy outage,
      `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`. At a send's first check the
      whole send fails and its key is released, rather than skipping the
      recipients of one locale, so the caller's retry (or the scheduler's
@@ -3168,17 +3171,23 @@ that also removes commerce v1.
      answers.
    - **One call per locale group.** `resolveNotificationCopyByLocale` asks
      once per distinct locale and returns each answer keyed by locale, for a
-     bulk send that groups its recipients by locale. A single send asks only
+     bulk send that groups its recipients by locale. The service asks only
      for a recipient the gate would otherwise allow (the gate decides first
-     with a stand-in text that never reaches a provider), once per target
-     and locale at its first check, and again immediately before each
-     provider call, so a refused recipient costs no call and a changed
-     answer is the one sent.
+     with a stand-in text that never reaches a provider), so a refused
+     recipient costs no call. It keeps one answer per topic, provider,
+     target, locale, notice variant, and template data for one invocation
+     (a `deliver`, a queued job, a `dispatchDue`, or a scheduler run), so a
+     send's recipients in one locale, and its first check and its provider
+     calls in the same invocation, share one call; the template data is
+     part of the key because the resolver is given it. The gate still
+     decides again at the time of each provider call, after any resolver
+     wait, so a window that opened meanwhile holds the send.
    - **The Worker.** It reads the catalog from `MPGD_NOTIFICATIONS_CATALOG`
      as before, and an optional `GAME_SERVICES_NOTIFICATIONS_COPY` service
      binding (`resolveNotificationCopy`) answers first; where it answers
-     `null` or nothing, the catalog's copy does. Each call counts toward a
-     cron run's subrequests.
+     `null` or nothing, the catalog's copy does. Each call is charged to a
+     cron run's subrequests before it is made, and the round reserve counts
+     two calls per due item.
    - **Why a resolver and not only the catalog.** The catalog is bundled
      into the Worker's configuration and the Devvit build, so a new language
      or a copy fix there needs a redeploy, and a project with a translation

@@ -1658,13 +1658,123 @@ try {
   const copySends = sends.slice(copySentBefore);
   assert.ok(copySends[0]?.body.includes('Mina challenged you.'), copySends[0]?.body);
   assert.ok(copySends[1]?.body.includes('Mina님이 도전했어요.'), copySends[1]?.body);
-  // Asked at the send's first check and again immediately before the provider call.
+  // One call per send: its first check and its provider call share the answer.
   assert.deepEqual(copyAsks, [
     { topic: 'friend-challenge', locale: 'en-US', provider: 'fcm' },
-    { topic: 'friend-challenge', locale: 'en-US', provider: 'fcm' },
-    { topic: 'friend-challenge', locale: 'ko-KR', provider: 'fcm' },
     { topic: 'friend-challenge', locale: 'ko-KR', provider: 'fcm' },
   ]);
+
+  // A cron run whose subrequest budget runs out at a copy call stops with the budget's own
+  // failure, not a copy outage, and never calls the binding past the budget. One player has
+  // devices in 24 locales, so the first check makes 24 copy calls in a row, more than one
+  // round's reserve covers.
+  {
+    const locales = [
+      'en',
+      'fr',
+      'de',
+      'es',
+      'it',
+      'ja',
+      'zh',
+      'pt',
+      'ru',
+      'nl',
+      'sv',
+      'da',
+      'fi',
+      'nb',
+      'pl',
+      'cs',
+      'tr',
+      'el',
+      'he',
+      'ar',
+      'hi',
+      'th',
+      'vi',
+      'id',
+    ];
+    const runWithBudget = async (budget: number) => {
+      let bindingCalls = 0;
+      const settings = { budget: String(budget) };
+      const budgetEnv = {
+        ...env,
+        MPGD_NOTIFICATIONS_DUE_BATCH: '1',
+        MPGD_NOTIFICATIONS_CRON_BUDGET_SECONDS: '20',
+        get MPGD_NOTIFICATIONS_SUBREQUEST_BUDGET() {
+          return settings.budget;
+        },
+        GAME_SERVICES_NOTIFICATIONS_COPY: {
+          async resolveNotificationCopy(input: { readonly locale?: string }) {
+            bindingCalls += 1;
+            return { title: `T ${input.locale ?? ''}`, body: 'B' };
+          },
+        },
+      } satisfies GameServicesWorkerEnv;
+      const ready = resolveWorkerNotifications(budgetEnv);
+      assert.ok(ready.status === 'ready');
+      for (const locale of locales) {
+        const installation = {
+          player: 'p-budget',
+          sessionId: `s-budget-${locale}`,
+          installationId: `i-budget-${locale}`,
+        };
+        await ready.service.registerEndpoint(installation, {
+          registration: {
+            provider: 'fcm',
+            address: { kind: 'fcm-token', value: `tok-budget-${locale}`, permission: 'granted' },
+            locale,
+          },
+          target: 'android',
+        });
+      }
+      await ready.service.setReminder(
+        { player: 'p-budget', sessionId: 's-budget-en', installationId: 'i-budget-en' },
+        {
+          key: 'budget',
+          topic: 'friend-challenge',
+          fireAt: new Date(Date.now() - 60_000).toISOString(),
+          templateData: { name: 'A' },
+        },
+      );
+      const logged: string[] = [];
+      const realError = console.error;
+      console.error = (...args: unknown[]) => {
+        logged.push(args.map(String).join(' '));
+      };
+      try {
+        await runScheduledNotifications(budgetEnv, { cron: '* * * * *' });
+      } finally {
+        console.error = realError;
+      }
+      return { budgetEnv, settings, bindingCalls: () => bindingCalls, logged };
+    };
+    let found: Awaited<ReturnType<typeof runWithBudget>> | undefined;
+    let sentDuringFound = 0;
+    for (let budget = 18; budget <= 80 && found === undefined; budget += 1) {
+      const sentBeforeRun = sends.length;
+      const run = await runWithBudget(budget);
+      sentDuringFound = sends.length - sentBeforeRun;
+      // Some copy calls were made, but not all: the budget ran out at a copy call.
+      if (run.bindingCalls() > 0 && run.bindingCalls() < locales.length) {
+        found = run;
+      }
+    }
+    assert.ok(found !== undefined, 'some budget runs out between copy calls');
+    assert.ok(
+      found.logged.some((line) => line.includes('cron subrequest budget is exhausted')),
+      found.logged.join('\n'),
+    );
+    assert.ok(
+      !found.logged.some((line) => line.includes('copy resolver could not answer')),
+      found.logged.join('\n'),
+    );
+    // The first check failed as a whole: no device got the reminder in this run. The send key
+    // keeps its claim until the lease ends (its release ran out of budget too), as after any
+    // store call that runs out mid-check, and a later run fires the reminder then.
+    assert.equal(sentDuringFound, 0);
+  }
   console.info('Worker notifications routes passed.');
 } finally {
   globalThis.fetch = realFetch;

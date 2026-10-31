@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 
 import {
+  NotificationError,
   notificationNoticeVariants,
   referenceNotificationProviders,
   type NotificationDeliveryProviderEntry,
@@ -21,7 +22,11 @@ import type {
   NotificationRemoteDeliveryRequest,
 } from './delivery-provider.js';
 import { createNotificationProviderRegistry } from './registry.js';
-import { createNotificationService, type NotificationSession } from './service.js';
+import {
+  createNotificationService,
+  type NotificationDispatchJob,
+  type NotificationSession,
+} from './service.js';
 import { createInMemoryNotificationStore } from './store.js';
 
 /**
@@ -98,12 +103,16 @@ function harness(options: {
   readonly notices?: boolean;
   readonly start?: string;
   readonly template?: boolean;
+  /** Queue dispatch jobs instead of running them inline, so each job is its own invocation. */
+  readonly queue?: boolean;
 } = {}) {
   let at = Date.parse(options.start ?? '2026-10-19T03:00:00Z');
   const fcm = fakeProvider('fcm');
   const template = fakeProvider('template');
   const store = createInMemoryNotificationStore();
   const errors: string[] = [];
+  const messages: string[] = [];
+  const jobs: NotificationDispatchJob[] = [];
   const topics = options.topics ?? [challenge];
   const service = createNotificationService({
     store,
@@ -126,8 +135,20 @@ function harness(options: {
     ...(options.resolveCopy === undefined ? {} : { resolveCopy: options.resolveCopy }),
     resolvePlatformRecipient: ({ player }) => `user-${player}`,
     now: () => new Date(at).toISOString(),
+    ...(options.queue === true
+      ? {
+          queue: {
+            async enqueue(batch: readonly NotificationDispatchJob[]) {
+              jobs.push(...batch);
+            },
+          },
+        }
+      : {}),
     random: () => 0,
-    onError: (_error, context) => errors.push(context.operation),
+    onError: (error, context) => {
+      errors.push(context.operation);
+      messages.push(error instanceof Error ? error.message : String(error));
+    },
   });
   const register = (player: string, locale?: string) =>
     service.registerEndpoint(session(player), {
@@ -145,6 +166,8 @@ function harness(options: {
     fcm,
     template,
     errors,
+    messages,
+    jobs,
     register,
     set(instant: string) {
       at = Date.parse(instant);
@@ -632,12 +655,14 @@ function recording(answer: (input: NotificationCopyResolverInput) => ReturnType<
 }
 
 // The gate decides again at the time of the call once the resolver answered: a slow answer across 21:00 KST defers advertising.
+// The queued job is its own invocation, so its provider call asks the resolver again.
 {
   let calls = 0;
   const slow = harness({
     topics: [events],
     deployment: kr,
     start: '2026-10-19T11:59:58Z',
+    queue: true,
     resolveCopy: (input) => {
       calls += 1;
       if (calls === 2) {
@@ -654,13 +679,139 @@ function recording(answer: (input: NotificationCopyResolverInput) => ReturnType<
     source: 'player',
     textVersion: 'v1',
   });
-  const outcome = await slow.service.deliver({
-    idempotencyKey: 'late',
-    player: 'p-1',
-    topic: events.id,
-  });
-  assert.equal(outcome.status, 'deferred');
+  assert.deepEqual(
+    await slow.service.deliver({ idempotencyKey: 'late', player: 'p-1', topic: events.id }),
+    { status: 'in-flight' },
+  );
+  for (const job of slow.jobs) {
+    await slow.service.dispatch(job);
+  }
+  assert.equal(calls, 2);
   assert.equal(slow.fcm.calls.length, 0);
+  assert.equal(slow.store.inspect().sends[0]?.rows[0]?.state.status, 'deferred');
+}
+
+// One resolver call per invocation and key: a send to three devices in one locale, its first check and its
+// provider calls, and two reminders with the same data fired in one scheduler run each ask once.
+{
+  const { resolver, asked } = recording(() => ({ title: 'Ping', body: 'Pong' }));
+  const h = harness({ resolveCopy: resolver });
+  for (const installation of ['a', 'b', 'c']) {
+    await h.service.registerEndpoint(
+      { player: 'p-1', sessionId: `s-${installation}`, installationId: `install-${installation}` },
+      {
+        registration: {
+          provider: 'fcm',
+          address: { kind: 'fcm-token', value: `tok-${installation}`, permission: 'granted' },
+          locale: 'en',
+        },
+        target: 'ios',
+      },
+    );
+  }
+  assert.deepEqual(
+    await h.service.deliver({ idempotencyKey: 'fan-out', player: 'p-1', topic: challenge.id }),
+    { status: 'delivered', alreadyProcessed: false },
+  );
+  assert.equal(h.fcm.calls.length, 3);
+  assert.equal(
+    asked.length,
+    1,
+    'three devices, one check and three provider calls: one resolver call',
+  );
+  // Two players' reminders with the same data in one run share a call; other data asks again.
+  await h.register('p-2', 'en');
+  await h.register('p-3', 'en');
+  for (const [player, data] of [
+    ['p-2', undefined],
+    ['p-3', undefined],
+    ['p-1', { name: 'Jun' }],
+  ] as const) {
+    await h.service.setReminder(session(player), {
+      key: 'r',
+      topic: challenge.id,
+      fireAt: '2026-10-19T04:00:00Z',
+      ...(data === undefined ? {} : { templateData: data }),
+    });
+  }
+  h.set('2026-10-19T04:00:00Z');
+  const before = asked.length;
+  await h.service.runScheduler();
+  assert.equal(h.fcm.calls.length, 3 + 1 + 1 + 3);
+  assert.equal(asked.length - before, 2, 'one call without data, one for the data that differs');
+}
+
+// A resolver's NotificationError keeps its code and passes through; any other throw is a copy outage.
+{
+  const own = new NotificationError('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', {
+    message: 'budget spent',
+  });
+  const passing = harness({
+    resolveCopy: () => {
+      throw own;
+    },
+  });
+  await passing.register('p-1');
+  await assert.rejects(
+    passing.service.deliver({ idempotencyKey: 'own', player: 'p-1', topic: challenge.id }),
+    (error: unknown) => error === own,
+  );
+  const outage = harness({
+    resolveCopy: () => {
+      throw new Error('strings store down');
+    },
+  });
+  await outage.register('p-1');
+  await assert.rejects(
+    outage.service.deliver({ idempotencyKey: 'down', player: 'p-1', topic: challenge.id }),
+    { code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', message: /copy resolver could not answer/u },
+  );
+}
+
+// A notice text that breaks the notice placeholder rule for its variant is no copy, reported with its path.
+{
+  const consent = {
+    kind: 'advertising',
+    state: 'granted',
+    source: 'player',
+    textVersion: 'v1',
+  } as const;
+  const h = harness({
+    topics: [events, noticeTopic],
+    deployment: kr,
+    notices: true,
+    resolveCopy: (input) =>
+      input.notice === undefined
+        ? resolveCatalogNotificationCopy(input)
+        : { title: '[Game] Consent result', body: '{{consentDate}}: {{name}} agreed.' },
+  });
+  await h.register('p-1', 'en');
+  await h.service.recordConsent(session('p-1'), consent);
+  h.set('2026-10-25T15:00:00Z');
+  await h.service.runScheduler();
+  assert.equal(h.fcm.calls.length, 0);
+  const reported = h.messages.find((message) => message.includes('notice rules'));
+  assert.ok(
+    reported?.includes('notices.copy["en"]["consent-result.advertising.granted"].body'),
+    reported,
+  );
+  assert.ok(reported?.includes('{{name}}'), reported);
+  // The same check, called directly.
+  const resolution = await resolveNotificationCopy(
+    () => ({ title: '[Game] Re-confirmation', body: 'You still agree.' }),
+    {
+      topic: noticeTopic,
+      provider: 'fcm',
+      locale: 'ko-KR',
+      defaultLocale: 'ko',
+      notice: { variant: 'reconfirmation.night' },
+    },
+  );
+  assert.equal(resolution.copy, undefined);
+  assert.match(
+    resolution.issue ?? '',
+    /notices\.copy\["ko-KR"\]\["reconfirmation\.night"\]: .*\{\{consentDate\}\}/u,
+  );
 }
 
 console.info('Notifications copy tests passed.');
