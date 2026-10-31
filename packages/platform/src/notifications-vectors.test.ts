@@ -35,7 +35,7 @@ function readVector(file: string): unknown {
 }
 
 describe('notifications conformance vectors', () => {
-  it('ships the fifty RFC vectors', () => {
+  it('ships the fifty-three RFC vectors', () => {
     expect(vectorFiles).toEqual([
       'action-required-login.json',
       'advertising-needs-consent.json',
@@ -45,11 +45,14 @@ describe('notifications conformance vectors', () => {
       'advertising-rules-none.json',
       'advertising-sender-required.json',
       'advertising-unsupported-by-host.json',
+      'duplicate-topics-once.json',
       'endpoint-fan-out.json',
       'endpoint-lifecycle.json',
+      'endpoint-registration-refresh.json',
       'endpoint-rotation.json',
       'endpoint-unbind-on-logout.json',
       'endpoint-unbind-on-session-end.json',
+      'endpoint-unbind-until-register.json',
       'game-rendered-opt-in-again.json',
       'game-rendered-opt-in.json',
       'game-rendered-opt-out.json',

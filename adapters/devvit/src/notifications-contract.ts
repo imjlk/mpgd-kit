@@ -38,8 +38,9 @@ export const devvitNotificationsPerAppPerDay = 25_000;
 
 /**
  * Devvit's length unit, which the RFC left to P3. The docs give the limits
- * in "characters" without a unit, the SDK (`@devvit/notifications` 0.14.1)
- * checks nothing before `Enqueue`, and Devvit admins approve the copy
+ * in "characters" without a unit, the SDK (`@devvit/notifications` 0.14.1,
+ * and again 0.15.0 when re-checked on 2026-11-01) passes the title and body
+ * to `Enqueue` and checks nothing first, and Devvit admins approve the copy
  * before a game may send it, so the limit is a copy-review rule more than an
  * API one. The kit counts Unicode code points, as the catalog validator
  * counts its mapping fields: an accented letter or an emoji counts once, as
