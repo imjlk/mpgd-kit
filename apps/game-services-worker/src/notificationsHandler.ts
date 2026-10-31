@@ -9,7 +9,10 @@ import {
   maxClientNotificationConsentRecordsPerDay,
   NotificationConsentRateLimitError,
   parseFcmServiceAccount,
+  resolveCatalogNotificationCopy,
   type CreateNotificationServiceInput,
+  type NotificationCopyResolver,
+  type NotificationCopyResolverInput,
   type NotificationDispatchJob,
   type NotificationProviderRegistration,
   type NotificationService,
@@ -74,6 +77,22 @@ export interface GameServicesNotificationsIdentityBinding {
   }): Promise<string | null | undefined>;
 }
 
+/**
+ * A project's localized copy for remote sends (RFC "Remote copy"): the
+ * title and body templates of one topic for one recipient's locale, or
+ * `null`/`undefined` when the project has none, and then the catalog's
+ * `copy` answers (`resolveCatalogNotificationCopy`). Asked only where the
+ * content comes from copy, never for a mapping's own text or a host
+ * template; the answer is filled and labelled as catalog copy is.
+ */
+export interface GameServicesNotificationsCopyBinding {
+  resolveNotificationCopy(input: NotificationCopyResolverInput): Promise<
+    | { readonly title: string; readonly body: string }
+    | null
+    | undefined
+  >;
+}
+
 export interface GameServicesNotificationsEnv {
   readonly DB?: D1Database;
   readonly MPGD_STORE?: 'memory' | 'd1';
@@ -113,6 +132,11 @@ export interface GameServicesNotificationsEnv {
    */
   readonly MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS?: 'true';
   readonly GAME_SERVICES_NOTIFICATIONS_IDENTITY?: GameServicesNotificationsIdentityBinding;
+  /**
+   * The project's copy resolver (a service binding); without it, sends use
+   * the catalog's `copy`. Each call counts toward a cron run's subrequests.
+   */
+  readonly GAME_SERVICES_NOTIFICATIONS_COPY?: GameServicesNotificationsCopyBinding;
   /** The dispatch queue's producer; without it fan-out runs inline. */
   readonly NOTIFICATIONS_QUEUE?: Queue<NotificationDispatchJob>;
   /**
@@ -535,6 +559,7 @@ function buildWorkerNotifications(env: GameServicesNotificationsEnv): WorkerNoti
     { registry, ...(deployment === undefined ? {} : { deployment }) },
   );
   const identity = env.GAME_SERVICES_NOTIFICATIONS_IDENTITY;
+  const copy = env.GAME_SERVICES_NOTIFICATIONS_COPY;
   const queue = env.NOTIFICATIONS_QUEUE;
   const service = createNotificationService({
     store: refuseDeletedNotificationWrites(env, notificationStoreOf(env)),
@@ -549,6 +574,7 @@ function buildWorkerNotifications(env: GameServicesNotificationsEnv): WorkerNoti
             return (await identity.resolveNotificationRecipient({ provider, playerId: player })) ?? undefined;
           },
         }),
+    ...(copy === undefined ? {} : { resolveCopy: workerNotificationCopyResolver(copy) }),
     ...(queue === undefined
       ? {}
       : {
@@ -574,6 +600,22 @@ function buildWorkerNotifications(env: GameServicesNotificationsEnv): WorkerNoti
     },
   });
   return { status: 'ready', service };
+}
+
+/**
+ * The copy binding as the service's resolver: the project's answer, else
+ * the catalog's copy for the locale. The call is charged to a cron run's
+ * subrequests before it is made, so a run out of budget never calls the
+ * binding, and its `NotificationCronBudgetExhausted` passes through the
+ * service unwrapped, as a store call's does.
+ */
+export function workerNotificationCopyResolver(
+  binding: GameServicesNotificationsCopyBinding,
+): NotificationCopyResolver {
+  return async (input) => {
+    takeCronOperation();
+    return (await binding.resolveNotificationCopy(input)) ?? resolveCatalogNotificationCopy(input);
+  };
 }
 
 /**
@@ -973,7 +1015,7 @@ export async function runScheduledNotifications(
         return;
       }
       const limit = dueBatchOf(env, budget.remaining);
-      budget.roundReserve = limit * estimatedOperationsPerDueItem;
+      budget.roundReserve = limit * operationsPerDueItemOf(env);
       // The service always runs one round before it checks elapsed time, so
       // a round that cannot finish is not started.
       if (limit < 1 || budget.remaining < budget.roundReserve) {
@@ -1017,6 +1059,22 @@ export const defaultNotificationCronSubrequestBudget = 1_000;
 const estimatedStoreOperationsPerDueItem = 12;
 const maxProviderFetchesPerSend = 4;
 const estimatedOperationsPerDueItem = estimatedStoreOperationsPerDueItem + maxProviderFetchesPerSend;
+/**
+ * Copy binding calls one due item may make. The service keeps one answer
+ * per topic, provider, target, locale, notice variant, and template data for
+ * the whole run, so a reminder's first check and its dispatch, and its
+ * recipients in one locale, share a call. A round still handles up to its
+ * batch of schedule entries and its batch of due sends, which can be
+ * different sends needing their own calls, and a player's devices may span
+ * two locales: two per item covers both. Actual calls are counted; this only
+ * keeps a round from starting when it may not fit.
+ */
+const copyBindingCallsPerDueItem = 2;
+
+function operationsPerDueItemOf(env: GameServicesNotificationsEnv): number {
+  return estimatedOperationsPerDueItem
+    + (env.GAME_SERVICES_NOTIFICATIONS_COPY === undefined ? 0 : copyBindingCallsPerDueItem);
+}
 const defaultCronWallBudgetSeconds = 20;
 const endpointWriteWindowMs = 86_400_000;
 
@@ -1032,11 +1090,16 @@ const cronInvocation = new AsyncLocalStorage<NotificationCronBudget>();
 const lastCronOperations = new WeakMap<object, number>();
 const endpointWritesBySession = new Map<string, number[]>();
 
-class NotificationCronBudgetExhausted extends Error {
-  override readonly name = 'NotificationCronBudgetExhausted';
-
+/**
+ * A `NotificationError` (retryable) so that the copy resolver lets it through
+ * as the budget's own failure instead of a copy outage; the service rethrows
+ * a resolver's `NotificationError` as is.
+ */
+class NotificationCronBudgetExhausted extends NotificationError {
   constructor() {
-    super('Notifications cron subrequest budget is exhausted; this run stops.');
+    super('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', {
+      message: 'Notifications cron subrequest budget is exhausted; this run stops.',
+    });
   }
 }
 
@@ -1099,7 +1162,7 @@ function dueBatchOf(env: GameServicesNotificationsEnv, operationBudget: number):
   const declared = env.MPGD_NOTIFICATIONS_DUE_BATCH?.trim();
   const asked = declared === undefined || declared === '' ? 25 : Number(declared);
   const clamped = Number.isFinite(asked) ? Math.min(Math.max(Math.floor(asked), 1), 100) : 25;
-  const affordable = Math.floor(operationBudget / estimatedOperationsPerDueItem);
+  const affordable = Math.floor(operationBudget / operationsPerDueItemOf(env));
   return affordable < 1 ? 0 : Math.min(clamped, affordable);
 }
 
