@@ -102,6 +102,10 @@ import {
   type AppStoreNotificationVerifierBinding,
 } from './appStoreNotificationsRoute.js';
 import {
+  resolveWorkerAppStoreRevocationRegistry,
+  type AppStoreRevocationsEnv,
+} from './appStoreRevocations.js';
+import {
   createStoreServerGooglePlayDependencies,
   type StoreServerCronDependencies,
   type StoreServerCronEnv,
@@ -113,7 +117,11 @@ import {
 
 /** `DB` and `MPGD_STORE` come from `GameServicesNotificationsEnv`, which every store here shares. */
 export interface GameServicesWorkerEnv
-  extends GameServicesNotificationsEnv, StoreServerCronEnv, AccountDeletionTombstonesEnv {
+  extends
+    GameServicesNotificationsEnv,
+    StoreServerCronEnv,
+    AccountDeletionTombstonesEnv,
+    AppStoreRevocationsEnv {
   /** Local-only. Refused when MPGD_STORE is d1; see resolveWorkerEvidenceVerifier. */
   readonly MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE?: 'true';
   /**
@@ -1447,7 +1455,13 @@ function createWorkerAppStoreNotificationsFetchHandler(
     );
     return undefined;
   }
-  return createAppStoreNotificationsFetchHandler({ store, binding, bundleId });
+  const revocations = resolveWorkerAppStoreRevocationRegistry(env);
+  return createAppStoreNotificationsFetchHandler({
+    store,
+    binding,
+    bundleId,
+    ...(revocations === undefined ? {} : { revocations }),
+  });
 }
 
 const googlePlayPublisherScope = 'https://www.googleapis.com/auth/androidpublisher';
