@@ -1045,10 +1045,10 @@ export function createNotificationRuntime(
   };
   /**
    * Holds reads back from retrying a registration that failed: 30 s, doubling
-   * per failure in a row for the same session, at most an hour.
+   * per failure in a row for the same session, at most an hour. `session`
+   * is the one signed in when the attempt began, not when it failed.
    */
-  const noteRegistrationFailure = (): void => {
-    const session = retrySessionKey();
+  const noteRegistrationFailure = (session: string | undefined): void => {
     const previous = registrationRetry !== undefined && registrationRetry.session === session
       ? registrationRetry.failures
       : 0;
@@ -1062,10 +1062,12 @@ export function createNotificationRuntime(
   };
   /** `work`, noting a failure for the read backoff before it is rethrown. */
   const withRegistrationBackoff = (work: () => Promise<void>) => async (): Promise<void> => {
+    // A failure counts for the session the attempt began for, even after an account switch.
+    const session = retrySessionKey();
     try {
       await work();
     } catch (error) {
-      noteRegistrationFailure();
+      noteRegistrationFailure(session);
       throw error;
     }
   };

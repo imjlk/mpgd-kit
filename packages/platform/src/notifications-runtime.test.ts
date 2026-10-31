@@ -1379,6 +1379,50 @@ describe('createNotificationRuntime review fixes', () => {
     expect(backend.endpoints.map((endpoint) => endpoint.value)).toEqual(['tok-1']);
   });
 
+  it('counts a failure for the session the attempt began for, not the one signed in when it failed', async () => {
+    const { clock, host, backend } = setup();
+    const attempts: string[] = [];
+    let release: (() => void) | undefined;
+    let failing = true;
+    const runtime = createNotificationRuntime({
+      provider: host.provider,
+      backend: clientOf(backend, {
+        registerEndpoint: async (registration) => {
+          attempts.push(clock.now());
+          if (release === undefined && attempts.length === 1) {
+            // The first attempt (p-1's) answers only after p-2 signed in.
+            await new Promise<void>((resolve) => {
+              release = resolve;
+            });
+          }
+          if (failing) {
+            throw new NotificationError('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', { message: '503' });
+          }
+          await backend.registerEndpoint(registration);
+        },
+      }),
+      catalog: [energy],
+      clock,
+      defaultLocale: 'ko',
+      onError: () => undefined,
+    });
+    backend.authenticate('p-1');
+    host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    const started = runtime.start();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    backend.authenticate('p-2');
+    release?.();
+    await started;
+    await runtime.runUntilIdle().catch(() => undefined);
+    // p-1's failure, then p-2's sign-in registration failed once: p-2 waits 30 s, not 60.
+    expect(attempts).toHaveLength(2);
+    failing = false;
+    clock.advance(30);
+    await runtime.getPermission({ topics: ['energy-full'] });
+    await runtime.runUntilIdle();
+    expect(attempts).toHaveLength(3);
+  });
+
   it('backs reads off a registration that keeps failing: 30 s, doubling, at most an hour', async () => {
     const { clock, host, backend } = setup();
     const attempts: string[] = [];
