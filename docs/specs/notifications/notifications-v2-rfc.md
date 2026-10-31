@@ -2647,6 +2647,9 @@ listed fields of each item asserted:
 | `endpoint-rotation` | A rotated device address replaces the old one without an explicit `register()` |
 | `endpoint-unbind-on-logout` | `unregister()` removes the installation from the player; later sends find no endpoint |
 | `endpoint-unbind-on-session-end` | The end of the registering session unbinds the endpoint without `unregister()` |
+| `endpoint-unbind-until-register` | `unregister()` cancels the pending local reminders; the installation stays unbound across a restart and a read until `register()` binds it again |
+| `endpoint-registration-refresh` | A read more than 7 days after the last acknowledged registration sends it again, so a send 70 days after the first registration still reaches the device |
+| `duplicate-topics-once` | A topic listed twice in one call is read, asked, and recorded once |
 | `provider-daily-limit` | A daily provider limit suppresses the third send of the day |
 | `provider-minute-limit` | A per-minute provider limit defers the send to the end of the window |
 | `provider-rate-limited` | A `rate-limited` answer defers the send by `retryAfterSeconds`; the scheduler delivers it |
