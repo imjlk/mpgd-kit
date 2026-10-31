@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { readdir, readFile } from 'node:fs/promises';
 
-import type { NotificationDispatchJob } from '@mpgd/game-services/notifications';
+import {
+  isInsideNotificationHoldWindow,
+  type NotificationDispatchJob,
+} from '@mpgd/game-services/notifications';
 import { Miniflare } from 'miniflare';
 
 import {
@@ -13,6 +16,7 @@ import {
   asWorkerNotificationRpcResult,
   consumeNotificationDispatchBatch,
   deliverWorkerNotification,
+  deliverWorkerNotificationBulk,
   endWorkerNotificationSession,
   notificationCronOperationsUsed,
   notificationCronPeriodSeconds,
@@ -1607,6 +1611,129 @@ try {
     (await agreementService.service.listConsent({ player: 'p-ait', sessionId: 's-ait', installationId: 'i-ait' }))
       .map((record) => [record.kind, record.topic, record.state, record.source]),
     [['host-agreement', 'energy-full', 'denied', 'provider']],
+  );
+
+  // Bulk sends (BK1): only the service binding serves them, never a client session route.
+  for (const path of ['/bulk', '/sends', '/sends/bulk', '/deliver']) {
+    const refusedBulk = await call(path, {
+      authorization: 'Bearer player-1',
+      body: {
+        idempotencyKey: 'client-bulk',
+        provider: 'fcm',
+        topic: 'friend-challenge',
+        recipients: [{ player: 'p-1' }],
+      },
+    });
+    assert.deepEqual([path, refusedBulk.status], [path, 404]);
+  }
+  // Through the binding, the Apps in Toss provider takes 50 or more recipients in one send-bulk-message call.
+  const bulkCalls: { readonly url: string; readonly body: string }[] = [];
+  const bulkEnv = {
+    ...aitEnv,
+    MPGD_NOTIFICATIONS_BULK_RECIPIENTS: '55',
+    AIT_PARTNER_MTLS: {
+      async fetch(input: string, init?: RequestInit) {
+        bulkCalls.push({ url: input, body: String(init?.body) });
+        const sent = input.endsWith('/send-bulk-message')
+          ? (JSON.parse(String(init?.body)) as { readonly contextList: readonly unknown[] }).contextList.length
+          : 1;
+        return Response.json({
+          resultType: 'SUCCESS',
+          success: {
+            msgCount: sent,
+            sentPushCount: sent,
+            sentInboxCount: 0,
+            sentSmsCount: 0,
+            sentAlimtalkCount: 0,
+            sentFriendtalkCount: 0,
+            detail: {
+              sentPush: [],
+              sentInbox: [],
+              sentSms: [],
+              sentAlimtalk: [],
+              sentFriendtalk: [],
+            },
+            fail: { sentPush: [], sentInbox: [], sentSms: [], sentAlimtalk: [], sentFriendtalk: [] },
+          },
+        });
+      },
+    },
+    GAME_SERVICES_NOTIFICATIONS_IDENTITY: {
+      async resolveNotificationRecipient({ playerId }: { readonly provider: string; readonly playerId: string }) {
+        return playerId.startsWith('p-bulk-')
+          ? String(1_000 + Number(playerId.slice('p-bulk-'.length)))
+          : null;
+      },
+    },
+  } satisfies GameServicesWorkerEnv;
+  const bulkSend = {
+    idempotencyKey: 'event-halloween',
+    provider: 'apps-in-toss',
+    topic: 'energy-full',
+    recipients: Array.from({ length: 60 }, (_, index) => ({ player: `p-bulk-${index + 1}` })),
+  };
+  // Apps in Toss holds bulk messages from 21:00 to 08:00 in Seoul; the service then sends one by one.
+  const held = isInsideNotificationHoldWindow(
+    { start: '21:00', end: '08:00', timeZone: 'Asia/Seoul' },
+    Date.now(),
+  );
+  const firstBulk = await asWorkerNotificationRpcResult(() =>
+    deliverWorkerNotificationBulk(bulkEnv, bulkSend),
+  );
+  assert.ok(firstBulk.ok);
+  assert.deepEqual(firstBulk.value.summary, {
+    delivered: 55,
+    alreadyProcessed: 0,
+    deferred: 0,
+    inFlight: 0,
+    suppressed: 0,
+    unavailable: 0,
+    notAttempted: 5,
+    failed: 0,
+  });
+  assert.deepEqual(
+    firstBulk.value.providerCalls,
+    held ? { batch: 0, single: 55 } : { batch: 1, single: 0 },
+  );
+  if (!held) {
+    assert.equal(bulkCalls.length, 1);
+    assert.equal(
+      bulkCalls[0]?.url,
+      'https://apps-in-toss-api.toss.im/api-partner/v1/apps-in-toss/messenger/send-bulk-message',
+    );
+    const sentBody = JSON.parse(bulkCalls[0]?.body ?? '{}') as {
+      readonly templateSetCode: string;
+      readonly contextList: readonly { readonly userKey: unknown }[];
+    };
+    assert.equal(sentBody.templateSetCode, 'my-game-energy-full');
+    assert.deepEqual(sentBody.contextList[0], { userKey: 1001, context: {} });
+  }
+  // The same call again: the 55 answer from the ledger, and the other 5 (under 50) go one by one.
+  bulkCalls.length = 0;
+  const secondBulk = await asWorkerNotificationRpcResult(() =>
+    deliverWorkerNotificationBulk(bulkEnv, bulkSend),
+  );
+  assert.ok(secondBulk.ok);
+  assert.deepEqual(
+    [
+      secondBulk.value.summary.alreadyProcessed,
+      secondBulk.value.summary.delivered,
+      secondBulk.value.providerCalls,
+    ],
+    [55, 5, { batch: 0, single: 5 }],
+  );
+  assert.ok(bulkCalls.every((partnerCall) => partnerCall.url.endsWith('/send-message')));
+  // A malformed bulk send keeps its code across the binding.
+  assert.deepEqual(
+    await asWorkerNotificationRpcResult(() => deliverWorkerNotificationBulk(bulkEnv, { ...bulkSend, recipients: [] })),
+    {
+      ok: false,
+      error: {
+        code: 'NOTIFICATIONS_INVALID_INPUT',
+        message: 'Invalid bulk send: recipients: expected 1 to 10000 recipients.',
+        retryable: false,
+      },
+    },
   );
   console.info('Worker notifications routes passed.');
 } finally {

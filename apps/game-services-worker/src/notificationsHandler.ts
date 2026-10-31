@@ -10,6 +10,7 @@ import {
   NotificationConsentRateLimitError,
   parseFcmServiceAccount,
   type CreateNotificationServiceInput,
+  type NotificationBulkDeliveryResult,
   type NotificationDispatchJob,
   type NotificationProviderRegistration,
   type NotificationService,
@@ -137,6 +138,14 @@ export interface GameServicesNotificationsEnv {
    * Workers Paid subrequest cap (10,000 as of 2026-02-11, previously 1,000).
    */
   readonly MPGD_NOTIFICATIONS_SUBREQUEST_BUDGET?: string;
+  /**
+   * Recipients one `deliverNotificationBulk` call attempts at most; the rest
+   * answer `not-attempted` (`count-budget`), and the same call retried sends
+   * them. 500 by default: a recipient costs about 20 D1 calls and identity
+   * lookups, so 500 fit under the Workers Paid cap of 10,000 subrequests per
+   * invocation (as of 2026-02-11).
+   */
+  readonly MPGD_NOTIFICATIONS_BULK_RECIPIENTS?: string;
 }
 
 export type WorkerNotifications =
@@ -846,6 +855,27 @@ export function createNotificationsFetchHandler(
 /** The send a game server makes through the service binding. */
 export async function deliverWorkerNotification(env: GameServicesNotificationsEnv, input: unknown): Promise<unknown> {
   return readyService(env).deliver(input);
+}
+
+/** Recipients one bulk call attempts by default (`MPGD_NOTIFICATIONS_BULK_RECIPIENTS`). */
+export const defaultWorkerNotificationBulkRecipients = 500;
+
+/**
+ * The bulk send a game server or operator tool makes through the service
+ * binding (BK1), like `deliverWorkerNotification`: never a fetch route, so
+ * no client session can reach it. At most `MPGD_NOTIFICATIONS_BULK_RECIPIENTS`
+ * recipients are attempted per call.
+ */
+export async function deliverWorkerNotificationBulk(
+  env: GameServicesNotificationsEnv,
+  input: unknown,
+): Promise<NotificationBulkDeliveryResult> {
+  const declared = env.MPGD_NOTIFICATIONS_BULK_RECIPIENTS?.trim();
+  const asked = declared === undefined || declared === '' ? Number.NaN : Number(declared);
+  const maxRecipients = Number.isSafeInteger(asked) && asked >= 1
+    ? asked
+    : defaultWorkerNotificationBulkRecipients;
+  return readyService(env).deliverBulk(input, { maxRecipients });
 }
 
 /**

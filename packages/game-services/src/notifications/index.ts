@@ -5,6 +5,7 @@
  * the scheduler (consent notice pushes, paced due rows), and the remote
  * delivery provider contract, with the FCM provider.
  */
+export * from './bulk.js';
 export * from './delivery-provider.js';
 export * from './fcm.js';
 export * from './registry.js';

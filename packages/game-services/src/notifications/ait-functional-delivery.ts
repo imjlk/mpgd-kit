@@ -55,6 +55,30 @@ export const aitFunctionalMessageProviderId = 'apps-in-toss' as const satisfies 
 
 export const aitFunctionalMessagePath = 'api-partner/v1/apps-in-toss/messenger/send-message';
 
+/**
+ * The bulk functional-message API (BK1), checked 2026-11-01 in
+ * https://developers-apps-in-toss.toss.im/documentation/common/growth/smart-message.md
+ * ("대량 메시지 발송하기") and the partner API's `sendBulkMessage` operation in
+ * https://developers-apps-in-toss.toss.im/api/push.md:
+ * - `POST /api-partner/v1/apps-in-toss/messenger/send-bulk-message` with
+ *   `{ templateSetCode, contextList }`, each item `{ userKey | anonKey, context }`
+ *   (the recipient goes in the body, not a header).
+ * - It is meant for 50 or more recipients, and one call takes at most 2,500.
+ * - Messages requested from 21:00 to before 08:00 are held and sent after
+ *   08:00.
+ * - The answer has the `send-message` shape: per-channel counts and lists of
+ *   `{ contentId, reachedFailReason? }`, which name no recipient. Its
+ *   business errors are 5004, 4034, and 4095 as for `send-message`, and the
+ *   API is limited to 3,000 calls per minute per app.
+ */
+export const aitFunctionalBulkMessagePath = 'api-partner/v1/apps-in-toss/messenger/send-bulk-message';
+
+/** The fewest recipients the bulk API is meant for; fewer go one `send-message` call each. */
+export const aitFunctionalBulkMessageMinRecipients = 50;
+
+/** The most recipients one `send-bulk-message` call takes. */
+export const aitFunctionalBulkMessageMaxRecipients = 2_500;
+
 // The same values as `appsInTossPartnerApiBaseUrl` and
 // `defaultAppsInTossPartnerApiTimeoutMs` (a test keeps them equal), kept here
 // so this module loads none of the partner client's code.
@@ -113,7 +137,12 @@ export type AitFunctionalMessageAnswer =
       readonly providerCode?: string;
       readonly channels?: AitFunctionalMessageChannelResults;
     }
-  | { readonly status: 'ambiguous'; readonly providerCode?: string };
+  | {
+      readonly status: 'ambiguous';
+      readonly providerCode?: string;
+      /** A bulk call that reached some recipients without saying which: not replayed. */
+      readonly unattributed?: true;
+    };
 
 /**
  * Who one delivery goes to. Apps in Toss recipients are platform users whose
@@ -127,7 +156,8 @@ export type AitFunctionalMessageRecipient =
 export interface AitFunctionalMessageDeliveryRequest {
   readonly recipient: AitFunctionalMessageRecipient;
   /** The topic as declared for this provider: its mapping carries `templateSetCode`. */
-  readonly topic: Pick<NotificationTopicDeclaration, 'id' | 'mapping'>;
+  readonly topic: Pick<NotificationTopicDeclaration, 'id' | 'mapping'>
+    & Partial<Pick<NotificationTopicDeclaration, 'purpose'>>;
   /** The template's `context` values. */
   readonly templateData?: NotificationTemplateData;
   readonly signal?: AbortSignal;
@@ -171,6 +201,35 @@ export interface AitFunctionalMessageDeliveryProvider {
   /** The registry entry the policy gate reads for this provider. */
   readonly entry: NotificationDeliveryProviderEntry;
   send(request: AitFunctionalMessageDeliveryRequest): Promise<AitFunctionalMessageAnswer>;
+  /**
+   * The bulk path: 50 to 2,500 recipients a call, answered as a whole (the
+   * answer names no recipient), and held by the host from 21:00 to 08:00
+   * Asia/Seoul, when the service sends one by one instead.
+   */
+  readonly bulk: {
+    readonly maxRecipients: number;
+    readonly minRecipients: number;
+    readonly perRecipientOutcomes: false;
+    readonly holdWindow: { readonly start: string; readonly end: string; readonly timeZone: string };
+  };
+  /**
+   * One `send-bulk-message` call per template set code, answered in the
+   * order of `requests`. Every recipient of a call gets the call's answer:
+   * `accepted` only when one channel's sent count equals the recipients
+   * (the kit reads a channel as reaching each recipient at most once per
+   * message, which the documentation does not state), `rejected` with
+   * reason `recipient` when nothing was sent on any channel, and otherwise
+   * `ambiguous` with `unattributed` (code `BULK_PARTIAL`): some were
+   * reached, and a replay would reach them again. A failure of the whole
+   * call maps as for `send` (4095 and HTTP 429 `rate-limited`, 5004 and 4034
+   * `configuration`), except that an `agreement` code reads as `recipient`,
+   * since the call names no recipient whose agreement is missing. A request
+   * `send` would refuse, or an `advertising` topic (functional messages
+   * carry no advertising), is `rejected` without a call.
+   */
+  sendBatch(
+    requests: readonly AitFunctionalMessageDeliveryRequest[],
+  ): Promise<readonly AitFunctionalMessageAnswer[]>;
 }
 
 /** Codes the documentation names for the project's setup or credentials. */
@@ -282,9 +341,125 @@ export function createAitFunctionalMessageDeliveryProvider(
       : { status: 'ambiguous', providerCode: code };
   };
 
+  const bulkUrl = new URL(
+    aitFunctionalBulkMessagePath,
+    normalizeBaseUrl(options.baseUrl ?? defaultAitFunctionalMessageBaseUrl, {
+      allowUnlistedHost: options.allowUnlistedHost === true,
+    }),
+  ).href;
+  const bulkKey = options.recipientKey === 'anonymous' ? 'anonKey' : 'userKey';
+
+  /** One `send-bulk-message` call's answer, the same for each of its `count` recipients. */
+  const sendBulkGroup = async (
+    templateSetCode: string,
+    contextList: readonly Readonly<Record<string, unknown>>[],
+  ): Promise<AitFunctionalMessageAnswer> => {
+    const response = await post({
+      mtls: options.mtls,
+      url: bulkUrl,
+      headers: {},
+      body: { templateSetCode, contextList },
+      timeoutMs,
+    });
+    if (response.kind === 'failed') {
+      return { status: 'ambiguous', providerCode: response.reason };
+    }
+    const { status, body } = response;
+    if (status >= 500 || status === 408 || status === 425) {
+      return { status: 'ambiguous', ...providerCodeOf(body) };
+    }
+    if (status === 429) {
+      const error = isRecord(body) && isRecord(body['error']) ? body['error'] : undefined;
+      const retryAfterSeconds = retryAfterOf(error, response.retryAfter);
+      return {
+        status: 'rate-limited',
+        ...providerCodeOf(body),
+        ...(retryAfterSeconds === undefined ? {} : { retryAfterSeconds }),
+      };
+    }
+    const resultType = isRecord(body) ? body['resultType'] : undefined;
+    if (resultType === 'SUCCESS') {
+      return status >= 200 && status < 300
+        ? readBulkSuccess(isRecord(body) ? body['success'] : undefined, contextList.length)
+        : { status: 'ambiguous', providerCode: 'SUCCESS' };
+    }
+    if (resultType === 'FAIL' && isRecord(body)) {
+      const error = isRecord(body['error']) ? body['error'] : undefined;
+      const code = errorCodeOf(error?.['errorCode']);
+      if (code === undefined) {
+        return { status: 'ambiguous', providerCode: 'FAIL' };
+      }
+      const answer = classifyFailCode(code, status);
+      if (answer.status === 'rate-limited') {
+        const retryAfterSeconds = retryAfterOf(error, response.retryAfter);
+        return retryAfterSeconds === undefined ? answer : { ...answer, retryAfterSeconds };
+      }
+      // The call names no recipient: an agreement code cannot be one player's denial.
+      return answer.status === 'rejected' && answer.reason === 'agreement'
+        ? { ...answer, reason: 'recipient' }
+        : answer;
+    }
+    if (typeof resultType === 'string' && ambiguousResultTypes.has(resultType)) {
+      return { status: 'ambiguous', providerCode: resultType };
+    }
+    if (refusedRequestStatuses.has(status)) {
+      return { status: 'rejected', reason: 'configuration', ...providerCodeOf(body) };
+    }
+    return { status: 'ambiguous', ...providerCodeOf(body) };
+  };
+
   return {
     id: aitFunctionalMessageProviderId,
     entry: referenceNotificationProviders['apps-in-toss'],
+    bulk: {
+      maxRecipients: aitFunctionalBulkMessageMaxRecipients,
+      minRecipients: aitFunctionalBulkMessageMinRecipients,
+      perRecipientOutcomes: false,
+      holdWindow: { start: '21:00', end: '08:00', timeZone: 'Asia/Seoul' },
+    },
+    async sendBatch(requests) {
+      const answers: (AitFunctionalMessageAnswer | undefined)[] = requests.map(() => undefined);
+      const groups = new Map<string, { readonly indexes: number[]; readonly contexts: Readonly<Record<string, unknown>>[] }>();
+      requests.forEach((request, index) => {
+        const templateSetCode = request.topic.mapping?.['templateSetCode'];
+        const context = request.templateData ?? {};
+        if (
+          request.topic.purpose === 'advertising'
+          || typeof templateSetCode !== 'string'
+          || !isIdentifier(templateSetCode)
+          || notificationTemplateDataIssue(context) !== undefined
+          || request.recipient.kind !== 'platform-user'
+        ) {
+          answers[index] = { status: 'rejected', reason: 'configuration' };
+          return;
+        }
+        const id = request.recipient.id;
+        if (!isHeaderValue(id) || (bulkKey === 'userKey' && !/^\d+$/u.test(id))) {
+          answers[index] = { status: 'rejected', reason: 'recipient' };
+          return;
+        }
+        // The documentation types userKey as a number (int64) or a string; a
+        // number past 2^53 would lose digits in JSON, so it stays a string.
+        const key = bulkKey === 'userKey' && Number.isSafeInteger(Number(id)) ? Number(id) : id;
+        let group = groups.get(templateSetCode);
+        if (group === undefined) {
+          group = { indexes: [], contexts: [] };
+          groups.set(templateSetCode, group);
+        }
+        group.indexes.push(index);
+        group.contexts.push({ [bulkKey]: key, context });
+      });
+      for (const [templateSetCode, group] of groups) {
+        for (let start = 0; start < group.contexts.length; start += aitFunctionalBulkMessageMaxRecipients) {
+          const contexts = group.contexts.slice(start, start + aitFunctionalBulkMessageMaxRecipients);
+          const answer = await sendBulkGroup(templateSetCode, contexts);
+          for (const index of group.indexes.slice(start, start + contexts.length)) {
+            answers[index] = answer;
+          }
+        }
+      }
+      return answers.map((answer) => answer ?? { status: 'ambiguous' });
+    },
     async send(request) {
       const templateSetCode = request.topic.mapping?.['templateSetCode'];
       if (typeof templateSetCode !== 'string' || !isIdentifier(templateSetCode)) {
@@ -411,6 +586,51 @@ function readSuccess(
       failure.reachedFailReason !== undefined
       && agreementFailReasons.has(failure.reachedFailReason.trim())));
   return { status: 'rejected', reason: agreement ? 'agreement' : 'recipient', channels };
+}
+
+/**
+ * A `send-bulk-message` `SUCCESS` for `recipients` recipients. The answer
+ * names no recipient, so it proves each one reached only when one channel
+ * sent exactly as many messages as there were recipients, and proves
+ * nothing sent only when every count is zero. Anything between is some
+ * recipients reached and some not, without saying which.
+ */
+function readBulkSuccess(success: unknown, recipients: number): AitFunctionalMessageAnswer {
+  if (!isRecord(success) || !isCount(success['msgCount'])) {
+    return { status: 'ambiguous', providerCode: 'SUCCESS' };
+  }
+  const detail = success['detail'];
+  const fail = success['fail'];
+  const countFields: Readonly<Record<AitFunctionalMessageChannel, string>> = {
+    push: 'sentPushCount',
+    inbox: 'sentInboxCount',
+    sms: 'sentSmsCount',
+    alimtalk: 'sentAlimtalkCount',
+    friendtalk: 'sentFriendtalkCount',
+  };
+  const channelNames = Object.keys(channelFields) as AitFunctionalMessageChannel[];
+  const sentOn = (channel: AitFunctionalMessageChannel): number => {
+    const counted = success[countFields[channel]];
+    const listed = isRecord(detail) ? detail[channelFields[channel]] : undefined;
+    return Math.max(isCount(counted) ? counted : 0, Array.isArray(listed) ? listed.length : 0);
+  };
+  const channels = Object.fromEntries(
+    channelNames.map((channel) => [
+      channel,
+      {
+        sent: readContents(isRecord(detail) ? detail[channelFields[channel]] : undefined),
+        failed: readContents(isRecord(fail) ? fail[channelFields[channel]] : undefined),
+      },
+    ]),
+  ) as unknown as AitFunctionalMessageChannelResults;
+  const messageCount = success['msgCount'];
+  if (channelNames.some((channel) => sentOn(channel) === recipients)) {
+    return { status: 'accepted', messageCount, channels };
+  }
+  if (messageCount === 0 && channelNames.every((channel) => sentOn(channel) === 0)) {
+    return { status: 'rejected', reason: 'recipient', channels };
+  }
+  return { status: 'ambiguous', providerCode: 'BULK_PARTIAL', unattributed: true };
 }
 
 function readContents(

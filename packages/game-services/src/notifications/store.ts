@@ -153,6 +153,12 @@ export interface NotificationSendRow {
   readonly firstAttemptedAt?: string;
   /** Ambiguous answers so far; each doubles the lease before the next replay. */
   readonly ambiguousAttempts?: number;
+  /**
+   * The provider's bulk call reached some of its recipients without saying
+   * which (BK1): the row is not replayed, since a replay would reach them
+   * again, and stays in flight until its key's retention ends.
+   */
+  readonly unattributed?: true;
 }
 
 /** A send key's stored state. */
@@ -484,8 +490,9 @@ function rowDueAt(row: NotificationSendRow): number | undefined {
     return lease;
   }
   // The provider may have sent it every time: replays stop after a day, and
-  // the row stays in flight until its key's retention ends.
-  return isNotificationRowAbandoned(row, lease) ? undefined : lease;
+  // the row stays in flight until its key's retention ends. A row a bulk
+  // call left unattributed is never replayed.
+  return row.unattributed === true || isNotificationRowAbandoned(row, lease) ? undefined : lease;
 }
 
 /**

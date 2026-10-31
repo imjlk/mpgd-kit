@@ -115,7 +115,54 @@ export type NotificationRemoteDeliveryAnswer =
       /** The provider's own error code, for logs; never shown to players. */
       readonly providerCode?: string;
     }
-  | { readonly status: 'ambiguous'; readonly providerCode?: string };
+  | {
+      readonly status: 'ambiguous';
+      readonly providerCode?: string;
+      /**
+       * A bulk call that reached some of its recipients and did not say which
+       * (BK1). A replay would reach those recipients again, so the delivery is
+       * not replayed: it stays in flight until its key's retention ends, and
+       * the backend reports it. Only a batch answer sets it.
+       */
+      readonly unattributed?: true;
+    };
+
+/**
+ * A provider's bulk path (RFC open question 5, BK1): one provider call for
+ * several recipients of one topic, each with its own ledger key and answer.
+ * A provider without it sends one recipient per call.
+ */
+export interface NotificationRemoteBulkCapability {
+  /** The most recipients one `sendBatch` call takes. */
+  readonly maxRecipients: number;
+  /**
+   * The fewest recipients the bulk API is meant for; a smaller batch goes
+   * one recipient per `send` call. 2 by default.
+   */
+  readonly minRecipients?: number;
+  /**
+   * Whether the provider's answer names each recipient. `false` means it
+   * answers the batch as a whole (counts only): the provider then gives
+   * every recipient the same answer, `accepted` only when the counts prove
+   * each one, and `ambiguous` with `unattributed` when they prove only that
+   * some were reached.
+   */
+  readonly perRecipientOutcomes: boolean;
+  /**
+   * A daily window, in a time zone, in which the host holds bulk messages
+   * until it ends (Apps in Toss holds `send-bulk-message` from 21:00 to
+   * 08:00). The service sends one recipient per call inside it, so the
+   * gate's timing stands.
+   */
+  readonly holdWindow?: {
+    /** `HH:MM`, inclusive. */
+    readonly start: string;
+    /** `HH:MM`, exclusive; earlier than `start` when the window spans midnight. */
+    readonly end: string;
+    /** An IANA time zone. */
+    readonly timeZone: string;
+  };
+}
 
 /**
  * The provider code of a `rejected` answer for a message that would arrive
@@ -128,6 +175,19 @@ export interface NotificationRemoteDeliveryProvider {
   /** Equals the registry entry's `provider`. */
   readonly id: NotificationProviderId;
   send(request: NotificationRemoteDeliveryRequest): Promise<NotificationRemoteDeliveryAnswer>;
+  /** The bulk path, declared with `sendBatch`; without it every recipient is one `send`. */
+  readonly bulk?: NotificationRemoteBulkCapability;
+  /**
+   * One provider call for `requests` (at most `bulk.maxRecipients`, each a
+   * different recipient of the same send kind): the answers in the order of
+   * the requests, one per request. The service runs the gate for each
+   * request before the call and settles each answer on that request's own
+   * ledger key; an answer that is missing or not one of the five kinds is
+   * `ambiguous`, as a throw is for every request.
+   */
+  sendBatch?(
+    requests: readonly NotificationRemoteDeliveryRequest[],
+  ): Promise<readonly NotificationRemoteDeliveryAnswer[]>;
   /**
    * The host's permission at send time, for a provider whose registry entry
    * is `serverReadable` (Devvit `isOptedIn`). The gate requires it there.

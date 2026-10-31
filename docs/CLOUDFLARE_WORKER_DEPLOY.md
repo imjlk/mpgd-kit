@@ -129,8 +129,9 @@ The current service binding methods are:
 - `recordLeaderboardScore(input)`
 - `recordVerifiedAttempt(input)` for trusted attempt coordinators
 - `getSnapshot(input)` for verified leaderboard reads
-- `deliverNotification(input)` and `endNotificationSession(input)` for
-  notifications v2 (see [Notifications v2](#notifications-v2))
+- `deliverNotification(input)`, `deliverNotificationBulk(input)`, and
+  `endNotificationSession(input)` for notifications v2 (see
+  [Notifications v2](#notifications-v2))
 
 The verified-attempt writer is intentionally available only through the
 private service binding. It is not routed through the public JSON or oRPC
@@ -592,6 +593,15 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   code, message, retryable } }`, because an error's fields do not cross the
   RPC boundary. Any Worker bound to this one can send to any player, as
   with the other service-binding methods.
+- **Bulk sends** are `deliverNotificationBulk(input)` on the same binding,
+  never a client route: one topic to many players through one provider,
+  each player a single send with its own key and gate check (see the
+  [notifications guide](NOTIFICATIONS.md#bulk-sends)). It attempts at most
+  `MPGD_NOTIFICATIONS_BULK_RECIPIENTS` players per call (500 by default: a
+  player costs about 20 D1 calls and identity lookups, which keeps a call
+  under the Workers Paid cap of 10,000 subrequests per invocation); the
+  rest answer `not-attempted`, and the same call again sends them. It runs
+  inline, not through the queue.
 - **Scheduler.** Each cron run fires the due server reminders as sends
   through the policy gate, pushes the consent notices nobody recorded by
   seven days before they are due (Korean rules, through the catalog's

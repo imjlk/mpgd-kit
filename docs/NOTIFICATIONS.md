@@ -321,6 +321,62 @@ invitation to buy.
    through `runtime.reminders.set({ key, topic, fireAt })`; the runtime picks
    a local or a server reminder from the target's capabilities.
 
+## Bulk sends {#bulk-sends}
+
+A live-ops announcement or an event push reaches many players through
+`deliverBulk` on the notifications service, from the game's server or an
+operator tool, never from a player's session. On the game-services Worker it
+is `deliverNotificationBulk(input)` on the service binding, next to
+`deliverNotification`; on Reddit it runs in the Devvit server.
+
+```ts
+const result = await service.deliverBulk({
+  idempotencyKey: 'halloween-2026',
+  provider: 'apps-in-toss',
+  topic: 'event-started',
+  templateData: { event: 'Halloween' },
+  recipients: players.map((player) => ({ player })),
+});
+// result.recipients: one answer per player, in order; result.summary: the counts.
+```
+
+- **Every recipient is a single send.** Each one has its own key,
+  `<idempotencyKey>:<encodeURIComponent(player)>`, and its own pass through
+  the policy gate (consent, purpose, night consent, quiet hours, frequency,
+  provider limits). A player the gate refuses is never sent to. The copy is
+  rendered per recipient, in the recipient's locale, as for `deliver`.
+- **Provider calls are shared.** Apps in Toss sends 50 to 2,500 recipients
+  in one `send-bulk-message` call, and Devvit up to 1,000 in one `enqueue`
+  per distinct title and body. Fewer than 50 recipients on Apps in Toss, or
+  a call between 21:00 and 08:00 Seoul time (when Apps in Toss would hold a
+  bulk message until 08:00), go one `send-message` call per player. FCM has
+  no bulk path and sends one message per device.
+- **Retries are safe.** The same call again answers the players already
+  sent from the ledger and sends only the rest. Players a call did not
+  attempt (`not-attempted`: its time or recipient budget, or the provider's
+  daily or per-minute rate) are sent by a later call; resend just those to
+  keep the call small.
+- **Answers that cannot name a recipient.** The Apps in Toss bulk answer
+  counts messages without naming players. A player counts as sent only
+  when the counts prove every recipient got it; when they prove only that
+  some did, each player stays `in-flight` and is never sent again
+  automatically, so nobody gets the announcement twice. Devvit names a
+  failed user, and the counts decide the rest the same way.
+- **Reddit's limits.** Devvit allows 2 notifications per user per day (the
+  gate suppresses a third) and 25,000 per app per day (past it, recipients
+  are `not-attempted` until the window frees).
+  `runDevvitNotificationBulkPage` sends one page of `listOptedInUsers`
+  through `deliverBulk`: Devvit's opt-in list only picks the audience, and
+  the kit's gate, with the send-time `isOptedIn` read, still decides each
+  user. Call it from a scheduler task or a moderator action with the
+  `next` cursor it answers, and run the same page again while it answers
+  `complete: false`.
+- **Copy.** A bulk send uses the topic's catalog copy or target mapping, as
+  any send does. Apps in Toss functional messages never carry advertising;
+  the gate refuses an `advertising` topic there before any call.
+<!-- @link ../packages/game-services/src/notifications/service.ts#createNotificationService -->
+<!-- @evidence /docs/specs/notifications/notifications-v2-rfc.md#remote-delivery -->
+
 ## Validation scope
 
 The starter's settings model, the CLI wiring, and the catalog are covered by

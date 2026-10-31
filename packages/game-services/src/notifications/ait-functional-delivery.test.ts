@@ -628,4 +628,128 @@ assert.equal(defaultAitFunctionalMessageTimeoutMs, defaultAppsInTossPartnerApiTi
   );
 }
 
+// The bulk API (send-bulk-message): one call per template, recipients in the body, answered as a whole.
+{
+  const bulkRequest = (id: string, extra: Partial<AitFunctionalMessageDeliveryRequest> = {}): AitFunctionalMessageDeliveryRequest => ({
+    recipient: { kind: 'platform-user', id },
+    topic: { id: 'energy-full', mapping: { templateSetCode: 'energy-template' } },
+    templateData: { name: id },
+    ...extra,
+  });
+  const bulkSuccess = (pushed: number, msgCount = pushed): Response =>
+    json({
+      resultType: 'SUCCESS',
+      success: {
+        msgCount,
+        sentPushCount: pushed,
+        sentInboxCount: 0,
+        sentSmsCount: 0,
+        sentAlimtalkCount: 0,
+        sentFriendtalkCount: 0,
+        detail: {
+          ...emptyChannels,
+          sentPush: Array.from({ length: pushed }, (_, index) => ({ contentId: `c-${index}` })),
+        },
+        fail: emptyChannels,
+      },
+    });
+  const { mtls, calls } = fakeMtls([bulkSuccess(3)]);
+  const provider = createAitFunctionalMessageDeliveryProvider({ mtls, recipientKey: 'toss-user' });
+  assert.deepEqual(provider.bulk, {
+    maxRecipients: 2_500,
+    minRecipients: 50,
+    perRecipientOutcomes: false,
+    holdWindow: { start: '21:00', end: '08:00', timeZone: 'Asia/Seoul' },
+  });
+  const answers = await provider.sendBatch([
+    bulkRequest('101'),
+    bulkRequest('9007199254740993'),
+    bulkRequest('103'),
+    // Not a userKey, an advertising topic, and a template without a code are refused without a call.
+    bulkRequest('not-digits'),
+    bulkRequest('104', { topic: { id: 'promo', purpose: 'advertising', mapping: { templateSetCode: 'energy-template' } } }),
+    bulkRequest('105', { topic: { id: 'energy-full', mapping: {} } }),
+  ]);
+  assert.deepEqual(
+    answers.map((answer) => [answer.status, 'reason' in answer ? answer.reason : undefined]),
+    [
+      ['accepted', undefined],
+      ['accepted', undefined],
+      ['accepted', undefined],
+      ['rejected', 'recipient'],
+      ['rejected', 'configuration'],
+      ['rejected', 'configuration'],
+    ],
+  );
+  assert.equal(calls.length, 1);
+  assert.equal(
+    calls[0]?.url,
+    `${defaultAitFunctionalMessageBaseUrl}/api-partner/v1/apps-in-toss/messenger/send-bulk-message`,
+  );
+  assert.equal(new Headers(calls[0]?.init?.headers).get('x-toss-user-key'), null);
+  // A safe integer key is a number; a longer one keeps its digits as a string.
+  assert.equal(
+    String(calls[0]?.init?.body),
+    JSON.stringify({
+      templateSetCode: 'energy-template',
+      contextList: [
+        { userKey: 101, context: { name: '101' } },
+        { userKey: '9007199254740993', context: { name: '9007199254740993' } },
+        { userKey: 103, context: { name: '103' } },
+      ],
+    }),
+  );
+
+  const anonymous = fakeMtls([bulkSuccess(2)]);
+  await createAitFunctionalMessageDeliveryProvider({ mtls: anonymous.mtls, recipientKey: 'anonymous' }).sendBatch(
+    [bulkRequest('hash-a'), bulkRequest('hash-b')],
+  );
+  assert.deepEqual(
+    (JSON.parse(String(anonymous.calls[0]?.init?.body)) as { readonly contextList: unknown }).contextList,
+    [
+      { anonKey: 'hash-a', context: { name: 'hash-a' } },
+      { anonKey: 'hash-b', context: { name: 'hash-b' } },
+    ],
+  );
+
+  // The answer names no recipient: only counts that prove each one, or prove none, decide.
+  const outcomes = async (reply: Response, size = 3) => {
+    const fake = fakeMtls([reply]);
+    const batch = await createAitFunctionalMessageDeliveryProvider({
+      mtls: fake.mtls,
+      recipientKey: 'toss-user',
+      agreementErrorCodes: ['4100'],
+    }).sendBatch(Array.from({ length: size }, (_, index) => bulkRequest(String(index + 1))));
+    return [...new Set(batch.map((answer) => JSON.stringify(answer)))].map((text) => {
+      const answer = JSON.parse(text) as Record<string, unknown>;
+      return [answer['status'], answer['reason'] ?? answer['providerCode'], answer['unattributed']];
+    });
+  };
+  assert.deepEqual(await outcomes(bulkSuccess(2)), [['ambiguous', 'BULK_PARTIAL', true]]);
+  assert.deepEqual(await outcomes(bulkSuccess(4)), [['ambiguous', 'BULK_PARTIAL', true]]);
+  assert.deepEqual(await outcomes(bulkSuccess(0)), [['rejected', 'recipient', undefined]]);
+  assert.deepEqual(await outcomes(fail('4095', { retryAfterSeconds: 30 })), [
+    ['rate-limited', '4095', undefined],
+  ]);
+  assert.deepEqual(await outcomes(json({}, 429, { 'retry-after': '7' })), [
+    ['rate-limited', undefined, undefined],
+  ]);
+  assert.deepEqual(await outcomes(fail('5004')), [['rejected', 'configuration', undefined]]);
+  // An agreement code names no player of the batch: it is a recipient refusal, recording no denial.
+  assert.deepEqual(await outcomes(fail('4100')), [['rejected', 'recipient', undefined]]);
+  assert.deepEqual(await outcomes(json({ resultType: 'INTERNAL_ERROR' }, 500)), [
+    ['ambiguous', 'INTERNAL_ERROR', undefined],
+  ]);
+  assert.deepEqual(await outcomes(json({ resultType: 'SUCCESS', success: {} })), [
+    ['ambiguous', 'SUCCESS', undefined],
+  ]);
+  const transport = fakeMtls([new Error('reset')]);
+  assert.deepEqual(
+    await createAitFunctionalMessageDeliveryProvider({ mtls: transport.mtls, recipientKey: 'toss-user' }).sendBatch([
+      bulkRequest('1'),
+    ]),
+    [{ status: 'ambiguous', providerCode: 'TRANSPORT_ERROR' }],
+  );
+}
+
 console.log('Apps in Toss functional message delivery provider tests passed.');
