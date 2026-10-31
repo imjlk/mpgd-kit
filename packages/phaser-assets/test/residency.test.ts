@@ -14,9 +14,16 @@ const MiB = 1024 * 1024;
 const TEXTURE_2048 = 2048 * 2048 * 4;
 
 type Kind = 'texture' | 'json' | 'binary' | 'audio';
+const PLAYS_EVERYTHING = { webAudio: true, audioData: true, ogg: true, mp3: true, m4a: true };
 
 /** Minimal game: texture manager, caches, sound, scene manager and a manually flushed loader. */
-function fixture(settings: { deferHost?: boolean; sizes?: Record<string, [number, number]> } = {}) {
+function fixture(
+  settings: {
+    deferHost?: boolean;
+    sizes?: Record<string, [number, number]>;
+    audio?: { noAudio?: boolean; device?: Record<string, boolean> };
+  } = {},
+) {
   const log: string[] = [];
   const textures = new Map<string, { source: { width: number; height: number }[] }>();
   const caches = {
@@ -25,10 +32,14 @@ function fixture(settings: { deferHost?: boolean; sizes?: Record<string, [number
     audio: new Map<string, unknown>(),
   };
   const failing = new Set<string>();
+  const throwing = new Set<string>();
   const queue: { key: string; kind: Kind }[] = [];
   const loadEvents = new EventEmitter();
   let loading = false;
   const enqueue = (key: string, kind: Kind): void => {
+    if (throwing.has(key)) {
+      throw new Error(`cannot queue ${key}`);
+    }
     log.push(`queue ${key}`);
     queue.push({ key, kind });
   };
@@ -40,6 +51,7 @@ function fixture(settings: { deferHost?: boolean; sizes?: Record<string, [number
     binary: (key: string) => enqueue(key, 'binary'),
     audio: (key: string) => enqueue(key, 'audio'),
     isLoading: () => loading,
+    setPrefix: vi.fn(),
     start: vi.fn(() => {
       loading = true;
     }),
@@ -101,6 +113,8 @@ function fixture(settings: { deferHost?: boolean; sizes?: Record<string, [number
     cache: { json: cache(caches.json), binary: cache(caches.binary), audio: cache(caches.audio) },
     sound: { removeByKey: vi.fn((key: string) => log.push(`sound ${key}`)) },
     scene: sceneManager,
+    config: { audio: { noAudio: settings.audio?.noAudio ?? false } },
+    device: { audio: settings.audio?.device ?? PLAYS_EVERYTHING },
   } as unknown as Phaser.Game;
   const scene = (key: string) => {
     const events = new EventEmitter();
@@ -112,6 +126,7 @@ function fixture(settings: { deferHost?: boolean; sizes?: Record<string, [number
     textures,
     caches,
     failing,
+    throwing,
     flush,
     load,
     sceneManager,
@@ -245,6 +260,24 @@ describe('phaser residency', () => {
     expect(f.textures.has('a-derived')).toBe(false);
   });
 
+  it('disposes every attachment even when a disposer detaches itself', async () => {
+    const f = setup([set('a')]);
+    const a = f.residency.claim('screen', ['a']);
+    await f.flush();
+    await a;
+    const disposed: string[] = [];
+    const detachFirst = f.residency.attach('a', {
+      dispose: () => {
+        disposed.push('first');
+        detachFirst();
+      },
+    });
+    f.residency.attach('a', { dispose: () => disposed.push('second') });
+    f.residency.release('screen');
+    f.residency.setBudget(0);
+    expect(disposed).toEqual(['first', 'second']);
+  });
+
   it('re-measures attachments with a bytes function on refresh, and detach keeps the resource', async () => {
     const f = setup([set('a')], { budgetBytes: 64 * MiB });
     const a = f.residency.claim('screen', ['a']);
@@ -352,6 +385,77 @@ describe('phaser residency', () => {
     const retry = f.residency.claim('screen', ['a']);
     await f.flush();
     await expect(retry).resolves.toBeUndefined();
+  });
+
+  it('a retry after a mid-batch failure queues its files only after that batch completes', async () => {
+    const f = setup([set('a')]);
+    const first = f.residency.claim('screen', ['a']);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(f.queue.map((file) => file.key)).toEqual(['a-atlas', 'a-data']);
+    // the atlas fails while a-data is still in flight; the game retries right away
+    f.queue.shift();
+    let retry: Promise<void> | undefined;
+    const retried = first.catch(() => {
+      retry = f.residency.claim('screen', ['a']);
+    });
+    f.load.emit('loaderror', { key: 'a-atlas' });
+    await retried;
+    await Promise.resolve();
+    expect(f.log.filter((line) => line === 'queue a-atlas')).toHaveLength(1);
+    await f.flush(); // a-data lands and the batch completes
+    expect(f.log.filter((line) => line === 'queue a-atlas')).toHaveLength(2);
+    await f.flush();
+    await expect(retry).resolves.toBeUndefined();
+    expect(f.residency.isResident(['a'])).toBe(true);
+  });
+
+  it('errors from the failed attempt do not reject a retry that waits for the batch to drain', async () => {
+    const f = setup([set('a')]);
+    f.failing.add('a-data');
+    const first = f.residency.claim('screen', ['a']);
+    await Promise.resolve();
+    await Promise.resolve();
+    f.queue.shift();
+    let retry: Promise<void> | undefined;
+    const retried = first.catch(() => {
+      retry = f.residency.claim('screen', ['a']);
+    });
+    f.load.emit('loaderror', { key: 'a-atlas' });
+    await retried;
+    let rejected = false;
+    retry?.catch(() => {
+      rejected = true;
+    });
+    await f.flush(); // a-data fails too, in the old batch
+    expect(rejected).toBe(false);
+    f.failing.clear();
+    await f.flush();
+    await expect(retry).resolves.toBeUndefined();
+    expect(f.residency.isResident(['a'])).toBe(true);
+  });
+
+  it('a claim whose load-time eviction callback disposes the residency rejects', async () => {
+    let removedInDispatch: number | undefined;
+    const f = setup([set('warm'), set('big', { estimateBytes: 0 })], {
+      budgetBytes: 20 * MiB,
+      onEvict: () => {
+        f.residency.dispose();
+        removedInDispatch ??= f.sceneManager.remove.mock.calls.length;
+      },
+    });
+    const warm = f.residency.claim('screen', ['warm']);
+    await f.flush();
+    await warm;
+    f.residency.release('screen');
+    const big = f.residency.claim('screen', ['big']);
+    big.catch(() => undefined);
+    await f.flush();
+    await expect(big).rejects.toThrow(/disposed/);
+    expect(f.textures.has('big-atlas')).toBe(false);
+    // the host scene is destroyed only after the loader dispatch has unwound
+    expect(removedInDispatch).toBe(0);
+    expect(f.sceneManager.remove).toHaveBeenCalledTimes(1);
   });
 
   it('aborting a wait drops the latest claim; the load still completes and stays cached', async () => {
@@ -466,7 +570,6 @@ describe('phaser residency', () => {
     await expect(b).rejects.toThrow(/disposed/);
     expect(f.textures.has('a-atlas')).toBe(false);
     expect(f.sceneManager.remove).toHaveBeenCalledWith('__mpgdResidency');
-    expect(() => f.residency.claim('screen', ['a'])).toThrow(/disposed/);
     f.residency.dispose();
   });
 
@@ -477,6 +580,556 @@ describe('phaser residency', () => {
     expect(f.sceneManager.remove).toHaveBeenCalledTimes(2);
     expect(f.residency.snapshot().hostReady).toBe(false);
     expect(f.load.listenerCount('filecomplete')).toBe(0);
+  });
+
+  it('after dispose, claim and claimForScene reject without throwing or hooking the scene; prefetch and attach throw', async () => {
+    const f = setup([set('a')]);
+    f.residency.dispose();
+    let claim: Promise<void> | undefined;
+    expect(() => {
+      claim = f.residency.claim('screen', ['a']);
+    }).not.toThrow();
+    await expect(claim).rejects.toThrow(/disposed/);
+    const s = f.scene('Level');
+    await expect(f.residency.claimForScene(s.scene, ['a'])).rejects.toThrow(/disposed/);
+    expect(s.events.listenerCount('shutdown')).toBe(0);
+    expect(s.events.listenerCount('destroy')).toBe(0);
+    expect(() => f.residency.prefetch(['a'])).toThrow(/disposed/);
+    expect(() => f.residency.attach('a', {})).toThrow(/disposed/);
+  });
+
+  it('a prefetched group that outgrows the free budget is unloaded instead of evicting warm groups', async () => {
+    const f = setup([set('warm'), set('b', { estimateBytes: 0 })], { budgetBytes: 20 * MiB });
+    const warm = f.residency.claim('screen', ['warm']);
+    await f.flush();
+    await warm;
+    f.residency.release('screen');
+    expect(f.residency.prefetch(['b'])).toEqual(['b']);
+    await f.flush();
+    expect(f.residency.isResident(['warm'])).toBe(true);
+    expect(f.textures.has('warm-atlas')).toBe(true);
+    expect(f.residency.isResident(['b'])).toBe(false);
+    expect(f.textures.has('b-atlas')).toBe(false);
+    expect(f.caches.json.has('b-data')).toBe(false);
+    expect(f.residency.snapshot().groups.map((group) => group.id)).toEqual(['warm']);
+  });
+
+  it('claiming a group that is still loading speculatively makes it a normal demanded load', async () => {
+    const f = setup([set('warm'), set('b', { estimateBytes: 0 })], { budgetBytes: 20 * MiB });
+    const warm = f.residency.claim('screen', ['warm']);
+    await f.flush();
+    await warm;
+    f.residency.release('screen');
+    expect(f.residency.prefetch(['b'])).toEqual(['b']);
+    const claim = f.residency.claim('level', ['b']);
+    await f.flush();
+    await claim;
+    expect(f.residency.isResident(['b'])).toBe(true);
+    expect(f.residency.isResident(['warm'])).toBe(false);
+    expect(f.log.filter((line) => line === 'queue b-atlas')).toHaveLength(1);
+  });
+
+  it('an already-aborted claim changes nothing: no owner, no eviction, no load', async () => {
+    const f = setup([set('a'), set('b')], { budgetBytes: 16 * MiB });
+    const a = f.residency.claim('screen', ['a']);
+    await f.flush();
+    await a;
+    f.residency.release('screen');
+    f.log.length = 0;
+    const abort = new AbortController();
+    abort.abort(new Error('gone'));
+    await expect(f.residency.claim('screen', ['b'], { signal: abort.signal })).rejects.toThrow('gone');
+    await f.flush();
+    expect(f.log).toEqual([]);
+    expect(f.residency.isResident(['a'])).toBe(true);
+    expect(f.residency.snapshot().groups.map((group) => group.id)).toEqual(['a']);
+  });
+
+  it('an already-aborted claim on a loading group leaves no unhandled rejection when the load later fails', async () => {
+    const unhandled: unknown[] = [];
+    const record = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on('unhandledRejection', record);
+    try {
+      const f = setup([set('a'), set('b')]);
+      f.failing.add('a-atlas');
+      const first = f.residency.claim('one', ['a']);
+      first.catch(() => undefined);
+      const abort = new AbortController();
+      abort.abort(new Error('gone'));
+      await expect(f.residency.claim('two', ['a'], { signal: abort.signal })).rejects.toThrow('gone');
+      await f.flush();
+      await expect(first).rejects.toThrow(/a-atlas/);
+      const second = f.residency.claim('one', ['b']);
+      second.catch(() => undefined);
+      await expect(f.residency.claim('two', ['b'], { signal: abort.signal })).rejects.toThrow('gone');
+      f.residency.dispose();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', record);
+    }
+  });
+
+  it('a claim made inside the loader dispatch (from onEvict) waits for the next batch instead of failing', async () => {
+    const small: PhaserResidencyGroup = { id: 'small', assets: [{ kind: 'image', key: 'small-image', url: 'small.png' }] };
+    const tiny: PhaserResidencyGroup = { id: 'tiny', assets: [{ kind: 'image', key: 'tiny-image', url: 'tiny.png' }] };
+    let nested: Promise<void> | undefined;
+    let prefetched: readonly string[] = [];
+    const f = setup(
+      [set('warm'), set('big', { estimateBytes: 0 }), small, tiny],
+      {
+        budgetBytes: 20 * MiB,
+        onEvict: (id) => {
+          if (id === 'warm') {
+            nested = f.residency.claim('hud', ['small']);
+            prefetched = f.residency.prefetch(['tiny']);
+          }
+        },
+      },
+      { sizes: { 'small-image': [16, 16], 'tiny-image': [8, 8] } },
+    );
+    const warm = f.residency.claim('screen', ['warm']);
+    await f.flush();
+    await warm;
+    f.residency.release('screen');
+    // big is estimated at 0, so warm is evicted only when big's measured size lands, inside filecomplete
+    const big = f.residency.claim('screen', ['big']);
+    await f.flush();
+    await big;
+    expect(nested).toBeDefined();
+    let settled: 'resolved' | 'rejected' | undefined;
+    nested?.then(
+      () => {
+        settled = 'resolved';
+      },
+      () => {
+        settled = 'rejected';
+      },
+    );
+    await Promise.resolve();
+    expect(settled).toBeUndefined();
+    await f.flush();
+    await expect(nested).resolves.toBeUndefined();
+    expect(prefetched).toEqual(['tiny']);
+    expect(f.residency.isResident(['small', 'tiny', 'big'])).toBe(true);
+  });
+
+  it('re-claiming the group being evicted from onEvict reloads it instead of adopting assets about to be removed', async () => {
+    let nested: Promise<void> | undefined;
+    const f = setup([set('warm'), set('big', { estimateBytes: 0 })], {
+      budgetBytes: 40 * MiB,
+      onEvict: (id) => {
+        if (id === 'warm' && !nested) {
+          nested = f.residency.claim('hud', ['warm']);
+        }
+      },
+    });
+    const warm = f.residency.claim('screen', ['warm']);
+    await f.flush();
+    await warm;
+    f.residency.release('screen');
+    f.residency.setBudget(20 * MiB);
+    const big = f.residency.claim('screen', ['big']);
+    await f.flush();
+    await big;
+    expect(nested).toBeDefined();
+    expect(f.textures.has('warm-atlas')).toBe(false);
+    await f.flush();
+    await nested;
+    expect(f.residency.isResident(['warm'])).toBe(true);
+    expect(f.textures.has('warm-atlas')).toBe(true);
+    expect(f.caches.json.has('warm-data')).toBe(true);
+    expect(f.residency.snapshot().groups.find((group) => group.id === 'warm')?.owners).toEqual(['hud']);
+  });
+
+  it('a callback for one evicted group can re-claim a later victim of the same batch, which reloads', async () => {
+    let nested: Promise<void> | undefined;
+    const f = setup([set('w1'), set('w2')], {
+      budgetBytes: 40 * MiB,
+      onEvict: (id) => {
+        if (id === 'w1') {
+          nested = f.residency.claim('hud', ['w2']);
+        }
+      },
+    });
+    const both = f.residency.claim('screen', ['w1', 'w2']);
+    await f.flush();
+    await both;
+    f.residency.release('screen');
+    f.residency.setBudget(0);
+    expect(nested).toBeDefined();
+    expect(f.textures.has('w2-atlas')).toBe(false);
+    await f.flush();
+    await nested;
+    expect(f.residency.isResident(['w2'])).toBe(true);
+    expect(f.textures.has('w2-atlas')).toBe(true);
+    expect(f.residency.isResident(['w1'])).toBe(false);
+  });
+
+  it('a claim made from onEvict for the group whose claim caused the eviction waits for its load', async () => {
+    let nested: Promise<void> | undefined;
+    const f = setup([set('warm'), set('next')], {
+      budgetBytes: 20 * MiB,
+      onEvict: (id) => {
+        if (id === 'warm') {
+          nested = f.residency.claim('hud', ['next']);
+        }
+      },
+    });
+    const warm = f.residency.claim('screen', ['warm']);
+    await f.flush();
+    await warm;
+    f.residency.release('screen');
+    const next = f.residency.claim('screen', ['next']);
+    expect(nested).toBeDefined();
+    let settled = false;
+    nested?.then(
+      () => {
+        settled = true;
+      },
+      () => undefined,
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(f.log.indexOf('remove warm-atlas')).toBeLessThan(f.log.indexOf('queue next-atlas'));
+    await f.flush();
+    await Promise.all([next, nested]);
+    expect(settled).toBe(true);
+    expect(f.residency.isResident(['next'])).toBe(true);
+  });
+
+  it('adopting one claimed group cannot let an onEvict claim skip the wait for another claimed group', async () => {
+    let nested: Promise<void> | undefined;
+    const f = setup([set('warm'), set('a', { estimateBytes: 0 }), set('b', { estimateBytes: 0 })], {
+      budgetBytes: 20 * MiB,
+      onEvict: (id) => {
+        if (id === 'warm') {
+          nested = f.residency.claim('hud', ['b']);
+        }
+      },
+    });
+    const warm = f.residency.claim('screen', ['warm']);
+    await f.flush();
+    await warm;
+    f.residency.release('screen');
+    f.textures.set('a-atlas', { source: [{ width: 2048, height: 2048 }] });
+    f.caches.json.set('a-data', {});
+    // a is adopted synchronously (16 MiB measured over a 0 estimate), which evicts warm before b has loaded
+    const claim = f.residency.claim('screen', ['a', 'b']);
+    expect(nested).toBeDefined();
+    let settled = false;
+    nested?.then(
+      () => {
+        settled = true;
+      },
+      () => undefined,
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    await f.flush();
+    await Promise.all([claim, nested]);
+    expect(f.residency.isResident(['a', 'b'])).toBe(true);
+  });
+
+  it('an onEvict claim for a planned victim, made while adopting another group, reloads it', async () => {
+    let nested: Promise<void> | undefined;
+    const f = setup([set('w1'), set('w2'), set('a', { estimateBytes: 16 * MiB })], {
+      budgetBytes: 32 * MiB,
+      onEvict: (id) => {
+        if (id === 'w2') {
+          nested = f.residency.claim('hud', ['w1']);
+        }
+      },
+    });
+    const both = f.residency.claim('screen', ['w1', 'w2']);
+    await f.flush();
+    await both;
+    f.residency.release('screen');
+    f.residency.claim('screen', ['w2']).catch(() => undefined);
+    f.residency.release('screen'); // w1 is now the least recently used
+    f.textures.set('a-atlas', { source: [{ width: 2048, height: 4096 }] });
+    f.caches.json.set('a-data', {});
+    // the plan evicts w1 for a's estimate; adopting a (32 MiB measured) then evicts w2, whose onEvict re-claims w1
+    const claim = f.residency.claim('screen', ['a']);
+    expect(nested).toBeDefined();
+    await f.flush();
+    await Promise.all([claim, nested]);
+    expect(f.residency.isResident(['w1'])).toBe(true);
+    expect(f.textures.has('w1-atlas')).toBe(true);
+    expect(f.caches.json.has('w1-data')).toBe(true);
+  });
+
+  it('clears the inherited loader key prefix on the host', () => {
+    const f = setup([set('a')]);
+    expect(f.load.setPrefix).toHaveBeenCalledWith('');
+  });
+
+  it('a claim whose eviction callback disposes the residency rejects', async () => {
+    const f = setup([set('warm'), set('next')], {
+      budgetBytes: 20 * MiB,
+      onEvict: () => f.residency.dispose(),
+    });
+    const warm = f.residency.claim('screen', ['warm']);
+    await f.flush();
+    await warm;
+    f.residency.release('screen');
+    await expect(f.residency.claim('screen', ['next'])).rejects.toThrow(/disposed/);
+  });
+
+  it('dispose unhooks consumer scenes that are still running', async () => {
+    const f = setup([set('a')]);
+    const s = f.scene('Level');
+    const claim = f.residency.claimForScene(s.scene, ['a']);
+    await f.flush();
+    await claim;
+    expect(s.events.listenerCount('shutdown')).toBe(1);
+    f.residency.dispose();
+    expect(s.events.listenerCount('shutdown')).toBe(0);
+    expect(s.events.listenerCount('destroy')).toBe(0);
+  });
+
+  it('removes a host scene that starts after dispose', () => {
+    const f = setup([set('a')], {}, { deferHost: true });
+    f.residency.dispose();
+    expect(f.sceneManager.remove).toHaveBeenCalledTimes(1);
+    f.createHost();
+    expect(f.sceneManager.remove).toHaveBeenCalledTimes(2);
+    expect(f.load.listenerCount('filecomplete')).toBe(0);
+    expect(f.load.listenerCount('complete')).toBe(0);
+    expect(f.residency.snapshot().hostReady).toBe(false);
+  });
+
+  it('healing a group with missing assets keeps the other owners', async () => {
+    const f = setup([set('a')]);
+    const one = f.residency.claim('one', ['a']);
+    const two = f.residency.claim('two', ['a']);
+    await f.flush();
+    await Promise.all([one, two]);
+    f.textures.delete('a-atlas');
+    const again = f.residency.claim('one', ['a']);
+    await f.flush();
+    await again;
+    expect(f.textures.has('a-atlas')).toBe(true);
+    f.residency.release('one');
+    expect(f.residency.snapshot().groups[0]?.owners).toEqual(['two']);
+    f.residency.setBudget(0);
+    expect(f.residency.isResident(['a'])).toBe(true);
+  });
+
+  it('prefetch skips a closure with a stale group instead of healing it', async () => {
+    const f = setup([set('dep'), set('child', { dependsOn: ['dep'] })], { budgetBytes: 16 * MiB });
+    const dep = f.residency.claim('screen', ['dep']);
+    await f.flush();
+    await dep;
+    f.residency.release('screen');
+    f.textures.delete('dep-atlas');
+    f.log.length = 0;
+    expect(f.residency.prefetch(['child'])).toEqual([]);
+    await f.flush();
+    expect(f.log).toEqual([]);
+    expect(f.caches.json.has('dep-data')).toBe(true);
+    expect(f.residency.snapshot().groups.map((group) => group.id)).toEqual(['dep']);
+  });
+
+  it('a claim made from onEvict while healing waits for the reload', async () => {
+    let nested: Promise<void> | undefined;
+    const f = setup([set('a')], {
+      onEvict: (id) => {
+        if (id === 'a' && !nested) {
+          nested = f.residency.claim('hud', ['a']);
+        }
+      },
+    });
+    const first = f.residency.claim('screen', ['a']);
+    await f.flush();
+    await first;
+    f.textures.delete('a-atlas');
+    const again = f.residency.claim('screen', ['a']);
+    expect(nested).toBeDefined();
+    let settled = false;
+    nested?.then(
+      () => {
+        settled = true;
+      },
+      () => undefined,
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    await f.flush();
+    await Promise.all([again, nested]);
+    expect(f.textures.has('a-atlas')).toBe(true);
+    expect(f.residency.snapshot().groups[0]?.owners).toEqual(['screen', 'hud']);
+  });
+
+  it('refresh applies every new size before evicting', async () => {
+    const f = setup([set('a'), set('b')], { budgetBytes: 2 * TEXTURE_2048 + 2 * MiB });
+    const both = f.residency.claim('screen', ['a', 'b']);
+    await f.flush();
+    await both;
+    let aBytes = MiB;
+    let bBytes = MiB;
+    f.residency.attach('a', { bytes: () => aBytes });
+    f.residency.attach('b', { bytes: () => bBytes });
+    f.residency.release('screen');
+    aBytes = 2 * MiB - 1;
+    bBytes = 1;
+    f.residency.refresh();
+    expect(f.residency.isResident(['a', 'b'])).toBe(true);
+    expect(f.residency.snapshot().totalBytes).toBe(2 * TEXTURE_2048 + 2 * MiB);
+  });
+
+  it('a failed reload of the group being evicted removes what the reload brought in', async () => {
+    let nested: Promise<void> | undefined;
+    const f = setup([set('warm'), set('big', { estimateBytes: 0 })], {
+      budgetBytes: 40 * MiB,
+      onEvict: (id) => {
+        if (id === 'warm' && !nested) {
+          nested = f.residency.claim('hud', ['warm']);
+          nested.catch(() => undefined);
+        }
+      },
+    });
+    const warm = f.residency.claim('screen', ['warm']);
+    await f.flush();
+    await warm;
+    f.residency.release('screen');
+    f.residency.setBudget(20 * MiB);
+    f.failing.add('warm-data');
+    const big = f.residency.claim('screen', ['big']);
+    await f.flush();
+    await big;
+    await f.flush();
+    await expect(nested).rejects.toThrow(/warm-data/);
+    expect(f.textures.has('warm-atlas')).toBe(false);
+    expect(f.residency.snapshot().groups.map((group) => group.id)).toEqual(['big']);
+  });
+
+  it('rejects the claim when queueing a file throws, and retries on the next claim', async () => {
+    const f = setup([set('a')]);
+    f.throwing.add('a-data');
+    const claim = f.residency.claim('screen', ['a']);
+    await f.flush();
+    await expect(claim).rejects.toThrow('cannot queue a-data');
+    expect(f.residency.snapshot().groups).toEqual([]);
+    expect(f.textures.has('a-atlas')).toBe(false);
+    f.throwing.clear();
+    const retry = f.residency.claim('screen', ['a']);
+    await f.flush();
+    await expect(retry).resolves.toBeUndefined();
+  });
+
+  it('a prefetch that adopts cached assets but does not fit forgets them without removing them', async () => {
+    const f = setup([set('warm'), set('b', { estimateBytes: 0 })], { budgetBytes: 20 * MiB });
+    const warm = f.residency.claim('screen', ['warm']);
+    await f.flush();
+    await warm;
+    f.residency.release('screen');
+    f.textures.set('b-atlas', { source: [{ width: 2048, height: 2048 }] });
+    f.caches.json.set('b-data', {});
+    expect(f.residency.prefetch(['b'])).toEqual(['b']);
+    expect(f.residency.snapshot().groups.map((group) => group.id)).toEqual(['warm']);
+    expect(f.textures.has('b-atlas')).toBe(true);
+    expect(f.caches.json.has('b-data')).toBe(true);
+    expect(f.residency.isResident(['warm'])).toBe(true);
+  });
+
+  it('a discarded partial prefetch removes only the assets it loaded', async () => {
+    const f = setup([set('warm'), set('b', { estimateBytes: 0 })], { budgetBytes: 20 * MiB });
+    const warm = f.residency.claim('screen', ['warm']);
+    await f.flush();
+    await warm;
+    f.residency.release('screen');
+    f.textures.set('b-atlas', { source: [{ width: 2048, height: 2048 }] });
+    expect(f.residency.prefetch(['b'])).toEqual(['b']);
+    await f.flush();
+    expect(f.log).toContain('queue b-data');
+    expect(f.log).not.toContain('queue b-atlas');
+    expect(f.residency.snapshot().groups.map((group) => group.id)).toEqual(['warm']);
+    expect(f.textures.has('b-atlas')).toBe(true);
+    expect(f.caches.json.has('b-data')).toBe(false);
+  });
+
+  it('a failed load keeps assets that were cached before it and drops late siblings it loaded', async () => {
+    const group: PhaserResidencyGroup = {
+      id: 'c',
+      assets: [
+        { kind: 'image', key: 'c-cached', url: 'c-cached.png' },
+        { kind: 'atlas', key: 'c-atlas', textureUrl: 'c.webp', atlasUrl: 'c.json' },
+        { kind: 'json', key: 'c-data', url: 'c-data.json' },
+      ],
+    };
+    const f = setup([group]);
+    f.textures.set('c-cached', { source: [{ width: 64, height: 64 }] });
+    expect(f.residency.prefetch(['c'])).toEqual(['c']);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(f.queue.map((file) => file.key)).toEqual(['c-atlas', 'c-data']);
+    f.queue.shift();
+    f.load.emit('loaderror', { key: 'c-atlas' });
+    await f.flush(); // c-data lands after the group failed
+    expect(f.caches.json.has('c-data')).toBe(false);
+    expect(f.textures.has('c-cached')).toBe(true);
+    expect(f.residency.snapshot().groups).toEqual([]);
+    f.failing.add('c-data');
+    const claim = f.residency.claim('screen', ['c']);
+    await f.flush();
+    await expect(claim).rejects.toThrow(/c-data/);
+    expect(f.textures.has('c-cached')).toBe(true);
+    expect(f.textures.has('c-atlas')).toBe(false);
+  });
+
+  it('claimForScene with an already-aborted signal registers no scene hooks', async () => {
+    const f = setup([set('a')]);
+    const s = f.scene('Level');
+    const abort = new AbortController();
+    abort.abort(new Error('gone'));
+    await expect(f.residency.claimForScene(s.scene, ['a'], { signal: abort.signal })).rejects.toThrow('gone');
+    expect(s.events.listenerCount('shutdown')).toBe(0);
+  });
+
+  it('treats audio the device cannot play as resident with 0 bytes and reports it in the snapshot', async () => {
+    const voice: PhaserResidencyGroup = {
+      id: 'voice',
+      assets: [
+        { kind: 'audio', key: 'voice-line', urls: ['line.ogg', 'line.m4a?v=2'] },
+        { kind: 'json', key: 'voice-cues', url: 'cues.json' },
+      ],
+    };
+    const f = setup([voice], {}, { audio: { device: { webAudio: true, audioData: true, ogg: false, m4a: false, mp3: true } } });
+    for (let round = 0; round < 2; round += 1) {
+      const claim = f.residency.claim('screen', ['voice']);
+      await f.flush();
+      await expect(claim).resolves.toBeUndefined();
+    }
+    expect(f.log.filter((line) => line.startsWith('queue'))).toEqual(['queue voice-cues']);
+    expect(f.residency.isResident(['voice'])).toBe(true);
+    expect(f.residency.snapshot().groups[0]).toMatchObject({ bytes: 0, skippedAudio: ['voice-line'] });
+  });
+
+  it('treats audio as skipped when the game disables sound, and loads it when one URL is playable', async () => {
+    const voice: PhaserResidencyGroup = { id: 'voice', assets: [{ kind: 'audio', key: 'voice-line', urls: ['line.ogg'] }] };
+    const muted = setup([voice], {}, { audio: { noAudio: true } });
+    await muted.residency.claim('screen', ['voice']);
+    expect(muted.queue).toEqual([]);
+    expect(muted.residency.snapshot().groups[0]?.skippedAudio).toEqual(['voice-line']);
+    const noBackend = setup([voice], {}, { audio: { device: { webAudio: false, audioData: false, ogg: true } } });
+    await noBackend.residency.claim('screen', ['voice']);
+    expect(noBackend.residency.isResident(['voice'])).toBe(true);
+    const playable = setup(
+      [{ id: 'voice', assets: [{ kind: 'audio', key: 'voice-line', urls: ['line.ogg', 'LINE.MP3'] }] }],
+      {},
+      { audio: { device: { webAudio: true, audioData: true, ogg: false, mp3: true } } },
+    );
+    const claim = playable.residency.claim('screen', ['voice']);
+    await playable.flush();
+    await claim;
+    expect(playable.log).toContain('queue voice-line');
+    expect(playable.residency.snapshot().groups[0]).toMatchObject({ bytes: 48_000 * 2 * 4, skippedAudio: [] });
   });
 
   it('rejects unknown groups and empty owners', async () => {

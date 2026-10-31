@@ -60,12 +60,22 @@ export interface ResidencyPolicy {
   failed(groupId: string): void;
   /** A resident group's size changed (e.g. a runtime texture was attached). Returns groups to evict. */
   resize(groupId: string, bytes: number): readonly string[];
+  /**
+   * Several resident groups were re-measured at once. Applies every size before trimming, so one group growing while
+   * another shrinks does not evict against a stale total. Validates all sizes first. Returns groups to evict.
+   */
+  resizeAll(sizes: ReadonlyMap<string, number>): readonly string[];
   /** Mark a group as just used. */
   touch(groupId: string): void;
   /** Change the budget. Returns groups to evict. */
   setBudget(bytes: number): readonly string[];
   /** Forget a group that was unloaded outside the policy. */
   forget(groupId: string): void;
+  /**
+   * A resident group's assets went missing outside the policy: mark it loading again, keeping its owners and using its
+   * last size as the estimate. Returns false when the group is not resident. The caller reloads it.
+   */
+  invalidate(groupId: string): boolean;
   state(groupId: string): ResidencyGroupState | undefined;
   owners(groupId: string): readonly string[];
   snapshot(): ResidencyPolicySnapshot;
@@ -189,6 +199,16 @@ export function createResidencyPolicy(options: ResidencyPolicyOptions): Residenc
         entries.delete(groupId);
       }
     },
+    resizeAll(sizes) {
+      const next = [...sizes].map(([id, bytes]) => [id, checkBytes(bytes, `resize(${id})`)] as const);
+      for (const [id, bytes] of next) {
+        const entry = entries.get(id);
+        if (entry) {
+          entry.bytes = bytes;
+        }
+      }
+      return trim();
+    },
     resize(groupId, bytes) {
       const entry = entries.get(groupId);
       const next = checkBytes(bytes, `resize(${groupId})`);
@@ -207,6 +227,15 @@ export function createResidencyPolicy(options: ResidencyPolicyOptions): Residenc
     setBudget(bytes) {
       budget = checkBytes(bytes, 'budgetBytes');
       return trim();
+    },
+    invalidate(groupId) {
+      const entry = entries.get(groupId);
+      if (entry?.state !== 'resident') {
+        return false;
+      }
+      entry.state = 'loading';
+      entry.speculative = false;
+      return true;
     },
     forget(groupId) {
       entries.delete(groupId);

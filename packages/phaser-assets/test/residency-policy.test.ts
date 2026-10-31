@@ -126,6 +126,57 @@ describe('residency policy', () => {
     expect(policy.owners('a')).toEqual(['screen']);
   });
 
+  it('a prefetched group that measures over the free budget is discarded instead of evicting warm groups', () => {
+    const policy = createResidencyPolicy({ budgetBytes: 100 });
+    loadAll(policy, 'screen', ['warm'], 80);
+    policy.release('screen');
+    expect(policy.prefetch(['b'])).toEqual(['b']);
+    expect(policy.loaded('b', 80)).toEqual(['b']);
+    expect(policy.state('b')).toBeUndefined();
+    expect(policy.state('warm')).toBe('resident');
+    expect(policy.snapshot().totalBytes).toBe(80);
+    // a prefetch that fits is kept and becomes an ordinary warm group
+    expect(policy.prefetch(['c'])).toEqual(['c']);
+    expect(policy.loaded('c', 20)).toEqual([]);
+    expect(policy.state('c')).toBe('resident');
+    policy.touch('warm');
+    expect(policy.claim('screen', ['d']).evict).toEqual([]);
+    expect(policy.loaded('d', 10)).toEqual(['c']);
+  });
+
+  it('claiming a speculative load makes it a demanded load, which may evict once it lands', () => {
+    const policy = createResidencyPolicy({ budgetBytes: 100 });
+    loadAll(policy, 'screen', ['warm'], 80);
+    policy.release('screen');
+    expect(policy.prefetch(['b'])).toEqual(['b']);
+    expect(policy.claim('level', ['b']).load).toEqual([]);
+    policy.release('level'); // still not speculative: the owner asked for it
+    expect(policy.loaded('b', 80)).toEqual(['warm']);
+    expect(policy.state('b')).toBe('resident');
+  });
+
+  it('a throwing estimate leaves the policy unchanged', () => {
+    const policy = createResidencyPolicy({
+      budgetBytes: 64 * MiB,
+      estimateBytes: (id) => {
+        if (id === 'boom') {
+          throw new Error('no estimate');
+        }
+        return id === 'nan' ? Number.NaN : TEXTURE_2048;
+      },
+    });
+    loadAll(policy, 'screen', ['a']);
+    const before = policy.snapshot();
+    expect(() => policy.claim('screen', ['b', 'boom'])).toThrow('no estimate');
+    expect(() => policy.claim('screen', ['b', 'nan'])).toThrow(RangeError);
+    expect(policy.snapshot()).toEqual(before);
+    expect(policy.owners('a')).toEqual(['screen']);
+    expect(policy.state('b')).toBeUndefined();
+    expect(() => policy.prefetch(['b', 'boom'])).toThrow('no estimate');
+    expect(policy.snapshot()).toEqual(before);
+    expect(policy.prefetch(['b'])).toEqual(['b']);
+  });
+
   it('forgets failed loads, and resize / setBudget trim', () => {
     const policy = createResidencyPolicy({ budgetBytes: 40 * MiB });
     policy.claim('screen', ['a']);
@@ -140,6 +191,29 @@ describe('residency policy', () => {
     expect(policy.resize('missing', 1)).toEqual([]);
     expect(policy.setBudget(16 * MiB)).toEqual(['b']);
     expect(policy.snapshot()).toMatchObject({ budgetBytes: 16 * MiB, totalBytes: 0, groups: [] });
+  });
+
+  it('invalidate turns a resident group back into a load and keeps its owners', () => {
+    const policy = createResidencyPolicy({ budgetBytes: 64 * MiB });
+    loadAll(policy, 'one', ['a']);
+    policy.claim('two', ['a']);
+    expect(policy.invalidate('a')).toBe(true);
+    expect(policy.state('a')).toBe('loading');
+    expect(policy.invalidate('a')).toBe(false);
+    expect(policy.invalidate('missing')).toBe(false);
+    expect(policy.claim('one', ['a']).load).toEqual([]);
+    expect(policy.owners('a')).toEqual(['one', 'two']);
+    expect(policy.snapshot().totalBytes).toBe(TEXTURE_2048);
+  });
+
+  it('resizeAll applies every size before trimming and validates first', () => {
+    const policy = createResidencyPolicy({ budgetBytes: 100 });
+    loadAll(policy, 'screen', ['a', 'b'], 50);
+    policy.release('screen');
+    expect(policy.resizeAll(new Map([['a', 75], ['b', 25]]))).toEqual([]);
+    expect(() => policy.resizeAll(new Map([['a', 10], ['b', -1]]))).toThrow(RangeError);
+    expect(policy.snapshot().totalBytes).toBe(100);
+    expect(policy.resizeAll(new Map([['a', 90], ['b', 25]]))).toEqual(['a']); // least recently used first
   });
 
   it('forget drops a group regardless of state', () => {

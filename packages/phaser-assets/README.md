@@ -593,9 +593,14 @@ Rules:
   bytes exceed the budget. `release(owner)` keeps groups cached.
 - **Keep-warm and eviction.** Unowned resident groups stay until room is needed,
   then go least-recently-used first.
-  `prefetch` admits each requested group together with its missing dependencies, or
-  not at all. A prefetch that measures larger than its estimate and no longer fits is
-  dropped rather than displacing warm groups.
+- **Prefetch.** `prefetch()` admits each requested group together with its missing
+  dependencies, by estimate, into free budget only, or not at all; it never evicts.
+  If a prefetched group is still unclaimed when it loads and no longer fits next to
+  what is resident or loading (it measured above its estimate, for example the
+  default 0, or a claim took the room meanwhile), it is unloaded again and the warm
+  groups stay. Only the files that prefetch loaded are removed; assets that were
+  already in the caches stay where they were. Claiming a group while it is still
+  prefetching turns it into a normal claimed load.
 - **Make room before load.** A claim evicts against the groups' `estimateBytes`
   before queueing files, so swapping screens does not hold old and new sets at once.
   A group without `estimateBytes` counts as 0 bytes until it loads, so no room is made
@@ -606,21 +611,46 @@ Rules:
   binary count as 0. Like `/packs`, this is an estimate, not a GPU or process bound.
   Attachment `bytes` must be non-negative safe integers; `attach()` and `refresh()`
   throw a `RangeError` otherwise.
+- **Unplayable audio.** Phaser's `load.audio` queues nothing when sound is disabled
+  (`audio.noAudio`, or neither Web Audio nor HTML5 audio is available) or when no URL
+  has a type the device can play, so such a file could never arrive. Residency
+  mirrors that check: these audio assets count as satisfied with 0 bytes, the rest of
+  the group still becomes resident, and the snapshot lists their keys in each group's
+  `skippedAudio`. A missing sound is a degradation games already handle on these
+  devices (a muted game must still start), while failing the whole group would also
+  block its textures and data on every claim. Provide a playable fallback URL (for
+  example `.m4a` next to `.ogg`) when the sound matters.
 - **Host scene.** Loading runs on a hidden host scene (`hostSceneKey`, default
   `__mpgdResidency`), so claims survive scene changes. Do not stop that scene. A second
   instance on the same game needs its own `hostSceneKey`. Assets already in the texture
   or JSON caches are adopted instead of loaded again. Asset keys are fixed manifest
-  keys and must be unique across groups. If something else removes a resident group's
-  asset, `isResident` reports false and the next claim reloads the group.
-- **Failure.** If one file fails, its group's claim rejects, the files that did load
-  are removed, and the next claim retries. Aborting a claim's `signal` drops that
-  claim (if it is still the owner's latest); the load itself continues and stays cached.
-  An already-aborted signal rejects without starting work or changing claims.
+  keys and must be unique across groups; the host loader clears the game's
+  `loader.prefix` so cache keys match them. URLs still use the game's loader `baseURL`
+  and `path`. If something else removes a resident group's asset, `isResident`
+  reports false and the next claim reloads the group, keeping its other owners;
+  `prefetch` skips a group whose closure contains such a group.
+- **Failure.** If one file fails, its group's claim rejects, the files that attempt
+  loaded are removed (assets already cached before it stay), and the next claim
+  retries. A retry made while that loader batch is still running queues its files
+  after the batch completes, so it does not collide with the failed attempt's files
+  still in flight. Aborting a claim's `signal` drops that claim (if it is still the
+  owner's latest); the load itself continues and stays cached. A claim whose signal
+  is already aborted rejects with the signal's reason and changes nothing: no owner,
+  eviction or load.
+- **Re-entrancy.** Claims and prefetches made inside loader callbacks, such as
+  `onEvict` during another group's load, do not fail when that batch completes;
+  their files are queued right after it, in the loader's next batch. Claiming the
+  group that `onEvict` is evicting reloads it after the removal finishes.
 - **Eviction cleanup.** `onEvict` runs before removal. Then attachments are
   disposed, their `textureKey` is removed, and textures, JSON and binary caches,
   sounds and audio are unloaded. Errors are collected by `takeCleanupErrors()`.
 - **Re-measuring.** `refresh()` re-measures (for attachments with a `bytes()`
   function), and `setBudget()` trims immediately.
+- **Dispose.** `dispose()` rejects pending claims, unloads every tracked group and
+  removes the host scene (also when it is disposed before the scene manager has
+  started that scene) and the release hooks of consumer scenes. Afterwards `claim()`
+  and `claimForScene()` return a rejected promise (and register no scene hooks),
+  while the synchronous `prefetch()` and `attach()` throw.
 
 The engine-free policy (refcount, byte budget, LRU, prefetch admission) is
 exported from `@mpgd/phaser-assets/residency-policy` for other loaders or engines.
