@@ -696,6 +696,33 @@ describe('createNotificationRuntime storage', () => {
     expect(host.localPending).toEqual([]);
   });
 
+  it('throws both failures when neither the records can be read nor the reminders cancelled', async () => {
+    const down = new Error('backend down');
+    const stuck = new Error('the host cannot cancel');
+    let failing = false;
+    const { host, backend, runtime } = await withLocalReminder((inner) => ({
+      listConsent: async () => {
+        if (failing) {
+          throw down;
+        }
+        return inner.listConsent();
+      },
+    }));
+    const cancelLocal = host.provider.cancelLocal;
+    (host.provider as { cancelLocal?: typeof cancelLocal }).cancelLocal = async (request) => {
+      if (failing) {
+        throw stuck;
+      }
+      await cancelLocal?.call(host.provider, request);
+    };
+    host.setPermission('denied');
+    failing = true;
+    backend.authenticate('p-1');
+    const thrown: unknown = await runtime.runUntilIdle().then(() => undefined, (error: unknown) => error);
+    expect(thrown).toBeInstanceOf(AggregateError);
+    expect((thrown as AggregateError).errors).toEqual([down, stuck]);
+  });
+
   it('reads a value that is not a runtime state as an empty one', () => {
     expect(notificationRuntimeStateOf(undefined)).toEqual({});
     expect(notificationRuntimeStateOf('x')).toEqual({});

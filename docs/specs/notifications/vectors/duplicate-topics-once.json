@@ -1,7 +1,7 @@
 {
   "vector": "duplicate-topics-once",
   "protocol": "2.0.0-draft.1",
-  "summary": "A topic listed twice in one call is read, asked, and recorded once: one prompt, one agreement record, and one topic preference, with one answer per topic.",
+  "summary": "A topic listed twice in one call is asked and recorded once: one prompt, one agreement record, and one topic preference.",
   "appliesTo": [
     {
       "path": "permission.scope",

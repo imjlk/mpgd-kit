@@ -647,9 +647,9 @@ Runtime rules:
   - When the backend's records cannot be read, the reminders whose
     permission the host itself reports as not granted are still cancelled,
     and the read's error is thrown after.
-  - One call reads the player's records from the backend once: the records
-    it then writes and the sweep after it reuse that read, unless the
-    runtime recorded something since.
+  - A call's own read of the player's records serves the records it then
+    writes and the sweep after it, so the backend is not asked again; after
+    the runtime records something, the next use reads again.
 - **Restarts.** A restart drops runtime memory and listeners. Host state,
   backend records, the persisted registration, the unbound state after
   `unregister()`, and the backend authentication persist.
@@ -2660,7 +2660,7 @@ listed fields of each item asserted:
 | `endpoint-unbind-on-session-end` | The end of the registering session unbinds the endpoint without `unregister()` |
 | `endpoint-unbind-until-register` | `unregister()` cancels the pending local reminders; the installation stays unbound across a restart and a read until `register()` binds it again |
 | `endpoint-registration-refresh` | A read more than 7 days after the last acknowledged registration sends it again, so a send 70 days after the first registration still reaches the device |
-| `duplicate-topics-once` | A topic listed twice in one call is read, asked, and recorded once |
+| `duplicate-topics-once` | A topic listed twice in one call is asked and recorded once |
 | `provider-daily-limit` | A daily provider limit suppresses the third send of the day |
 | `provider-minute-limit` | A per-minute provider limit defers the send to the end of the window |
 | `provider-rate-limited` | A `rate-limited` answer defers the send by `retryAfterSeconds`; the scheduler delivers it |
@@ -3012,8 +3012,8 @@ the phase that owned it, as far as they were still open on main.
   batch the host fails; and the permission sweep when the records cannot be
   read (see [Runtime](#runtime), Local reminders).
 - Vectors for runtime rules that only unit tests pinned:
-  `endpoint-registration-refresh`, `endpoint-unbind-until-register` (the
-  first vector to call `register()`), and `duplicate-topics-once`.
+  `endpoint-registration-refresh`, `endpoint-unbind-until-register`
+  (`register()` after `unregister()`), and `duplicate-topics-once`.
 - Already closed before NF2: the refused-notice backoff (S2), the mapping
   per target when two targets share a provider (S1), and checking Devvit's
   filled text rather than the template (P3).

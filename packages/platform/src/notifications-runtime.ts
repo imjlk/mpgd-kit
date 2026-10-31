@@ -1301,6 +1301,8 @@ export function createNotificationRuntime(
       }
       // One key the host cannot cancel must not keep the rest of the batch
       // pending: each is tried alone, and the first that still fails is thrown.
+      // When every key then cancels, the batch failure was the host's alone
+      // and the sweep succeeded.
       let failed: { readonly error: unknown } | undefined;
       for (const key of keys) {
         try {
@@ -1417,22 +1419,33 @@ export function createNotificationRuntime(
       readFailure = { error };
     }
     const topics = [...new Set(pending.map((entry) => entry.topic))];
-    const states = resolveStates(
-      capabilities,
-      await provider.getPermission({ topics }),
-      topics,
-      records,
-    );
-    await cancelLocalNow((entry) => {
-      const topic = localTopicOf(entry);
-      if (topic === undefined) {
-        return false;
+    try {
+      const states = resolveStates(
+        capabilities,
+        await provider.getPermission({ topics }),
+        topics,
+        records,
+      );
+      await cancelLocalNow((entry) => {
+        const topic = localTopicOf(entry);
+        if (topic === undefined) {
+          return false;
+        }
+        if (revokesLocalReminders(stateIn(states, entry.topic))) {
+          return true;
+        }
+        return records !== undefined && preferenceRefuses(topic, records, clock.now());
+      });
+    } catch (error) {
+      if (readFailure === undefined) {
+        throw error;
       }
-      if (revokesLocalReminders(stateIn(states, entry.topic))) {
-        return true;
-      }
-      return records !== undefined && preferenceRefuses(topic, records, clock.now());
-    });
+      throw new AggregateError(
+        [readFailure.error, error],
+        'The records could not be read, and the local reminders could not be cancelled. First: '
+          + describeError(readFailure.error),
+      );
+    }
     if (readFailure !== undefined) {
       throw readFailure.error;
     }
