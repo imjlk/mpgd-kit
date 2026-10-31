@@ -672,6 +672,29 @@ describe('bridge notifications client', () => {
       retryable: true,
     });
   });
+
+  it('reads a hostile thrown value without throwing, keeping a readable code', async () => {
+    const failing = (error: unknown) => createBridgeNotificationProvider({
+      provider: 'fcm',
+      serves: { revokePermission: false, register: false, local: false },
+      request: async () => Promise.reject(error),
+      subscribe: () => () => undefined,
+    });
+    const hostile = (): never => {
+      throw new Error('hostile read');
+    };
+    const revocable = Proxy.revocable({}, {});
+    revocable.revoke();
+    for (const thrown of [new Proxy({}, { get: hostile, getPrototypeOf: hostile }), revocable.proxy]) {
+      const failure = await failing(thrown).getPermission({ topics: [] }).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(NotificationError);
+      expect(failure).toMatchObject({ code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', retryable: true });
+    }
+    const unreadable = Object.assign(new Error('hidden'), { code: 'NOTIFICATIONS_UNSUPPORTED' });
+    Object.defineProperty(unreadable, 'message', { get: hostile });
+    await expect(failing(unreadable).getPermission({ topics: [] }))
+      .rejects.toMatchObject({ code: 'NOTIFICATIONS_UNSUPPORTED' });
+  });
 });
 
 describe('Capacitor registry with a notifications v2 service', () => {

@@ -9,7 +9,14 @@ import {
 } from '@mpgd/platform/notifications';
 
 import { validNotificationsV2Exchanges } from './fixtures';
-import type { BridgeNotificationsEvent, BridgeRequest, BridgeResponse } from './index';
+import {
+  isThrownInstance,
+  readThrownField,
+  thrownMessage,
+  type BridgeNotificationsEvent,
+  type BridgeRequest,
+  type BridgeResponse,
+} from './index';
 import {
   createNotificationsBackendBridgeHandler,
   createNotificationsV2BridgeHandler,
@@ -447,7 +454,7 @@ const minimal: NotificationProvider = {
     message: 'notifications.v2.requestPermission failed.',
     retryable: false,
   });
-  // A thrown object whose fields throw still gets an answer.
+  // A thrown object whose fields throw still gets an answer: the field counts as missing.
   failure = {
     get code(): string {
       throw new Error('hostile getter');
@@ -455,9 +462,262 @@ const minimal: NotificationProvider = {
   };
   assert.deepEqual(await answer(), {
     code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
-    message: 'notifications.v2.requestPermission failed.',
+    message: 'notifications.v2.requestPermission failed: [object Object]',
     retryable: true,
   });
+}
+
+// The shared thrown-value helpers never throw.
+{
+  const hostile = (): never => {
+    throw new Error('hostile read');
+  };
+  const trapped = new Proxy({}, { get: hostile, getPrototypeOf: hostile });
+  const revocable = Proxy.revocable({}, {});
+  revocable.revoke();
+  assert.equal(readThrownField({ code: 'X' }, 'code'), 'X');
+  assert.equal(readThrownField(null, 'code'), undefined);
+  assert.equal(readThrownField('text', 'length'), undefined);
+  assert.equal(
+    readThrownField(
+      {
+        get code(): string {
+          return hostile();
+        },
+      },
+      'code',
+    ),
+    undefined,
+  );
+  assert.equal(readThrownField(trapped, 'code'), undefined);
+  assert.equal(readThrownField(revocable.proxy, 'code'), undefined);
+  assert.equal(isThrownInstance(new TypeError('x'), Error), true);
+  assert.equal(isThrownInstance({}, Error), false);
+  assert.equal(isThrownInstance(trapped, Error), false);
+  assert.equal(isThrownInstance(revocable.proxy, Error), false);
+  assert.equal(thrownMessage(new Error('plain')), 'plain');
+  assert.equal(thrownMessage({ message: 'shaped' }), 'shaped');
+  assert.equal(thrownMessage('text'), 'text');
+  assert.equal(thrownMessage(Symbol('s')), 'Symbol(s)');
+  for (const value of [
+    { toString: hostile },
+    Object.create(null) as unknown,
+    trapped,
+    revocable.proxy,
+  ]) {
+    assert.equal(thrownMessage(value), 'a failure that cannot be read');
+  }
+}
+
+// Hostile thrown values: getters, toString, and Proxy traps that throw never
+// reject the request, and a readable code and flag still cross.
+{
+  const hostile = (): never => {
+    throw new Error('hostile read');
+  };
+  /** A Proxy whose every trap throws, `getPrototypeOf` (so `instanceof`) included. */
+  const trapped = new Proxy(
+    {},
+    {
+      get: hostile,
+      getPrototypeOf: hostile,
+      has: hostile,
+      ownKeys: hostile,
+      getOwnPropertyDescriptor: hostile,
+    },
+  );
+  const revocable = Proxy.revocable({}, {});
+  revocable.revoke();
+  const unreadableMessage = new Error('hidden');
+  Object.defineProperty(unreadableMessage, 'message', { get: hostile });
+  const cases: readonly (readonly [string, unknown, { readonly code: string; readonly message: string; readonly retryable: boolean }])[] = [
+    ['null', null, {
+      code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+      message: 'notifications.v2.requestPermission failed: null',
+      retryable: true,
+    }],
+    ['undefined', undefined, {
+      code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+      message: 'notifications.v2.requestPermission failed: undefined',
+      retryable: true,
+    }],
+    ['a string', 'plain text', {
+      code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+      message: 'notifications.v2.requestPermission failed: plain text',
+      retryable: true,
+    }],
+    ['a symbol', Symbol('thrown'), {
+      code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+      message: 'notifications.v2.requestPermission failed: Symbol(thrown)',
+      retryable: true,
+    }],
+    ['a throwing toString', { toString: hostile }, {
+      code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+      message: 'notifications.v2.requestPermission failed: a failure that cannot be read',
+      retryable: true,
+    }],
+    ['an object without a prototype', Object.create(null) as unknown, {
+      code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+      message: 'notifications.v2.requestPermission failed: a failure that cannot be read',
+      retryable: true,
+    }],
+    ['an Error whose message getter throws', unreadableMessage, {
+      code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+      message: 'notifications.v2.requestPermission failed: a failure that cannot be read',
+      retryable: true,
+    }],
+    // The code and flag were readable: they cross, with a fixed message.
+    ['a readable code with a throwing message getter', {
+      code: 'NOTIFICATIONS_UNSUPPORTED',
+      retryable: false,
+      get message(): string {
+        return hostile();
+      },
+      get hostCode(): string {
+        return hostile();
+      },
+    }, {
+      code: 'NOTIFICATIONS_UNSUPPORTED',
+      message: 'notifications.v2.requestPermission failed.',
+      retryable: false,
+    }],
+    ['a readable flag with a throwing code getter', {
+      get code(): string {
+        return hostile();
+      },
+      retryable: false,
+      message: 'shown',
+    }, {
+      code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+      message: 'notifications.v2.requestPermission failed: shown',
+      retryable: true,
+    }],
+    ['a Proxy whose traps throw', trapped, {
+      code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+      message: 'notifications.v2.requestPermission failed: a failure that cannot be read',
+      retryable: true,
+    }],
+    ['a revoked Proxy', revocable.proxy, {
+      code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+      message: 'notifications.v2.requestPermission failed: a failure that cannot be read',
+      retryable: true,
+    }],
+  ];
+  for (const [name, thrown, expected] of cases) {
+    // With and without onError: report() checks the class too, and must not throw either.
+    for (const withHook of [false, true]) {
+      const reported: unknown[] = [];
+      const handler = createNotificationsV2BridgeHandler({
+        provider: {
+          ...minimal,
+          requestPermission: async () => {
+            throw thrown;
+          },
+        },
+        ...(withHook ? { onError: (error: unknown) => reported.push(error) } : {}),
+      });
+      const response = await handler.request(
+        request('notifications.v2.requestPermission', { topics: ['a'] }),
+      );
+      assert.deepEqual(errorOf(response), expected, `${name}${withHook ? ' with onError' : ''}`);
+      assert.equal(reported.length, withHook ? 1 : 0, name);
+      if (withHook) {
+        assert.equal(reported[0], thrown, name);
+      }
+    }
+  }
+
+  // A Proxy thrown by a backend, under the backend handler's onError.
+  const backendReported: unknown[] = [];
+  const backendHandler = createNotificationsBackendBridgeHandler({
+    backend: {
+      session: () => ({ id: 's', player: 't2_a' }),
+      listConsent: async () => {
+        throw trapped;
+      },
+    } as unknown as NotificationsBackendBridgeServer<{ readonly id: string; readonly player: string }>,
+    onError: (error) => backendReported.push(error),
+  });
+  assert.deepEqual(
+    errorOf(await backendHandler.request(
+      request('notifications.backend.listConsent', { expectedPlayer: 't2_a' }),
+    )),
+    {
+      code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+      message: 'notifications.backend.listConsent failed on the host.',
+      retryable: true,
+    },
+  );
+  assert.deepEqual(backendReported, [trapped]);
+}
+
+// An unexpectedFailureMessage that throws or answers a non-string is reported;
+// the failure crosses with a fixed message and keeps its flag.
+{
+  for (const [name, build] of [
+    [
+      'throws',
+      (): string => {
+        throw new Error('message builder broke');
+      },
+    ],
+    ['answers a non-string', (() => 42) as unknown as () => string],
+  ] as const) {
+    const reported: unknown[] = [];
+    const handler = createNotificationsV2BridgeHandler({
+      provider: {
+        ...minimal,
+        requestPermission: async () => {
+          throw { code: 'HOST_SOMETHING', message: 'internal detail', retryable: false };
+        },
+      },
+      unexpectedFailureMessage: build,
+      onError: (error) => reported.push(error),
+    });
+    const response = await handler.request(
+      request('notifications.v2.requestPermission', { topics: ['a'] }),
+    );
+    assert.deepEqual(
+      errorOf(response),
+      {
+        code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+        message: 'notifications.v2.requestPermission failed.',
+        retryable: false,
+      },
+      name,
+    );
+    assert.doesNotMatch(JSON.stringify(response), /internal detail/u, name);
+    // The provider's failure, then the builder's own.
+    assert.equal(reported.length, 2, name);
+    assert.match(
+      String(reported[1]),
+      name === 'throws' ? /message builder broke/u : /not a string/u,
+    );
+  }
+  // The backend handler's fixed message for a PlatformOperationError goes through the same guard.
+  const reported: unknown[] = [];
+  const handler = createNotificationsBackendBridgeHandler({
+    backend: {
+      session: () => ({ id: 's', player: 't2_a' }),
+      listConsent: async () => {
+        throw new PlatformOperationError({ code: 'STORAGE_FAILED', message: 'redis 10.0.0.1', retryable: false });
+      },
+    } as unknown as NotificationsBackendBridgeServer<{ readonly id: string; readonly player: string }>,
+    unexpectedFailureMessage: () => {
+      throw new Error('message builder broke');
+    },
+    onError: (error) => reported.push(error),
+  });
+  const response = await handler.request(
+    request('notifications.backend.listConsent', { expectedPlayer: 't2_a' }),
+  );
+  assert.deepEqual(errorOf(response), {
+    code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+    message: 'notifications.backend.listConsent failed.',
+    retryable: false,
+  });
+  assert.doesNotMatch(JSON.stringify(response), /10\.0\.0\.1/u);
+  assert.equal(reported.length, 2);
 }
 
 // readBridgeNotificationsHostCode reads back what the handler writes, and nothing else.

@@ -16,6 +16,9 @@ import {
   createNotificationsV2UnavailableBridgeError,
   isBridgeCommerceV2Method,
   isBridgeNotificationsV2Method,
+  isThrownInstance,
+  readThrownField,
+  thrownMessage,
 } from '../dist/index.js';
 import {
   assertBridgeNotificationsV2Payload,
@@ -29,6 +32,11 @@ const mainEntry = readFileSync(new URL('../dist/index.js', import.meta.url), 'ut
 assert.doesNotMatch(mainEntry, /(?:from|import)\s*\(?\s*['"]@mpgd\/platform\/notifications['"]/u);
 const notificationsEntry = readFileSync(new URL('../dist/notifications.js', import.meta.url), 'utf8');
 assert.match(notificationsEntry, /from\s*['"]@mpgd\/platform\/notifications['"]/u);
+
+// The thrown-value helpers ship in the main entry.
+assert.equal(readThrownField({ code: 'X' }, 'code'), 'X');
+assert.equal(isThrownInstance(new Error('x'), Error), true);
+assert.equal(thrownMessage({ toString() { throw new Error('hostile'); } }), 'a failure that cannot be read');
 
 assert.deepEqual([...bridgeCommerceV2Methods], [...commerceBridgeMethods]);
 assert.equal(bridgeEventProtocol, 'mpgd.commerce.v2');

@@ -254,7 +254,13 @@ backend never trusts it for a send decision: the gate reads the server's own
 [provider registry](#provider-registry) entry, and the runtime compares the
 two at start. While they disagree the runtime fails closed: every call
 throws `NOTIFICATIONS_CONFIGURATION_REQUIRED`, and nothing reaches the
-backend in the background either (no registration, no record).
+backend in the background either (no registration, no record). An entry
+the game gives the runtime that it cannot compare (its `provider`,
+`addressing`, `content`, `purposes`, or `permission` malformed or
+unreadable) is reported and fails closed the same way. An entry the backend
+answers that the runtime cannot compare is a failed load: it is reported,
+the runtime runs without the comparison, and the next start loads it again,
+as when the backend cannot be reached.
 
 ## Client contract {#client-contract}
 
@@ -598,7 +604,11 @@ Runtime rules:
     the installation; at start, for a player already signed in, when no
     registration was acknowledged yet, and on reads while the provider's
     address was never acknowledged (a first registration that failed); and
-    on `register()`.
+    on `register()`. After the backend fails a registration, reads retry it
+    only once a backoff has passed: 30 seconds after the failure, doubling
+    with each failure in a row, at most an hour. A storage, input, or
+    provider failure does not count. Start, authentication, `register()`,
+    and a changed address or permission send at once.
   - **Before authentication.** A registration needs an authenticated player;
     one that arrives earlier is sent at authentication.
   - **Skipping repeats.** The runtime persists the last registration the

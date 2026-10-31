@@ -208,6 +208,27 @@ describe('createLazyAitBridgeNotificationProvider', () => {
     expect(warn).toHaveBeenCalled();
   });
 
+  it('answers a chunk that failed with a hostile value as retryable, without throwing while reading it', async () => {
+    const hostile = (): never => {
+      throw new Error('hostile read');
+    };
+    for (const thrown of [new Proxy({}, { get: hostile, getPrototypeOf: hostile }), { toString: hostile }]) {
+      const provider = createLazyAitBridgeNotificationProvider(
+        {
+          provider: 'apps-in-toss',
+          request: async () => ({}),
+          subscribe: () => () => undefined,
+        },
+        { load: () => Promise.reject(thrown) },
+      );
+      await expect(provider.getPermission({ topics: ['a'] })).rejects.toMatchObject({
+        code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+        retryable: true,
+        message: 'The notifications bridge client did not load: a failure that cannot be read',
+      });
+    }
+  });
+
   it('reads envelopes through the bridge provider: other protocols skipped, invalid ones dropped', async () => {
     const loader = controlledLoader();
     const events = channel();

@@ -1,4 +1,4 @@
-import type { BridgeRequest, BridgeResponse } from '@mpgd/bridge';
+import { isThrownInstance, type BridgeRequest, type BridgeResponse } from '@mpgd/bridge';
 import { createNotificationsV2BridgeHandler } from '@mpgd/bridge/notifications';
 import {
   NotificationError,
@@ -267,7 +267,7 @@ export function createDevvitNotificationsV2BridgeHandler(
     // An unexpected failure's text stays on the server.
     unexpectedFailureMessage: (method) => `${method} failed on the Devvit server.`,
     onError: input.onError ?? ((error, context) => {
-      if (error instanceof NotificationError && error.code === 'NOTIFICATIONS_UNSUPPORTED') {
+      if (isThrownInstance(error, NotificationError) && error.code === 'NOTIFICATIONS_UNSUPPORTED') {
         return;
       }
       console.warn(`devvit notifications ${context.method} failed`, error);

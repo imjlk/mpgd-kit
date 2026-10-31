@@ -1,5 +1,7 @@
 import {
   bridgeNotificationsEventProtocol,
+  isThrownInstance,
+  readThrownField,
   type BridgeNotificationsEvent,
   type BridgeNotificationsV2Method,
 } from '@mpgd/bridge';
@@ -295,12 +297,15 @@ function parseProtocolVersion(
 }
 
 function toNotificationError(error: unknown): NotificationError {
-  if (error instanceof NotificationError) {
+  if (isThrownInstance(error, NotificationError)) {
     return error;
   }
-  const failure = typeof error === 'object' && error !== null
-    ? error as { readonly code?: unknown; readonly message?: unknown; readonly retryable?: unknown }
-    : {};
+  // Each field read once; one whose getter or Proxy trap throws counts as missing.
+  const failure = {
+    code: readThrownField(error, 'code'),
+    message: readThrownField(error, 'message'),
+    retryable: readThrownField(error, 'retryable'),
+  };
   const message = typeof failure.message === 'string' ? failure.message : undefined;
   // Only an explicit flag overrides the code's default: a raw transport
   // failure (a plain Error) stays retryable as NOTIFICATIONS_TEMPORARILY_UNAVAILABLE.

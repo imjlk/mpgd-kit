@@ -54,6 +54,9 @@ import {
   createBridgeEventSource,
   isBridgeNotificationsBackendMethod,
   isBridgeNotificationsV2Method,
+  isThrownInstance,
+  readThrownField,
+  thrownMessage,
   type BridgeEventStream,
   type BridgeNotificationsBackendMethod,
   type BridgeNotificationsBackendPayload,
@@ -195,7 +198,9 @@ export interface CreateNotificationsV2BridgeHandlerInput {
    * crosses with. By default `<method> failed: <its message>`; a host whose
    * provider failures can carry internal text passes a fixed one. A failure
    * with a notifications code is the provider's own answer and keeps its
-   * message.
+   * message. A callback that throws, or answers a value that is not a
+   * string, is reported through `onError`, and the failure crosses as
+   * `<method> failed.` with its code and retryable flag.
    */
   readonly unexpectedFailureMessage?: ((method: BridgeNotificationsV2Method) => string) | undefined;
   /**
@@ -240,7 +245,10 @@ export interface CreateNotificationsV2BridgeHandlerInput {
  *   `@mpgd/platform` keeps its codes. A `PlatformOperationError` with any
  *   other code is `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` with its retryable
  *   flag. Anything else is `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`, retryable
- *   unless it carries a `retryable: false` of its own.
+ *   unless it carries a `retryable: false` of its own. A thrown value is
+ *   read defensively: a field whose getter or `Proxy` trap throws counts as
+ *   missing, so a hostile value never rejects the request or keeps a
+ *   readable code from crossing.
  * - **Events.** `subscribe` delivers the provider's events as
  *   `{ protocol: 'mpgd.notifications.v2', sequence, event }`, numbered per
  *   handler from 0, through `createBridgeEventSource`: the provider is
@@ -320,7 +328,7 @@ export function createNotificationsV2BridgeHandler(
   };
 
   const report = (error: unknown, method: BridgeNotificationsV2Method): void => {
-    if (input.onError === undefined || error instanceof InvalidPayloadError) {
+    if (input.onError === undefined || isThrownInstance(error, InvalidPayloadError)) {
       return;
     }
     try {
@@ -349,10 +357,9 @@ export function createNotificationsV2BridgeHandler(
       } catch (error) {
         report(error, method);
         try {
-          return toBridgeError(request.id, method, error, input.unexpectedFailureMessage);
+          return toBridgeError(request.id, method, error, input.unexpectedFailureMessage, report);
         } catch {
-          // Reading the failure threw (a getter on a thrown object): answer
-          // without its text rather than reject the request.
+          // Reading a failure never throws; this answers anyway if it did.
           return createBridgeError(
             request.id,
             'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
@@ -516,7 +523,9 @@ export interface CreateNotificationsBackendBridgeHandlerInput<
    * The message a failure that is not a notifications failure crosses with
    * (a `PlatformOperationError` with another code included), so a store's
    * or plugin's own text stays on the host. `<method> failed on the host.`
-   * by default.
+   * by default. A callback that throws, or answers a value that is not a
+   * string, is reported through `onError`, and the failure crosses as
+   * `<method> failed.`.
    */
   readonly unexpectedFailureMessage?: ((method: BridgeNotificationsBackendMethod) => string) | undefined;
   /**
@@ -652,7 +661,7 @@ export function createNotificationsBackendBridgeHandler<TSession extends Notific
   };
 
   const report = (error: unknown, method: BridgeNotificationsBackendMethod): void => {
-    if (input.onError === undefined || error instanceof InvalidPayloadError || error instanceof SessionRefusal) {
+    if (input.onError === undefined || isThrownInstance(error, InvalidPayloadError) || isThrownInstance(error, SessionRefusal)) {
       return;
     }
     try {
@@ -681,8 +690,9 @@ export function createNotificationsBackendBridgeHandler<TSession extends Notific
       } catch (error) {
         report(error, method);
         try {
-          return toBridgeError(request.id, method, error, unexpectedFailureMessage, true);
+          return toBridgeError(request.id, method, error, unexpectedFailureMessage, report, true);
         } catch {
+          // Reading a failure never throws; this answers anyway if it did.
           return createBridgeError(
             request.id,
             'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
@@ -705,7 +715,7 @@ function validBackendPayload<TMethod extends BridgeNotificationsBackendMethod>(
   try {
     return assertBridgeNotificationsBackendPayload(method, payload);
   } catch (error) {
-    throw new InvalidPayloadError(`${method} payload is invalid: ${messageOf(error)}`, {
+    throw new InvalidPayloadError(`${method} payload is invalid: ${thrownMessage(error)}`, {
       cause: error,
     });
   }
@@ -755,7 +765,7 @@ function validPayload<TMethod extends BridgeNotificationsV2Method>(
   try {
     return assertBridgeNotificationsV2Payload(method, payload);
   } catch (error) {
-    throw new InvalidPayloadError(`${method} payload is invalid: ${messageOf(error)}`, {
+    throw new InvalidPayloadError(`${method} payload is invalid: ${thrownMessage(error)}`, {
       cause: error,
     });
   }
@@ -770,30 +780,59 @@ function validResult<TMethod extends BridgeNotificationsV2Method>(
     return assertBridgeNotificationsV2Result(method, data);
   } catch (error) {
     throw new NotificationError('NOTIFICATIONS_CONFIGURATION_REQUIRED', {
-      message: `${name} answered ${method} with invalid data: ${messageOf(error)}`,
+      message: `${name} answered ${method} with invalid data: ${thrownMessage(error)}`,
       cause: error,
     });
   }
 }
 
+/**
+ * The bridge error a failure crosses as. A thrown value may be anything,
+ * including a hostile one (a getter or `toString` that throws, a `Proxy`
+ * whose traps throw): each field is read once and counts as missing when
+ * reading it throws, so a readable code and flag still cross, and this never
+ * throws.
+ */
 function toBridgeError<TMethod extends string>(
   id: string,
   method: TMethod,
   error: unknown,
   unexpectedFailureMessage: ((method: TMethod) => string) | undefined,
+  /** Reports a failure of `unexpectedFailureMessage` itself; the answer then uses a fixed message. */
+  report: (error: unknown, method: TMethod) => void,
   /** Also answers a non-notifications `PlatformOperationError` with `unexpectedFailureMessage`. */
   hidePlatformFailureText = false,
 ): BridgeResponse {
-  if (error instanceof InvalidPayloadError) {
+  if (isThrownInstance(error, InvalidPayloadError)) {
     return createBridgeError(id, 'NOTIFICATIONS_INVALID_INPUT', error.message);
   }
+  /** The host's fixed message; one it cannot build is reported, and the answer says only that the method failed. */
+  const fixedMessage = (build: (method: TMethod) => string): string => {
+    try {
+      const message: unknown = build(method);
+      if (typeof message === 'string') {
+        return message;
+      }
+      report(
+        new TypeError('unexpectedFailureMessage answered a value that is not a string.'),
+        method,
+      );
+    } catch (buildError) {
+      report(buildError, method);
+    }
+    return `${method} failed.`;
+  };
   // Read by shape as well as by class: a provider built against another copy
   // of `@mpgd/platform` throws errors that fail `instanceof` here, and a
-  // permanent code must not turn into a retryable one.
-  const failure = readPlatformOperationFailure(error);
+  // permanent code must not turn into a retryable one. The fields are read
+  // once, into a plain object, so a getter cannot answer differently twice.
+  const failure = readPlatformOperationFailure({
+    code: readThrownField(error, 'code'),
+    retryable: readThrownField(error, 'retryable'),
+  });
   if (failure !== null && isNotificationErrorCode(failure.code)) {
-    const message = stringField(error, 'message') ?? `${method} failed.`;
-    const hostCode = stringField(error, 'hostCode');
+    const message = stringOrUndefined(readThrownField(error, 'message')) ?? `${method} failed.`;
+    const hostCode = stringOrUndefined(readThrownField(error, 'hostCode'));
     return createBridgeError(
       id,
       failure.code,
@@ -803,14 +842,14 @@ function toBridgeError<TMethod extends string>(
       failure.retryable,
     );
   }
-  if (error instanceof PlatformOperationError) {
+  if (isThrownInstance(error, PlatformOperationError)) {
     return createBridgeError(
       id,
       'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
       hidePlatformFailureText && unexpectedFailureMessage !== undefined
-        ? unexpectedFailureMessage(method)
-        : `${method} failed: ${error.message}`,
-      error.retryable,
+        ? fixedMessage(unexpectedFailureMessage)
+        : `${method} failed: ${thrownMessage(error)}`,
+      failure?.retryable ?? true,
     );
   }
   // A failure the provider did not normalize is a host failure the game may
@@ -819,26 +858,18 @@ function toBridgeError<TMethod extends string>(
     id,
     'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
     unexpectedFailureMessage === undefined
-      ? `${method} failed: ${messageOf(error)}`
-      : unexpectedFailureMessage(method),
+      ? `${method} failed: ${thrownMessage(error)}`
+      : fixedMessage(unexpectedFailureMessage),
     failure?.retryable ?? true,
   );
 }
 
-function stringField(value: unknown, key: string): string | undefined {
-  if (typeof value !== 'object' || value === null) {
-    return undefined;
-  }
-  const field: unknown = (value as Readonly<Record<string, unknown>>)[key];
-  return typeof field === 'string' ? field : undefined;
+function stringOrUndefined(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
 }
 
 function isThenable(value: unknown): value is PromiseLike<unknown> {
   return (typeof value === 'object' || typeof value === 'function')
     && value !== null
     && typeof (value as { readonly then?: unknown }).then === 'function';
-}
-
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : (stringField(error, 'message') ?? String(error));
 }

@@ -18,6 +18,30 @@ function request(method: string, payload: unknown): BridgeRequest {
   };
 }
 
+describe('createDevvitBridgeNotificationProvider failures', () => {
+  it('reads a hostile thrown value without throwing, keeping a readable code', async () => {
+    const hostile = (): never => {
+      throw new Error('hostile read');
+    };
+    const failing = (thrown: unknown) => createDevvitBridgeNotificationProvider({
+      request: () => Promise.reject(thrown),
+    });
+    const trapped = await failing(new Proxy({}, { get: hostile, getPrototypeOf: hostile }))
+      .getPermission({ topics: ['a'] })
+      .catch((error: unknown) => error);
+    expect(trapped).toBeInstanceOf(NotificationError);
+    expect(trapped).toMatchObject({ code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE' });
+    const coded = await failing({
+      code: 'NOTIFICATIONS_UNSUPPORTED',
+      retryable: false,
+      get message(): string {
+        return hostile();
+      },
+    }).getPermission({ topics: ['a'] }).catch((error: unknown) => error);
+    expect(coded).toMatchObject({ code: 'NOTIFICATIONS_UNSUPPORTED', retryable: false });
+  });
+});
+
 describe('createDevvitBridgeNotificationProvider host codes', () => {
   it('reads the host code from the exact message the server bridge writes', async () => {
     const plugin = createFakeDevvitNotifications({ currentUserId: user });

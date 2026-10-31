@@ -269,6 +269,39 @@ describe('createNotificationRuntime storage', () => {
     expect(storage.stored).toMatchObject({ registration: { player: 'p-1' } });
   });
 
+  it('answers NOTIFICATIONS_TEMPORARILY_UNAVAILABLE for a storage failure whose value cannot be read', async () => {
+    const hostile = (): never => {
+      throw new Error('hostile read');
+    };
+    const thrown = [
+      new Proxy({}, { get: hostile, getPrototypeOf: hostile }),
+      { toString: hostile },
+      Object.defineProperty(new Error('hidden'), 'message', { get: hostile }),
+    ];
+    for (const value of thrown) {
+      let loads = 0;
+      const { host, backend, create } = setup({
+        load() {
+          loads += 1;
+          if (loads <= 2) {
+            throw value;
+          }
+          return {};
+        },
+        save: () => undefined,
+      });
+      host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+      const runtime = create();
+      await runtime.start();
+      backend.authenticate('p-1');
+      const failure = await runtime.runUntilIdle().then(() => undefined, (error: unknown) => error);
+      expect(failure).toBeInstanceOf(NotificationError);
+      expect((failure as NotificationError).code).toBe('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE');
+      expect((failure as NotificationError).message).toContain('a failure that cannot be read');
+      expect((failure as NotificationError).cause).toBe(value);
+    }
+  });
+
   it('surfaces a failed save as NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', async () => {
     const storage = asyncStorage();
     const { host, backend, create } = setup(storage.port);
@@ -586,6 +619,92 @@ describe('createNotificationRuntime storage', () => {
     })).toEqual({});
   });
 
+  it('leaves out a malformed or unreadable stored entry and keeps the others', () => {
+    const registration = {
+      registration: { provider: 'fcm', address: { kind: 'fcm-token', value: 't', permission: 'granted' } },
+      player: 'p-1',
+      session: 's-1',
+      at: now,
+    };
+    const hostile = (): never => {
+      throw new Error('hostile read');
+    };
+    // A malformed registration next to a good unbound state.
+    expect(notificationRuntimeStateOf({
+      registration: { ...registration, at: 42 },
+      unbound: true,
+      unboundSession: { player: 'p-1', session: 's-1' },
+    })).toEqual({ unbound: true, unboundSession: { player: 'p-1', session: 's-1' } });
+    // A good registration next to a malformed session.
+    expect(notificationRuntimeStateOf({ registration, unbound: true, unboundSession: { player: 7 } }))
+      .toEqual({ registration, unbound: true });
+    // A getter that throws drops only its own entry.
+    expect(notificationRuntimeStateOf({
+      get registration(): unknown {
+        return hostile();
+      },
+      unbound: true,
+    })).toEqual({ unbound: true });
+    expect(notificationRuntimeStateOf({
+      registration,
+      get unbound(): unknown {
+        return hostile();
+      },
+    })).toEqual({ registration });
+    // A registration whose own fields throw, or a Proxy whose traps throw.
+    expect(notificationRuntimeStateOf({
+      registration: { ...registration, get player(): unknown {
+        return hostile();
+      } },
+      unbound: true,
+    })).toEqual({ unbound: true });
+    const trapped = new Proxy({}, { get: hostile, ownKeys: hostile, getOwnPropertyDescriptor: hostile });
+    expect(notificationRuntimeStateOf({ registration: trapped, unbound: true })).toEqual({ unbound: true });
+    expect(notificationRuntimeStateOf(trapped)).toEqual({});
+    const revocable = Proxy.revocable({}, {});
+    revocable.revoke();
+    expect(notificationRuntimeStateOf(revocable.proxy)).toEqual({});
+    expect(notificationRuntimeStateOf({ registration: revocable.proxy, unbound: true })).toEqual({ unbound: true });
+    // What is kept is a plain copy, not the stored object.
+    const kept = notificationRuntimeStateOf({ registration });
+    expect(kept.registration).toEqual(registration);
+    expect(kept.registration).not.toBe(registration);
+  });
+
+  it('reads a stored value whose fields cannot be read as an empty state', async () => {
+    const hostile = (): never => {
+      throw new Error('hostile read');
+    };
+    const revocable = Proxy.revocable({}, {});
+    revocable.revoke();
+    for (const stored of [new Proxy({}, { get: hostile, getPrototypeOf: hostile }), revocable.proxy]) {
+      const { host, backend, create } = setup({ load: () => stored, save: () => undefined });
+      backend.authenticate('p-1');
+      host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+      const runtime = create();
+      await runtime.start();
+      await runtime.runUntilIdle();
+      expect(backend.endpoints.map((endpoint) => endpoint.value)).toEqual(['tok-1']);
+    }
+  });
+
+  it('starts over a stored state with an unreadable entry and registers again', async () => {
+    const stored = {
+      get registration(): unknown {
+        throw new Error('hostile read');
+      },
+      unbound: false,
+    };
+    const { host, backend, create } = setup({ load: () => stored, save: () => undefined });
+    backend.authenticate('p-1');
+    host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    const runtime = create();
+    await runtime.start();
+    await runtime.runUntilIdle();
+    expect(backend.endpoints.map((endpoint) => endpoint.value)).toEqual(['tok-1']);
+    await expect(runtime.getPermission({ topics: ['energy-full'] })).resolves.toBeDefined();
+  });
+
   it('keeps the state in one storage key of the platform storage adapter', async () => {
     const values = new Map<string, unknown>();
     const adapter: StorageAdapter = {
@@ -730,6 +849,118 @@ describe('createNotificationRuntime registry entry', () => {
     await runtime.start();
     await settleLoad();
     expect(loads).toBe(0);
+  });
+
+  it('treats a loaded entry that cannot be compared as a failed load, and loads again at the next start', async () => {
+    const { host, backend } = setup();
+    const entry = notificationConformanceRegistryEntry({ provider: osProfile.provider, capabilities: osProfile.capabilities });
+    expect(entry).toBeDefined();
+    if (entry === undefined) {
+      return;
+    }
+    const errors: unknown[] = [];
+    const answers: unknown[] = [
+      { ...entry, purposes: 'service' },
+      { ...entry, get permission(): unknown {
+        throw new Error('hostile read');
+      } },
+      // A newer backend's extra field still compares; this one disagrees with the provider.
+      { ...entry, addressing: 'platform-user', addedLater: true },
+    ];
+    let loads = 0;
+    const runtime = createNotificationRuntime({
+      provider: host.provider,
+      backend,
+      catalog: [energy],
+      defaultLocale: 'ko',
+      loadRegistryEntry: async () => answers[loads++] as typeof entry,
+      onError: (error) => errors.push(error),
+    });
+    for (const issue of [/purposes/u, /JSON/u]) {
+      await runtime.start();
+      await settleLoad();
+      expect(errors.at(-1)).toMatchObject({ code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED' });
+      expect(String((errors.at(-1) as Error).message)).toMatch(issue);
+      // The runtime runs without the comparison.
+      await expect(runtime.getPermission({ topics: ['energy-full'] })).resolves.toBeDefined();
+      await runtime.runUntilIdle().catch(() => undefined);
+      runtime.stop();
+    }
+    await runtime.start();
+    await settleLoad();
+    expect(loads).toBe(3);
+    await expect(runtime.getPermission({ topics: ['energy-full'] })).rejects.toMatchObject({
+      code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
+    });
+  });
+
+  it('fails closed on a given entry that cannot be compared, as on one that disagrees', async () => {
+    const entry = notificationConformanceRegistryEntry({ provider: osProfile.provider, capabilities: osProfile.capabilities });
+    expect(entry).toBeDefined();
+    if (entry === undefined) {
+      return;
+    }
+    const hostile = (): never => {
+      throw new Error('hostile read');
+    };
+    const given: unknown[] = [
+      { ...entry, permission: null },
+      { ...entry, get purposes(): unknown {
+        return hostile();
+      } },
+      // A readable entry that disagrees: the behaviour the malformed ones must match.
+      { ...entry, addressing: 'platform-user' },
+    ];
+    for (const registryEntry of given) {
+      const { host, backend } = setup();
+      backend.authenticate('p-1');
+      host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+      const errors: unknown[] = [];
+      let loads = 0;
+      const runtime = createNotificationRuntime({
+        provider: host.provider,
+        backend,
+        catalog: [energy],
+        defaultLocale: 'ko',
+        registryEntry: registryEntry as typeof entry,
+        loadRegistryEntry: async () => {
+          loads += 1;
+          return entry;
+        },
+        onError: (error) => errors.push(error),
+      });
+      // start() does not throw for it, loads nothing in its place, and sends nothing.
+      await runtime.start();
+      await settleLoad();
+      await runtime.runUntilIdle().catch(() => undefined);
+      expect(loads).toBe(0);
+      expect(backend.endpoints).toEqual([]);
+      await expect(runtime.getPermission({ topics: ['energy-full'] })).rejects.toMatchObject({
+        code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
+      });
+      await expect(runtime.register()).rejects.toMatchObject({ code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED' });
+      expect(backend.endpoints).toEqual([]);
+    }
+  });
+
+  it('reports a given entry that cannot be compared through onError at each start', async () => {
+    const { host, backend } = setup();
+    const entry = notificationConformanceRegistryEntry({ provider: osProfile.provider, capabilities: osProfile.capabilities });
+    const errors: unknown[] = [];
+    const runtime = createNotificationRuntime({
+      provider: host.provider,
+      backend,
+      catalog: [energy],
+      defaultLocale: 'ko',
+      registryEntry: { ...entry, permission: null } as unknown as NonNullable<typeof entry>,
+      onError: (error) => errors.push(error),
+    });
+    await runtime.start();
+    runtime.stop();
+    await runtime.start();
+    expect(errors).toHaveLength(2);
+    expect(errors[0]).toMatchObject({ code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED' });
+    expect(String((errors[0] as Error).message)).toMatch(/permission/u);
   });
 
   it('loads again after a loader that throws synchronously', async () => {
@@ -1118,8 +1349,8 @@ describe('createNotificationRuntime review fixes', () => {
     expect(backend.endpoints.map((endpoint) => endpoint.value)).toEqual(['tok-1']);
   });
 
-  it('retries a first registration that failed, on the next read', async () => {
-    const { host, backend } = setup();
+  it('retries a first registration that failed, on a read once its backoff has passed', async () => {
+    const { clock, host, backend } = setup();
     let failures = 1;
     const runtime = createNotificationRuntime({
       provider: host.provider,
@@ -1133,6 +1364,7 @@ describe('createNotificationRuntime review fixes', () => {
         },
       }),
       catalog: [energy],
+      clock,
       defaultLocale: 'ko',
     });
     backend.authenticate('p-1');
@@ -1140,9 +1372,199 @@ describe('createNotificationRuntime review fixes', () => {
     await runtime.start();
     await runtime.runUntilIdle().catch(() => undefined);
     expect(backend.endpoints).toEqual([]);
+    clock.advance(30);
     await runtime.getPermission({ topics: ['energy-full'] });
     await runtime.runUntilIdle();
     expect(backend.endpoints.map((endpoint) => endpoint.value)).toEqual(['tok-1']);
+  });
+
+  it('backs reads off a first registration that failed on endpoint-changed', async () => {
+    const { clock, host, backend } = setup();
+    const attempts: string[] = [];
+    let failing = true;
+    const runtime = createNotificationRuntime({
+      provider: host.provider,
+      backend: clientOf(backend, {
+        registerEndpoint: async (registration) => {
+          attempts.push(clock.now());
+          if (failing) {
+            throw new NotificationError('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', { message: '503' });
+          }
+          await backend.registerEndpoint(registration);
+        },
+      }),
+      catalog: [energy],
+      clock,
+      defaultLocale: 'ko',
+      onError: () => undefined,
+    });
+    backend.authenticate('p-1');
+    await runtime.start();
+    await runtime.runUntilIdle().catch(() => undefined);
+    // The address arrives late, as an FCM token often does, and its registration fails.
+    host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    await runtime.runUntilIdle().catch(() => undefined);
+    expect(attempts).toHaveLength(1);
+    await runtime.getPermission({ topics: ['energy-full'] });
+    await runtime.runUntilIdle().catch(() => undefined);
+    expect(attempts).toHaveLength(1);
+    failing = false;
+    clock.advance(30);
+    await runtime.getPermission({ topics: ['energy-full'] });
+    await runtime.runUntilIdle();
+    expect(attempts).toHaveLength(2);
+    expect(backend.endpoints.map((endpoint) => endpoint.value)).toEqual(['tok-1']);
+  });
+
+  it('counts a failure for the session the attempt began for, not the one signed in when it failed', async () => {
+    const { clock, host, backend } = setup();
+    const attempts: string[] = [];
+    let release: (() => void) | undefined;
+    let failing = true;
+    const runtime = createNotificationRuntime({
+      provider: host.provider,
+      backend: clientOf(backend, {
+        registerEndpoint: async (registration) => {
+          attempts.push(clock.now());
+          if (release === undefined && attempts.length === 1) {
+            // The first attempt (p-1's) answers only after p-2 signed in.
+            await new Promise<void>((resolve) => {
+              release = resolve;
+            });
+          }
+          if (failing) {
+            throw new NotificationError('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', { message: '503' });
+          }
+          await backend.registerEndpoint(registration);
+        },
+      }),
+      catalog: [energy],
+      clock,
+      defaultLocale: 'ko',
+      onError: () => undefined,
+    });
+    backend.authenticate('p-1');
+    host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    const started = runtime.start();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    backend.authenticate('p-2');
+    release?.();
+    await started;
+    await runtime.runUntilIdle().catch(() => undefined);
+    // p-1's failure, then p-2's sign-in registration failed once: p-2 waits 30 s, not 60.
+    expect(attempts).toHaveLength(2);
+    failing = false;
+    clock.advance(30);
+    await runtime.getPermission({ topics: ['energy-full'] });
+    await runtime.runUntilIdle();
+    expect(attempts).toHaveLength(3);
+  });
+
+  it("does not back reads off for a failure that is not the backend's: a failed save retries on the next read", async () => {
+    const storage = asyncStorage();
+    const { clock, host, backend } = setup(storage.port);
+    let sent = 0;
+    const runtime = createNotificationRuntime({
+      provider: host.provider,
+      backend: clientOf(backend, {
+        registerEndpoint: async (registration) => {
+          sent += 1;
+          await backend.registerEndpoint(registration);
+        },
+      }),
+      catalog: [energy],
+      clock,
+      defaultLocale: 'ko',
+      storage: storage.port,
+      onError: () => undefined,
+    });
+    backend.authenticate('p-1');
+    host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    // The backend takes the first registration, but its acknowledgement cannot be saved, twice.
+    storage.failNextSaves(2);
+    await runtime.start();
+    await runtime.runUntilIdle().catch(() => undefined);
+    expect(sent).toBe(1);
+    // Without moving the clock, each read sends it again at once.
+    await runtime.getPermission({ topics: ['energy-full'] });
+    await runtime.runUntilIdle().catch(() => undefined);
+    expect(sent).toBe(2);
+    await runtime.getPermission({ topics: ['energy-full'] });
+    await runtime.runUntilIdle();
+    expect(sent).toBe(3);
+    expect(storage.stored).toMatchObject({ registration: { player: 'p-1' } });
+  });
+
+  it('backs reads off a registration that keeps failing: 30 s, doubling, at most an hour', async () => {
+    const { clock, host, backend } = setup();
+    const attempts: string[] = [];
+    let failing = true;
+    const runtime = createNotificationRuntime({
+      provider: host.provider,
+      backend: clientOf(backend, {
+        registerEndpoint: async (registration) => {
+          attempts.push(clock.now());
+          if (failing) {
+            throw new NotificationError('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', { message: '503' });
+          }
+          await backend.registerEndpoint(registration);
+        },
+      }),
+      catalog: [energy],
+      clock,
+      defaultLocale: 'ko',
+      onError: () => undefined,
+    });
+    backend.authenticate('p-1');
+    host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    const read = async (): Promise<void> => {
+      await runtime.getPermission({ topics: ['energy-full'] });
+      await runtime.runUntilIdle().catch(() => undefined);
+    };
+    // Start sends at once and fails: reads hold back for 30 s.
+    await runtime.start();
+    await runtime.runUntilIdle().catch(() => undefined);
+    expect(attempts).toHaveLength(1);
+    await read();
+    await read();
+    clock.advance(29);
+    await read();
+    expect(attempts).toHaveLength(1);
+    // Each failure in a row doubles the wait: 30, 60, 120, ... seconds.
+    const waits: number[] = [];
+    let waited = 29;
+    while (waits.length < 9) {
+      clock.advance(1);
+      waited += 1;
+      const before = attempts.length;
+      await read();
+      if (attempts.length > before) {
+        waits.push(waited);
+        waited = 0;
+      }
+    }
+    expect(waits).toEqual([30, 60, 120, 240, 480, 960, 1920, 3600, 3600]);
+    // Explicit triggers do not wait: a rotated address goes out at once.
+    host.issueEndpoint({ kind: 'fcm-token', value: 'tok-2' });
+    await runtime.runUntilIdle().catch(() => undefined);
+    expect(attempts).toHaveLength(11);
+    // One the backend acknowledges ends the backoff: the next failure waits 30 s again.
+    failing = false;
+    clock.advance(3600);
+    await read();
+    expect(backend.endpoints.map((endpoint) => endpoint.value)).toContain('tok-2');
+    expect(attempts).toHaveLength(12);
+    // Another player signs in: that registration fails, and reads retry it after 30 s, not an hour.
+    failing = true;
+    backend.authenticate('p-2');
+    await runtime.runUntilIdle().catch(() => undefined);
+    expect(attempts).toHaveLength(13);
+    clock.advance(29);
+    await read();
+    expect(attempts).toHaveLength(13);
+    clock.advance(1);
+    await read();
+    expect(attempts).toHaveLength(14);
   });
 
   it('records no player action for a player who signed out while the call was under way', async () => {

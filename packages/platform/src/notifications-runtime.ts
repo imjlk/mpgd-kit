@@ -42,8 +42,10 @@ import {
 } from './notifications.js';
 import {
   bufferEvent,
+  comparableRegistryEntry,
   deliverEach,
   describeError,
+  errorMessageOf,
   noticeIdentityOf,
   recordNoticeInputOf,
   reminderInputIssue,
@@ -67,6 +69,14 @@ const secondMs = 1000;
 const dayMs = 24 * 60 * 60 * secondMs;
 /** A registration identical to the last acknowledged one is skipped for this long. */
 const registrationRefreshMs = 7 * dayMs;
+/**
+ * After the backend fails a registration, reads retry it no sooner than this, doubling
+ * with each failure in a row up to `registrationRetryMaxMs`. Start, a
+ * sign-in, `register()`, and a changed address or permission send at once.
+ */
+const registrationRetryBaseMs = 30 * secondMs;
+/** The longest a read waits to retry a failed registration. */
+const registrationRetryMaxMs = 60 * 60 * secondMs;
 
 /** The authenticated session a backend serves; the backend binds the installation to it. */
 export interface NotificationRuntimeSession {
@@ -160,7 +170,9 @@ export interface NotificationRuntimeState {
  * the runtime is created, and again after a load that failed; a failed load
  * is reported by the call that needed the state. `save` runs after each
  * change, with the whole state. Either may answer synchronously. A value
- * `load` answers that is not a runtime state reads as an empty one. One
+ * `load` answers that is not a runtime state reads as an empty one, and a
+ * malformed entry in one (the registration, or the session `unregister()`
+ * left) is left out while the others are kept. One
  * runtime owns a storage: a game with two runtimes gives each its own key.
  * The state holds the last registration as sent, push address included (an
  * FCM token): an address, not a credential, kept like other game data.
@@ -207,7 +219,10 @@ export interface CreateNotificationRuntimeInput {
    * flight, registrations (including `register()`, which then resolves
    * before it is sent) and records that grant something wait without
    * holding any queue, and go out when the load settles without a mismatch;
-   * withdrawals and refusals go out at once.
+   * withdrawals and refusals go out at once. An entry whose compared fields
+   * (`provider`, `addressing`, `content`, `purposes`, `permission`) are
+   * malformed or cannot be read is reported through `onError` at each start
+   * and fails closed, as an entry that disagrees with the provider does.
    */
   readonly registryEntry?: NotificationDeliveryProviderEntry;
   /**
@@ -219,8 +234,10 @@ export interface CreateNotificationRuntimeInput {
    * `registryEntry`). A load that fails is
    * reported through `onError` and the next `runUntilIdle()`, and the runtime
    * goes on without the entry, so a backend it cannot reach does not turn notifications off;
-   * the next `start()` loads it again. An entry once loaded is kept for the
-   * runtime's life.
+   * the next `start()` loads it again. An answered entry whose compared
+   * fields are malformed or cannot be read is such a failure (unlike a
+   * malformed `registryEntry`, which fails closed). An entry once loaded is
+   * kept for the runtime's life.
    */
   readonly loadRegistryEntry?: () => Promise<NotificationDeliveryProviderEntry | undefined>;
   /**
@@ -285,16 +302,19 @@ export function createMemoryNotificationRuntimeStorage(): NotificationRuntimeSto
   };
 }
 
-/** A stored value as a runtime state; anything else reads as an empty state. */
+/**
+ * A stored value as a runtime state; anything else reads as an empty state.
+ * Each entry is read on its own: a malformed one (or one whose getter or
+ * `Proxy` trap throws) is left out, and the others are kept. Never throws.
+ */
 export function notificationRuntimeStateOf(value: unknown): NotificationRuntimeState {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+  if (!isRecordValue(value)) {
     return {};
   }
-  const record = value as Readonly<Record<string, unknown>>;
-  const registration = persistedRegistrationOf(record['registration']);
+  const registration = persistedRegistrationOf(fieldOf(value, 'registration'));
   // The session unregister() left means nothing without the unbound state.
-  const unbound = record['unbound'] === true;
-  const unboundSession = unbound ? unboundSessionOf(record['unboundSession']) : undefined;
+  const unbound = fieldOf(value, 'unbound') === true;
+  const unboundSession = unbound ? unboundSessionOf(fieldOf(value, 'unboundSession')) : undefined;
   return {
     ...(registration === undefined ? {} : { registration }),
     ...(unbound ? { unbound: true } : {}),
@@ -303,20 +323,27 @@ export function notificationRuntimeStateOf(value: unknown): NotificationRuntimeS
 }
 
 function unboundSessionOf(value: unknown): NotificationRuntimeState['unboundSession'] {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+  if (!isRecordValue(value)) {
     return undefined;
   }
-  const { player, session } = value as Readonly<Record<string, unknown>>;
+  const player = fieldOf(value, 'player');
+  const session = fieldOf(value, 'session');
   return typeof player === 'string' && player.length > 0 && typeof session === 'string' && session.length > 0
     ? { player, session }
     : undefined;
 }
 
 function persistedRegistrationOf(value: unknown): NotificationRuntimePersistedRegistration | undefined {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+  // A plain copy: the state keeps no getter or Proxy of the stored value.
+  let record: unknown;
+  try {
+    record = JSON.parse(JSON.stringify(value)) as unknown;
+  } catch {
     return undefined;
   }
-  const record = value as Readonly<Record<string, unknown>>;
+  if (!isRecordValue(record)) {
+    return undefined;
+  }
   const registration = record['registration'];
   const text = (field: unknown): field is string => typeof field === 'string' && field.length > 0;
   if (
@@ -350,10 +377,34 @@ function persistedRegistrationOf(value: unknown): NotificationRuntimePersistedRe
 
 const systemClock: NotificationRuntimeClock = { now: () => new Date().toISOString() };
 
+/** Whether `value` is an object that is not a list; `false` when even that check throws (a revoked `Proxy`). */
+function isRecordValue(value: unknown): value is Readonly<Record<string, unknown>> {
+  try {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+  } catch {
+    return false;
+  }
+}
+
+/** `value[key]`, or `undefined` when reading it throws (a getter, a `Proxy` trap). */
+function fieldOf(value: Readonly<Record<string, unknown>>, key: string): unknown {
+  try {
+    return value[key];
+  } catch {
+    return undefined;
+  }
+}
+
+/** Whether `value` is a thenable; `false` when reading its `then` throws (a getter, a `Proxy` trap). */
 function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
-  return (typeof value === 'object' || typeof value === 'function')
-    && value !== null
-    && typeof (value as { readonly then?: unknown }).then === 'function';
+  if ((typeof value !== 'object' && typeof value !== 'function') || value === null) {
+    return false;
+  }
+  try {
+    return typeof (value as { readonly then?: unknown }).then === 'function';
+  } catch {
+    return false;
+  }
 }
 
 /** A mutable copy of the runtime state, which the runtime saves after each change. */
@@ -442,7 +493,9 @@ type RuntimeQueue = 'record' | 'register' | 'local';
  *   or request, or a revocation, changes the device's decided permission; and
  *   at start and on reads once the last one the backend acknowledged is older
  *   than 7 days, belongs to another session, or was never acknowledged (a
- *   first registration that failed). An identical one for the same player and session is skipped
+ *   first registration that failed); after the backend fails a registration, a read
+ *   retries only once 30 seconds have passed, doubling with each failure in
+ *   a row up to an hour. An identical one for the same player and session is skipped
  *   for 7 days, except on `register()`. `unregister()` unbinds the
  *   installation from the player signed in when it was called and cancels the
  *   pending local reminders, even when the unbind fails, and nothing binds it
@@ -573,6 +626,31 @@ export function createNotificationRuntime(
   let startCapabilities: NotificationCapabilities | undefined;
   /** The provider's latest registration, from `register()` or `endpoint-changed`. */
   let latestRegistration: NotificationEndpointRegistration | undefined;
+  /**
+   * After registrations that failed in a row: how many, and the time (epoch
+   * ms) before which a read does not retry. Cleared by one the backend acknowledges.
+   */
+  let registrationRetry:
+    | { readonly failures: number; readonly notBefore: number; readonly session: string | undefined }
+    | undefined;
+  /** The clock in epoch ms; `NaN` when it cannot be read, which holds nothing back. */
+  const nowMs = (): number => {
+    try {
+      return Date.parse(clock.now());
+    } catch {
+      return Number.NaN;
+    }
+  };
+  /** The session a backoff belongs to: another session's failures hold nothing back. */
+  const sessionKeyOf = (session: NotificationRuntimeSession | undefined): string | undefined =>
+    session === undefined ? undefined : JSON.stringify([session.player, session.id]);
+  const retrySessionKey = (): string | undefined => {
+    try {
+      return sessionKeyOf(backend.session());
+    } catch {
+      return undefined;
+    }
+  };
   const background = new Set<Promise<void>>();
   /** The first background failure since the last `runUntilIdle`, and how many there were. */
   let failure: { readonly error: unknown; count: number } | undefined;
@@ -952,7 +1030,16 @@ export function createNotificationRuntime(
     ) {
       return;
     }
-    await backend.registerEndpoint(registration);
+    try {
+      await backend.registerEndpoint(registration);
+    } catch (error) {
+      // Only the backend's own failure backs reads off, for the session the
+      // call was made for: a storage, input, or provider failure does not.
+      noteRegistrationFailure(sessionKeyOf(session));
+      throw error;
+    }
+    // The backend acknowledged it: the backoff ends, even if the save below fails.
+    registrationRetry = undefined;
     const acknowledged: NotificationRuntimePersistedRegistration = {
       registration,
       player: session.player,
@@ -965,6 +1052,24 @@ export function createNotificationRuntime(
       await saved;
     }
     persisted.registration = acknowledged;
+  };
+  /**
+   * Holds reads back from retrying a registration the backend failed: 30 s,
+   * doubling per failure in a row for the same session, at most an hour.
+   * `session` is the one the call was made for, not the one signed in when
+   * it failed.
+   */
+  const noteRegistrationFailure = (session: string | undefined): void => {
+    const previous = registrationRetry !== undefined && registrationRetry.session === session
+      ? registrationRetry.failures
+      : 0;
+    const failures = previous + 1;
+    // A clock that cannot be read holds nothing back (`NaN` is never later).
+    registrationRetry = {
+      failures,
+      notBefore: nowMs() + Math.min(registrationRetryBaseMs * 2 ** Math.min(failures - 1, 16), registrationRetryMaxMs),
+      session,
+    };
   };
   /**
    * Registers the provider's current address or platform identity; `rebind`
@@ -1052,10 +1157,27 @@ export function createNotificationRuntime(
    * With nothing acknowledged yet, the registration is sent at start for a
    * session that was already signed in, and on reads once the provider has
    * an address whose registration failed.
+   *
+   * After a registration failed, a read retries it only once the backoff
+   * since the failure has passed (`registrationRetryBaseMs`, doubling per
+   * failure in a row, at most `registrationRetryMaxMs`), so a game that reads
+   * often does not send a registration on every read to a backend that keeps
+   * refusing it. Only the backend's own failure counts, not a storage,
+   * input, or provider failure. Start does not wait, and the backoff belongs
+   * to the session the failed call was made for: a read for another session
+   * does not wait for it.
    */
   const refreshRegistration = async (atStart: boolean): Promise<void> => {
     const session = backend.session();
     if (session === undefined) {
+      return;
+    }
+    if (
+      !atStart
+      && registrationRetry !== undefined
+      && registrationRetry.session === retrySessionKey()
+      && nowMs() < registrationRetry.notBefore
+    ) {
       return;
     }
     const persisted = kept ?? await loadState();
@@ -1302,7 +1424,7 @@ export function createNotificationRuntime(
       });
     } catch (error) {
       throw new NotificationError('NOTIFICATIONS_INVALID_INPUT', {
-        message: error instanceof Error ? error.message : String(error),
+        message: errorMessageOf(error),
         cause: error,
       });
     }
@@ -1420,12 +1542,33 @@ export function createNotificationRuntime(
           ? undefined
           : notificationRegistryMismatch(capabilities, entry);
       };
-      const known = input.registryEntry ?? loadedRegistryEntry;
-      compare(known);
+      // A given entry that cannot be compared is reported, and fails closed as
+      // an entry that disagrees with the provider does: it is the game's own
+      // configuration, not a backend that could not answer.
+      let given: NotificationDeliveryProviderEntry | undefined;
+      let givenIssue: string | undefined;
+      if (input.registryEntry !== undefined) {
+        const comparable = comparableRegistryEntry(input.registryEntry);
+        if ('entry' in comparable) {
+          given = comparable.entry;
+        } else {
+          givenIssue = `the entry cannot be compared (${comparable.issue})`;
+          fail(new NotificationError('NOTIFICATIONS_CONFIGURATION_REQUIRED', {
+            message: `The registry entry the runtime was given cannot be compared: ${comparable.issue}. `
+              + 'Remote delivery fails closed, as for an entry that disagrees with the provider.',
+          }));
+        }
+      }
+      compare(given ?? loadedRegistryEntry);
+      if (givenIssue !== undefined && startCapabilities.remote.supported) {
+        configurationIssue = givenIssue;
+      }
       const load = input.loadRegistryEntry;
-      // Only a provider with remote delivery is compared, so only it loads an entry.
+      // Only a provider with remote delivery is compared, so only it loads an
+      // entry, and only when none was given.
       if (
-        known === undefined
+        input.registryEntry === undefined
+        && loadedRegistryEntry === undefined
         && load !== undefined
         && registryEntryLoad === undefined
         && startCapabilities.remote.supported
@@ -1434,8 +1577,16 @@ export function createNotificationRuntime(
         // answers holds up neither the start nor `runUntilIdle`; a failure is
         // still reported through `onError` and the next `runUntilIdle`.
         const loading = Promise.resolve().then(load).then((loaded) => {
-          loadedRegistryEntry = loaded;
-          compare(loaded);
+          // An entry that cannot be compared is a failed load: reported, not
+          // kept, and loaded again at the next start.
+          const comparable = loaded === undefined ? undefined : comparableRegistryEntry(loaded);
+          if (comparable !== undefined && 'issue' in comparable) {
+            throw new NotificationError('NOTIFICATIONS_CONFIGURATION_REQUIRED', {
+              message: `loadRegistryEntry answered an entry that cannot be compared: ${comparable.issue}.`,
+            });
+          }
+          loadedRegistryEntry = comparable?.entry;
+          compare(comparable?.entry);
         });
         registryEntryLoad = loading;
         loading.then(

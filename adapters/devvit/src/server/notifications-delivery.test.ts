@@ -243,6 +243,44 @@ describe('createDevvitNotificationDeliveryProvider', () => {
     expect(reports[0]?.message).toBe('internal error (classifyEnqueueError threw: broken classifier)');
   });
 
+  it('answers ambiguous for an enqueue that throws a hostile value, and reports a hostile classifier failure', async () => {
+    const hostile = (): never => {
+      throw new Error('hostile read');
+    };
+    const plugin = createFakePlugin();
+    plugin.answers.push(
+      () => Promise.reject(new Proxy({}, { get: hostile, getPrototypeOf: hostile })),
+      () => Promise.reject({ toString: hostile }),
+      () => Promise.reject(Object.assign(Object.create(null) as object, { message: 'quota hit' })),
+      { successCount: 0, failureCount: 1, errors: [{ userId: user, message: 'internal error' }] },
+    );
+    const reports: { message: string }[] = [];
+    const provider = createDevvitNotificationDeliveryProvider({
+      notifications: plugin,
+      classifyEnqueueError: (message) => {
+        if (message === 'internal error') {
+          throw { get message(): string {
+            return hostile();
+          }, toString: hostile };
+        }
+        return undefined;
+      },
+      onEnqueueError: (report) => {
+        reports.push(report);
+      },
+    });
+    await expect(provider.send(request())).resolves.toMatchObject({ status: 'ambiguous' });
+    await expect(provider.send(request())).resolves.toMatchObject({ status: 'ambiguous' });
+    await expect(provider.send(request())).resolves.toMatchObject({ status: 'ambiguous' });
+    await expect(provider.send(request())).resolves.toMatchObject({ status: 'ambiguous' });
+    expect(reports.map((report) => report.message)).toEqual([
+      'a failure that cannot be read',
+      'a failure that cannot be read',
+      'quota hit',
+      'internal error (classifyEnqueueError threw: a failure that cannot be read)',
+    ]);
+  });
+
   it('names the provider code of the final answer after an override', async () => {
     const plugin = createFakePlugin();
     plugin.answers.push(

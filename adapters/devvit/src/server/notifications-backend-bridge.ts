@@ -1,4 +1,4 @@
-import type { BridgeRequest, BridgeResponse } from '@mpgd/bridge';
+import { isThrownInstance, type BridgeRequest, type BridgeResponse } from '@mpgd/bridge';
 import { createNotificationsBackendBridgeHandler } from '@mpgd/bridge/notifications';
 import { NotificationError } from '@mpgd/platform/notifications';
 import {
@@ -142,8 +142,8 @@ function warnBackendFailure(error: unknown, context: { readonly method: string }
   // service refuses is the caller's: neither is a server failure, and a
   // webview could otherwise fill the log with them.
   if (
-    error instanceof NotificationConsentRateLimitError
-    || (error instanceof NotificationError && error.code === 'NOTIFICATIONS_INVALID_INPUT')
+    isThrownInstance(error, NotificationConsentRateLimitError)
+    || (isThrownInstance(error, NotificationError) && error.code === 'NOTIFICATIONS_INVALID_INPUT')
   ) {
     return;
   }

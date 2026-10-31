@@ -125,9 +125,28 @@ export function createStarterWorkerNotificationBackend(
       storage: createNotificationRuntimeStorage({ storage: platform.storage }),
       // This target's entry in the Worker's registry, or none when the Worker does not serve it.
       async loadRegistryEntry() {
-        const { providers, targets } = await client.getProviders();
-        const id = targets[platform.configTarget];
-        return id === undefined ? undefined : providers.find((entry) => entry.provider === id);
+        const { providers, targets, unreadable = [] } = await client.getProviders();
+        const id = Object.hasOwn(targets, platform.configTarget) ? targets[platform.configTarget] : undefined;
+        if (id === undefined) {
+          return undefined;
+        }
+        const entry = providers.find((candidate) => candidate.provider === id);
+        if (entry !== undefined) {
+          return entry;
+        }
+        // An entry the client could not read: a failed load, which the runtime
+        // reports, running without the comparison until the next start. An
+        // unreadable entry without an id may be this one too.
+        const left = unreadable.find((skipped) => skipped.provider === id)
+          ?? unreadable.find((skipped) => skipped.provider === undefined);
+        if (left !== undefined) {
+          throw new Error(
+            `[notifications] the game-services registry entry for provider ${id} (${platform.configTarget}) `
+              + `cannot be read: ${left.issue}`,
+          );
+        }
+        // The registry lists no entry for the provider at all.
+        return undefined;
       },
       onError(error) {
         console.error('[notifications]', error);

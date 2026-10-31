@@ -1098,8 +1098,12 @@ export function toNotificationSubscriptionAdapter(
  * `PlatformOperationError`, or a bridge error that kept only its `code`.
  */
 function notificationFailureCode(error: unknown): NotificationErrorCode | undefined {
-  const code: unknown = typeof error === 'object' && error !== null
-    ? (error as { readonly code?: unknown }).code
-    : undefined;
+  let code: unknown;
+  try {
+    code = typeof error === 'object' && error !== null ? (error as { readonly code?: unknown }).code : undefined;
+  } catch {
+    // A getter or Proxy trap that throws: no code.
+    return undefined;
+  }
   return isNotificationErrorCode(code) ? code : undefined;
 }

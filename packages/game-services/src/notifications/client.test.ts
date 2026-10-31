@@ -16,6 +16,7 @@ import {
   type GameServicesNotificationSession,
   type GameServicesNotificationsFetch,
 } from './client.js';
+import { describeError } from './text.js';
 
 /**
  * The client's own contract: the requests it sends for a session, and how it
@@ -645,6 +646,85 @@ async function rejection(work: Promise<unknown>): Promise<GameServicesNotificati
     assert.equal(sent.length, 0);
   } finally {
     mock.timers.reset();
+  }
+}
+
+// The registry: an entry the client cannot read is left out, and the others still load.
+{
+  const { identity } = identityOf(session);
+  const fcm = {
+    provider: 'fcm',
+    purposes: ['service', 'requested'],
+    addressing: 'device',
+    content: 'free-form',
+    permission: { scope: 'app', serverReadable: false, allowance: 'persistent' },
+    expiry: true,
+    actions: true,
+    link: false,
+    mappingFields: ['channelId'],
+  };
+  let body: unknown;
+  const { fetch } = fakeFetch(() => ({ status: 200, body }));
+  const client = createGameServicesNotificationsClient({
+    baseUrl: 'https://x.example',
+    identity,
+    fetch,
+  });
+  body = {
+    protocolVersion: '2.0.0-draft.1',
+    providers: [
+      { ...fcm, provider: 'apps-in-toss', addressing: 42 },
+      fcm,
+      null,
+      { ...fcm, provider: 'devvit', addedByANewerWorker: true },
+    ],
+    targets: { android: 'fcm', ait: 'apps-in-toss', reddit: 'devvit' },
+  };
+  const registry = await client.getProviders();
+  assert.deepEqual(registry.providers, [fcm]);
+  assert.deepEqual(registry.targets, { android: 'fcm', ait: 'apps-in-toss', reddit: 'devvit' });
+  // What was left out is listed, with its id when it has one.
+  assert.deepEqual(
+    registry.unreadable?.map((entry) => entry.provider),
+    ['apps-in-toss', undefined, 'devvit'],
+  );
+  assert.ok(
+    registry.unreadable?.every((entry) => entry.issue.length > 0 && entry.issue.length <= 512),
+  );
+  assert.match(registry.unreadable?.[0]?.issue ?? '', /addressing/u);
+  assert.equal(
+    registry.unreadable?.[1] !== undefined && 'provider' in registry.unreadable[1],
+    false,
+  );
+  // Nothing left out: no field.
+  body = { protocolVersion: '2.0.0-draft.1', providers: [fcm], targets: { android: 'fcm' } };
+  assert.equal('unreadable' in await client.getProviders(), false);
+  // The registry itself outside the contract still fails as a whole.
+  body = { protocolVersion: '2.0.0-draft.1', providers: {}, targets: {} };
+  const broken = await rejection(client.getProviders());
+  assert.equal(broken.code, 'NOTIFICATIONS_CONFIGURATION_REQUIRED');
+}
+
+// describeError never throws, whatever was thrown.
+{
+  const hostile = (): never => {
+    throw new Error('hostile read');
+  };
+  const revocable = Proxy.revocable({}, {});
+  revocable.revoke();
+  const unreadable = new Error('hidden');
+  Object.defineProperty(unreadable, 'message', { get: hostile });
+  assert.equal(describeError(new Error('plain')), 'plain');
+  assert.equal(describeError(null), 'null');
+  assert.equal(describeError(Symbol('thrown')), 'Symbol(thrown)');
+  for (const value of [
+    { toString: hostile },
+    Object.create(null) as unknown,
+    unreadable,
+    new Proxy({}, { get: hostile, getPrototypeOf: hostile }),
+    revocable.proxy,
+  ]) {
+    assert.equal(describeError(value), 'a failure that cannot be read');
   }
 }
 

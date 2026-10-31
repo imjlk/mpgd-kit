@@ -1,3 +1,4 @@
+import { thrownMessage } from '@mpgd/bridge';
 import {
   createNotificationProviderRegistry,
   createNotificationService,
@@ -318,7 +319,7 @@ export function createDevvitNotificationDeliveryProvider(
           kind = input.classifyEnqueueError?.(message, source) ?? fallback;
         } catch (error) {
           // A failing classifier keeps the default answer; the report says so.
-          note = ` (classifyEnqueueError threw: ${error instanceof Error ? error.message : String(error)})`;
+          note = ` (classifyEnqueueError threw: ${thrownMessage(error)})`;
         }
         // The provider code follows the final answer, after any override; a
         // thrown call keeps DEVVIT_ENQUEUE_FAILED, which names its source.
@@ -354,11 +355,7 @@ export function createDevvitNotificationDeliveryProvider(
           }],
         });
       } catch (error) {
-        return failure(
-          'thrown',
-          error instanceof Error ? error.message : String(error),
-          'ambiguous',
-        );
+        return failure('thrown', thrownMessage(error), 'ambiguous');
       }
       if (typeof response?.successCount === 'number' && response.successCount > 0) {
         return { status: 'accepted' };

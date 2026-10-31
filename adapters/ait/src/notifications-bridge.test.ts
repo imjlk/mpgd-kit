@@ -243,6 +243,34 @@ describe('createAitBridgeNotificationProvider', () => {
       .resolves.toMatchObject({ code: 'NOTIFICATIONS_V2_UNAVAILABLE' });
   });
 
+  it('reads a hostile thrown value without throwing, keeping a readable code', async () => {
+    const hostile = (): never => {
+      throw new Error('hostile read');
+    };
+    const trapped = new Proxy({}, { get: hostile, getPrototypeOf: hostile });
+    await expect(failureOf(answering(() => {
+      throw trapped;
+    }).getPermission({ topics: ['a'] }))).resolves.toMatchObject({
+      code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+      retryable: true,
+    });
+    // The message getter throws; the code and flag were readable and cross.
+    const failure = await failureOf(answering(() => {
+      throw {
+        code: 'NOTIFICATIONS_UNSUPPORTED',
+        retryable: false,
+        get message(): string {
+          return hostile();
+        },
+      };
+    }).getPermission({ topics: ['a'] }));
+    // failureOf answers a NotificationError as its plain fields.
+    expect(failure).toMatchObject({ code: 'NOTIFICATIONS_UNSUPPORTED', retryable: false, message: expect.any(String) });
+    await expect(failureOf(answering(() => {
+      throw null;
+    }).getPermission({ topics: ['a'] }))).resolves.toMatchObject({ code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE' });
+  });
+
   it('refuses an answer the contract rejects or another provider id', async () => {
     await expect(failureOf(answering(() => ({ topics: { a: 'maybe' } })).getPermission({ topics: ['a'] })))
       .resolves.toMatchObject({ code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED' });

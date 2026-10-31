@@ -1,5 +1,8 @@
 import {
   bridgeNotificationsEventProtocol,
+  isThrownInstance,
+  readThrownField,
+  thrownMessage,
   type BridgeEvent,
   type BridgeNotificationsEvent,
   type BridgeNotificationsV2Method,
@@ -304,16 +307,16 @@ function topicsPayload(request: { readonly topics: readonly string[] } | undefin
 }
 
 function toNotificationError(error: unknown): NotificationError {
-  if (error instanceof NotificationError) {
+  if (isThrownInstance(error, NotificationError)) {
     return error;
   }
-  const code: unknown = typeof error === 'object' && error !== null
-    ? (error as { readonly code?: unknown }).code
-    : undefined;
+  // A field whose getter or Proxy trap throws counts as missing.
+  const code = readThrownField(error, 'code');
+  const retryable = readThrownField(error, 'retryable');
   const options = {
-    ...(error instanceof Error ? { message: error.message } : {}),
+    ...(isThrownInstance(error, Error) ? { message: thrownMessage(error) } : {}),
     // A transport failure keeps its retryability.
-    ...(error instanceof PlatformOperationError ? { retryable: error.retryable } : {}),
+    ...(isThrownInstance(error, PlatformOperationError) && typeof retryable === 'boolean' ? { retryable } : {}),
     cause: error,
   };
   return new NotificationError(

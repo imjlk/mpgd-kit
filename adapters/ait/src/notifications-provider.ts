@@ -1,3 +1,4 @@
+import { isThrownInstance } from '@mpgd/bridge';
 import {
   NotificationError,
   type NotificationCapabilities,
@@ -288,7 +289,7 @@ export function createAitNotificationProvider(
           // absorbed: the host keeps that agreement, so report it rather than
           // lose its evidence. This topic and the rest were not decided, so
           // the next request asks again.
-          if (decided.size === 0 || !(error instanceof NotificationError && error.retryable)) {
+          if (decided.size === 0 || !(isThrownInstance(error, NotificationError) && error.retryable)) {
             throw error;
           }
           console.warn('AIT notification agreement failed after earlier answers.', error);

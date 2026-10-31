@@ -1,5 +1,6 @@
 import { App, type AppPlugin } from '@capacitor/app';
 import type { PluginListenerHandle } from '@capacitor/core';
+import { isThrownInstance, readThrownField } from '@mpgd/bridge';
 import {
   assertLocalNotificationRequest,
   isRootRelativeNotificationRoute,
@@ -318,7 +319,7 @@ export function createCapacitorNotificationProvider(
           rendersAdvertising = (await Promise.race([read, late])) === true;
         } catch (error) {
           // A shell built before the renderer answers UNIMPLEMENTED: it has none.
-          if ((error as { readonly code?: unknown } | null)?.code !== 'UNIMPLEMENTED') {
+          if (readThrownField(error, 'code') !== 'UNIMPLEMENTED') {
             reportError(error);
           }
         } finally {
@@ -1182,7 +1183,7 @@ export function createCapacitorNotificationProvider(
             try {
               value = (await push.getToken()).token;
             } catch (error) {
-              if (error instanceof NotificationError || isConfigurationFailure(error)) {
+              if (isThrownInstance(error, NotificationError) || isConfigurationFailure(error)) {
                 throw toNotificationError(error);
               }
               // No address yet (iOS before APNs registration, offline):
@@ -1558,11 +1559,12 @@ async function callSdk<T>(call: () => Promise<T>): Promise<T> {
 }
 
 function toNotificationError(error: unknown): NotificationError {
-  if (error instanceof NotificationError) {
+  if (isThrownInstance(error, NotificationError)) {
     return error;
   }
-  const code = isRecord(error) ? stringOf(error['code']) : undefined;
-  if (isConfigurationFailure(error)) {
+  // A field whose getter or Proxy trap throws counts as missing.
+  const code = stringOf(readThrownField(error, 'code'));
+  if (code === 'UNIMPLEMENTED' || code === 'UNAVAILABLE') {
     return new NotificationError('NOTIFICATIONS_CONFIGURATION_REQUIRED', {
       ...(code === undefined ? {} : { hostCode: code }),
       cause: error,
@@ -1573,7 +1575,7 @@ function toNotificationError(error: unknown): NotificationError {
 
 /** Capacitor's answer for a plugin the native shell does not implement. */
 function isConfigurationFailure(error: unknown): boolean {
-  const code = isRecord(error) ? error['code'] : undefined;
+  const code = readThrownField(error, 'code');
   return code === 'UNIMPLEMENTED' || code === 'UNAVAILABLE';
 }
 

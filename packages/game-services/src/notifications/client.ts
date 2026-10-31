@@ -20,6 +20,7 @@ import {
   resolveGameServicesRequestHeaders,
   type GameServicesHeaderResolver,
 } from '../request-headers.js';
+import { describeError } from './text.js';
 
 /**
  * The game-services notifications client: the notifications runtime's
@@ -127,19 +128,38 @@ export interface CreateGameServicesNotificationsClientInput {
 /** The default `timeoutMs`: a request still unanswered after this is aborted. */
 export const defaultGameServicesNotificationsTimeoutMs = 15_000;
 
+/** A provider entry of the registry this client could not read, and why. */
+export interface GameServicesNotificationUnreadableProvider {
+  /** The entry's `provider` id, when the entry has a readable non-empty one. */
+  readonly provider?: string;
+  /** Why the entry was left out (the validator's text, at most 512 characters). */
+  readonly issue: string;
+}
+
 /** The registry the Worker publishes at `GET /providers`. */
 export interface GameServicesNotificationProviders {
   readonly protocolVersion: string;
+  /** The provider entries this client can read. */
   readonly providers: readonly NotificationDeliveryProviderEntry[];
   /** Each served target and the provider id that delivers to it. */
   readonly targets: Readonly<Record<string, string>>;
+  /**
+   * The provider entries left out of `providers` because this client cannot
+   * read them, in registry order; absent when there are none.
+   */
+  readonly unreadable?: readonly GameServicesNotificationUnreadableProvider[];
 }
 
 export interface GameServicesNotificationsClient extends NotificationRuntimeBackend {
   /**
    * The registry the Worker publishes (`GET /providers`, no session needed):
    * pass `providers.find((entry) => entry.provider === provider.provider)` as
-   * the runtime's `registryEntry`.
+   * the runtime's `registryEntry`. A provider entry this client cannot read
+   * (malformed, or shaped by a Worker this client does not know) is left out
+   * of `providers`, so the other entries still load, and listed in
+   * `unreadable` with its id when readable. A target whose provider is
+   * listed there (or any unreadable entry without an id) should be reported,
+   * not read as a target the Worker does not serve.
    */
   getProviders(): Promise<GameServicesNotificationProviders>;
 }
@@ -507,15 +527,35 @@ export function createGameServicesNotificationsClient(
       ) {
         throw contractBroken('/providers', 200, 'the registry is not { protocolVersion, providers, targets }');
       }
+      // One entry the client cannot read does not break the others: it is
+      // left out of `providers` and listed in `unreadable`.
+      const readable: NotificationDeliveryProviderEntry[] = [];
+      const unreadable: GameServicesNotificationUnreadableProvider[] = [];
+      for (const entry of providers as readonly unknown[]) {
+        try {
+          readable.push(assertNotificationDeliveryProviderEntry(entry));
+        } catch (error) {
+          const id = typeof entry === 'object' && entry !== null && !Array.isArray(entry)
+            ? (entry as Readonly<Record<string, unknown>>)['provider']
+            : undefined;
+          unreadable.push({
+            ...(typeof id === 'string' && id.length > 0 ? { provider: id } : {}),
+            issue: describeError(error).slice(0, unreadableIssueLength),
+          });
+        }
+      }
       return {
         protocolVersion,
-        providers: providers.map((entry: unknown) =>
-          checked('/providers', () => assertNotificationDeliveryProviderEntry(entry))),
+        providers: readable,
         targets: { ...(targets as Readonly<Record<string, string>>) },
+        ...(unreadable.length === 0 ? {} : { unreadable }),
       };
     },
   };
 }
+
+/** The longest `issue` an unreadable registry entry carries. */
+const unreadableIssueLength = 512;
 
 function globalFetch(): GameServicesNotificationsFetch {
   const fetcher = (globalThis as { readonly fetch?: GameServicesNotificationsFetch }).fetch;
@@ -554,7 +594,7 @@ function checked<Value>(route: Route, read: () => Value): Value {
   try {
     return read();
   } catch (error) {
-    throw contractBroken(route, 200, error instanceof Error ? error.message : String(error));
+    throw contractBroken(route, 200, describeError(error));
   }
 }
 
