@@ -658,11 +658,13 @@ function readBulkSuccess(success: unknown, recipients: number): AitFunctionalMes
     const listed = isRecord(detail) ? detail[channelFields[channel]] : undefined;
     return Math.max(isCount(counted) ? counted : 0, Array.isArray(listed) ? listed.length : 0);
   };
-  // A count and its list that disagree prove nothing about who was reached.
+  // A count and a list of sent messages that disagree prove nothing about
+  // who was reached. An empty list is a list the answer left out, and the
+  // count stands.
   const disagree = (Object.keys(channelFields) as AitFunctionalMessageChannel[]).some((channel) => {
     const counted = success[countFields[channel]];
     const listed = isRecord(detail) ? detail[channelFields[channel]] : undefined;
-    return isCount(counted) && Array.isArray(listed) && listed.length !== counted;
+    return isCount(counted) && Array.isArray(listed) && listed.length > 0 && listed.length !== counted;
   });
   if (disagree) {
     return { status: 'ambiguous', providerCode: 'BULK_COUNTS_DISAGREE', unattributed: true };
