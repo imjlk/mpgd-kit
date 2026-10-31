@@ -102,6 +102,10 @@ import {
   type AppStoreNotificationVerifierBinding,
 } from './appStoreNotificationsRoute.js';
 import {
+  createWorkerGooglePlayRtdnFetchHandler,
+  type GooglePlayRtdnEnv,
+} from './googlePlayRtdnRoute.js';
+import {
   createStoreServerGooglePlayDependencies,
   type StoreServerCronDependencies,
   type StoreServerCronEnv,
@@ -113,7 +117,11 @@ import {
 
 /** `DB` and `MPGD_STORE` come from `GameServicesNotificationsEnv`, which every store here shares. */
 export interface GameServicesWorkerEnv
-  extends GameServicesNotificationsEnv, StoreServerCronEnv, AccountDeletionTombstonesEnv {
+  extends
+    GameServicesNotificationsEnv,
+    StoreServerCronEnv,
+    AccountDeletionTombstonesEnv,
+    GooglePlayRtdnEnv {
   /** Local-only. Refused when MPGD_STORE is d1; see resolveWorkerEvidenceVerifier. */
   readonly MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE?: 'true';
   /**
@@ -456,6 +464,7 @@ function buildWorkerFetchHandler(
     : createAdMobSsvCallbackFetchHandler(admobConfig);
   const notificationsFetch = createNotificationsFetchHandler(env, corsHeaders);
   const appStoreNotificationsFetch = createWorkerAppStoreNotificationsFetchHandler(env, httpStore);
+  const googlePlayRtdnFetch = createWorkerGooglePlayRtdnFetchHandler(env, httpStore);
   const accountDeletionFetch = createAccountDeletionFetchHandler({
     // The deletion confirmation travels in its own header (browser targets preflight it).
     corsHeaders: {
@@ -475,6 +484,10 @@ function buildWorkerFetchHandler(
     const appStoreNotificationResponse = await appStoreNotificationsFetch?.(request);
     if (appStoreNotificationResponse !== undefined) {
       return appStoreNotificationResponse;
+    }
+    const googlePlayRtdnResponse = await googlePlayRtdnFetch?.(request);
+    if (googlePlayRtdnResponse !== undefined) {
+      return googlePlayRtdnResponse;
     }
     const accountDeletionResponse = await accountDeletionFetch(request);
     if (accountDeletionResponse !== undefined) {

@@ -196,8 +196,20 @@ production` prints what it lacks and fails on contradictions
       account financial access ("View financial reports" in Google's API
       docs; the Console label may differ) for the Voided Purchases API, and
       "Manage orders and subscriptions" for server-side acknowledge and
-      consume. Real-time developer notifications are optional; the Worker
-      does not consume them yet and the sweep is what keeps the ledger right.
+      consume.
+- [ ] Optional, faster Play refunds: Google Play real-time developer
+      notifications to `POST https://<worker>/google-play/rtdn`. A Pub/Sub
+      topic with Pub/Sub Publisher granted to
+      `google-play-developer-notifications@system.gserviceaccount.com`, an
+      authenticated push subscription (service account and audience set,
+      exponential retry), the topic under Play Console → Monetize →
+      Monetization setup → Real-time developer notifications, then
+      **Send Test Message** answered `200`. Set
+      `GAME_SERVICES_GOOGLE_PLAY_RTDN_AUDIENCE` and
+      `GAME_SERVICES_GOOGLE_PLAY_RTDN_SERVICE_ACCOUNT` to the subscription's
+      ([setup](./CLOUDFLARE_WORKER_DEPLOY.md#google-play-real-time-developer-notifications)).
+      Keep the voided purchases sweep on: RTDN is the fast path, the sweep
+      the backstop for a lost push.
 
 ## 5. Identity and account deletion
 

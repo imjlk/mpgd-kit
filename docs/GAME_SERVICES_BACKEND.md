@@ -502,7 +502,7 @@ the memory and D1 stores implement all three, a grant is reversed once, a
 notification key reused for another grant is `RevocationKeyConflictError`,
 and a reused authority identity is `EvidenceAlreadyProcessedError`). The kit
 handles App Store Server Notifications V2 refunds and Play voided purchases
-(see [Store refunds and server-side finalization](#store-refunds-and-server-side-finalization));
+(the sweep and real-time developer notifications; see [Store refunds and server-side finalization](#store-refunds-and-server-side-finalization));
 other store notification handlers are game-owned: an Apps in Toss refunded
 order or a Devvit refund order calls `revokeEntitlementGrant` from
 `@mpgd/game-services` with the notification's own key, so a
@@ -1199,13 +1199,33 @@ day and 30 in any 30 seconds per package, and needs the service account to
 see financial data (Google's page calls the permission "View financial
 reports"; check the name in your Play Console).
 
-Real-time developer notifications are not implemented. An RTDN
-`voidedPurchaseNotification` carries the purchase token and order id
-([RTDN reference](https://developer.android.com/google/play/billing/rtdn-reference#voided-purchase)),
-so a Pub/Sub push endpoint that verifies the push's OIDC token could pass it to
-`revokeGooglePlayVoidedPurchase` for a faster revocation. The sweep stays
-required next to it, because a push can be missed, and it is the minimal
-reliable design the Worker ships.
+**Google Play real-time developer notifications**
+(`@mpgd/game-services/google-play-rtdn`). The fast path next to the sweep.
+`verifyGooglePubSubPushToken` checks the OIDC token of a Pub/Sub push
+subscription with authentication: an RS256 signature by Google's published
+keys (`createGoogleIdTokenSigningKeys`, or any `GoogleIdTokenSigningKeys`
+port), a Google issuer, the subscription's audience, its service account
+email with `email_verified`, and `exp`/`iat`
+([Authenticate push subscriptions](https://cloud.google.com/pubsub/docs/authenticate-push-subscriptions));
+a key outage throws `GoogleIdTokenKeysUnavailableError`.
+`handleGooglePlayDeveloperNotification` decodes the Pub/Sub envelope and its
+base64 `DeveloperNotification`
+([RTDN reference](https://developer.android.com/google/play/billing/rtdn-reference)),
+checks `packageName`, and revokes a `voidedPurchaseNotification` of a
+one-time product (`productType` 2) with a full refund (`refundType` 1, or
+absent) through `revokeGooglePlayVoidedPurchase`: the same key as the sweep,
+so either one coming second answers `alreadyProcessed`. The RTDN carries no
+`voidedReason`, so it records `voided` at the notification's
+`eventTimeMillis`. A quantity-based partial refund is ignored, as the sweep
+(which lists full refunds) ignores it. A void for a grant this ledger does
+not hold is `retry` for `unmatchedVoidRetryMs` after its event (1 hour by
+default, at most 6), then `ignored`. Test, subscription, one-time product
+purchase, and other notifications are `ignored`; a malformed message is
+`rejected`. `googlePlayDeveloperNotificationHttpStatus` answers `503` for
+`retry` and `200` for everything else, so Pub/Sub acknowledges what a
+redelivery cannot change. The sweep stays required: a push can be lost. The
+reference Worker mounts this at `POST /google-play/rtdn`
+([Worker setup](CLOUDFLARE_WORKER_DEPLOY.md#google-play-real-time-developer-notifications)).
 
 **Server-side acknowledge and consume.** Play refunds a purchase that is not
 acknowledged within three days of becoming `PURCHASED`; consuming a consumable
