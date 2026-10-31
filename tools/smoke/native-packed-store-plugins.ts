@@ -19,8 +19,8 @@ for (const mode of modes) {
   assert.ok(['ios', 'android'].includes(mode), `Unknown mode ${mode}; use ios and/or android.`);
 }
 const fixtureRoot = mkdtempSync(join(tmpdir(), 'mpgd-packed-store-'));
-const openIapApple = '.package(url: "https://github.com/hyodotdev/openiap.git", exact: "4.0.5")';
-const openIapGoogle = "implementation 'io.github.hyochan.openiap:openiap-google:4.0.6'";
+const openIapApple = '.package(url: "https://github.com/hyodotdev/openiap.git", exact: "4.0.7")';
+const openIapGoogle = "implementation 'io.github.hyochan.openiap:openiap-google:4.0.8'";
 
 function run(command: string, args: readonly string[], cwd: string, timeout = 180_000): string {
   const result = spawnSync(command, [...args], {
