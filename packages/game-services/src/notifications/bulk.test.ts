@@ -760,6 +760,18 @@ const statuses = (result: NotificationBulkDeliveryResult) =>
     fake.singles.map((request) => [request.content.title, request.content.body]),
     [['이벤트', 'Halloween 시작!']],
   );
+  // A malformed locale fails its own recipient, never the call: the resolver never sees it.
+  const malformed = await service.deliverBulk({
+    ...bulkInput('event-25', []),
+    recipients: [
+      { player: 'p1', locale: 'ko' },
+      { player: 'p2', locale: 123 as unknown as string },
+    ],
+  });
+  assert.deepEqual(statuses(malformed), [
+    ['p1', 'delivered', undefined],
+    ['p2', 'failed', 'NOTIFICATIONS_INVALID_INPUT'],
+  ]);
   // A resolver that throws fails the whole call as retryable, with nothing stored.
   failing = true;
   await assert.rejects(

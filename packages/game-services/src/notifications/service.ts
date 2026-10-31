@@ -3471,9 +3471,12 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         idempotencyKey: bulk.idempotencyKey,
         ...(bulk.templateData === undefined ? {} : { templateData: bulk.templateData }),
       },
+      // Only well-formed locales: a malformed one fails its own recipient's
+      // request check later, never the whole call through the resolver.
       bulk.recipients
-        .filter((recipient) => recipient.templateData === undefined && (recipient.locale ?? bulk.locale) !== undefined)
-        .map((recipient) => recipient.locale ?? bulk.locale),
+        .filter((recipient) => recipient.templateData === undefined)
+        .map((recipient) => recipient.locale ?? bulk.locale)
+        .filter((locale): locale is string => isBoundedText(locale)),
       copies,
     );
     const answers: (BulkAnswer | undefined)[] = keys.map(() => undefined);
