@@ -725,8 +725,11 @@ export function createNotificationService(input: CreateNotificationServiceInput)
    * gate check share each locale group's one answer. A recipient whose
    * locale comes from its registration joins its group through the same
    * cache. Only for a platform-user provider whose content comes from copy
-   * (a host template or a mapping's own text asks no resolver). A resolver
-   * that throws fails the whole call, retryable, before anything is stored.
+   * (a host template or a mapping's own text asks no resolver). It runs
+   * when the first recipient needs a send (`ensureCopies` in `deliverBulk`),
+   * so a retry whose recipients were all sent never asks the resolver. A
+   * resolver that throws fails every recipient still owed a send,
+   * retryable, before its key is made.
    */
   const primeBulkCopies = async (
     provider: RegisteredNotificationProvider,
@@ -2931,6 +2934,8 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     work: { left: number },
     // The call's copy answers, shared by every recipient of a locale group.
     copies: NotificationCopyCache,
+    // Resolves the call's locale groups once, when the first recipient needs a send.
+    ensureCopies: () => Promise<void>,
   ): Promise<
     | { readonly done: BulkAnswer }
     | {
@@ -2991,6 +2996,10 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       if (work.left <= 0) {
         return { done: { notAttempted: 'count-budget' } };
       }
+      // The copy is resolved only once a recipient needs a send, so a retry
+      // whose recipients were all sent never asks the resolver; a resolver
+      // that fails fails this recipient, retryable, before its key is made.
+      await ensureCopies();
       const send: NotificationStoredSend = {
         key,
         fingerprint,
@@ -3462,23 +3471,29 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     };
     const calls = { batch: 0, single: 0 };
     // One copy answer per locale group for the whole call, shared by
-    // planning, the provider calls, and the flush-time gate checks.
+    // planning, the provider calls, and the flush-time gate checks. It is
+    // resolved once, when the first recipient needs a send.
     const copies: NotificationCopyCache = new Map();
-    await primeBulkCopies(
-      provider,
-      {
-        topic: bulk.topic,
-        idempotencyKey: bulk.idempotencyKey,
-        ...(bulk.templateData === undefined ? {} : { templateData: bulk.templateData }),
-      },
-      // Only well-formed locales: a malformed one fails its own recipient's
-      // request check later, never the whole call through the resolver.
-      bulk.recipients
-        .filter((recipient) => recipient.templateData === undefined)
-        .map((recipient) => recipient.locale ?? bulk.locale)
-        .filter((locale): locale is string => isBoundedText(locale)),
-      copies,
-    );
+    const lookupLimit = lookups.left;
+    let primed: Promise<void> | undefined;
+    const ensureCopies = (): Promise<void> =>
+      primed ??= primeBulkCopies(
+        provider,
+        {
+          topic: bulk.topic,
+          idempotencyKey: bulk.idempotencyKey,
+          ...(bulk.templateData === undefined ? {} : { templateData: bulk.templateData }),
+        },
+        // Only well-formed locales of recipients within the read budget: a
+        // malformed one fails its own recipient's request check, never the
+        // whole call through the resolver.
+        bulk.recipients
+          .slice(0, Number.isFinite(lookupLimit) ? lookupLimit : undefined)
+          .filter((recipient) => recipient.templateData === undefined)
+          .map((recipient) => recipient.locale ?? bulk.locale)
+          .filter((locale): locale is string => isBoundedText(locale)),
+        copies,
+      );
     const answers: (BulkAnswer | undefined)[] = keys.map(() => undefined);
     const shared = {
       ...(bulk.templateData === undefined ? {} : { templateData: bulk.templateData }),
@@ -3518,6 +3533,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
             pace,
             work,
             copies,
+            ensureCopies,
           );
           if ('done' in made) {
             answers[index] = made.done;

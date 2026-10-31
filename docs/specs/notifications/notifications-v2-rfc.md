@@ -3113,17 +3113,20 @@ announcements and event pushes.
     - A refused player never reaches the provider and has its own
       answer.
     - **Copy (with LC1).** The copy resolver is asked once per locale
-      group for the whole call: one `resolveNotificationCopyByLocale` call
-      up front for the locales the send or its recipients name, kept in the
+      group for the whole call: one `resolveNotificationCopyByLocale` call,
+      made when the first recipient needs a send, for the locales the send
+      or its recipients name (well-formed ones, within the read budget),
+      kept in the
       call's copy cache (LC1's per-invocation cache, keyed by topic,
       provider, target, locale, and template data), which planning, the
       provider calls, and the flush-time gate checks share; a recipient
       whose locale comes from its registration joins its group through the
       same cache. The gate renders the group's copy for each recipient, as
       for a single send, so a single send and a bulk send render the same
-      text. A group with no copy is `unavailable: copy-missing`; a resolver
-      that throws fails the whole call, retryable, before anything is
-      stored. The scheduler's grouped replays share one cache per run.
+      text. A group with no copy is `unavailable: copy-missing`. A resolver
+      that throws fails every recipient still owed a send, retryable, with
+      nothing stored for them; a retry whose recipients were all sent never
+      asks it. The scheduler's grouped replays share one cache per run.
   - **Budgets.** The call's attempt budget and the provider's `rate` are
     spent only for a recipient the gate allowed, before its row is stored;
     a refused recipient spends neither. Each device of a device provider is
@@ -3211,8 +3214,10 @@ announcements and event pushes.
   Only recipients the gate allows spend attempts, so a call plans up to 60
   recipients and attempts the first 50 it allows: it reaches the Apps in
   Toss minimum of 50 when at most 10 of the 60 are refused, and sends one
-  by one otherwise. Raising either number needs the ledger's D1 queries
-  batched (`db.batch`), a follow-up. Devvit's backend bridge serves no bulk
+  by one otherwise. With account-deletion tombstones bound, which add a
+  query to each new send and delivery record, the defaults are 45 and 50,
+  below the Apps in Toss minimum. Raising either number needs the ledger's
+  D1 queries batched (`db.batch`), a follow-up. Devvit's backend bridge serves no bulk
   method.
 - **Left to follow-ups.**
   - Batching the ledger's D1 queries (`db.batch`), so one Worker call can

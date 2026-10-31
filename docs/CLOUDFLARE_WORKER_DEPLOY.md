@@ -605,7 +605,10 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   later call sends them. Only recipients the gate allows spend attempts,
   so a call plans up to 60 and attempts the first 50 allowed: Apps in Toss
   uses its bulk API (minimum 50) when at most 10 of them are refused, and
-  sends one by one otherwise. A large audience therefore takes several calls on the
+  sends one by one otherwise. With account-deletion tombstones bound
+  (another query per new send and per delivery record) the defaults are
+  45 deliveries and 50 keys, so Apps in Toss sends one by one (raising
+  them needs the ledger's D1 queries batched, a follow-up). A large audience therefore takes several calls on the
   Worker: bulk sends cut provider calls there, not D1 queries. It runs
   inline, not through the queue.
 - **Scheduler.** Each cron run fires the due server reminders as sends

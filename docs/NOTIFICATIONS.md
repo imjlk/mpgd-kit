@@ -416,8 +416,9 @@ const result = await service.deliverBulk({
   (see [Localized copy on the server](#server-copy)), asked once per locale
   group for the whole call, so every player of a locale gets the same text
   a single send would. A group with no copy is `unavailable: copy-missing`;
-  a resolver that throws fails the whole call, retryable, before anything
-  is stored. Apps in Toss functional messages never carry advertising;
+  a resolver that throws fails every player still owed a send, retryable,
+  with nothing stored for them (players already sent still answer from the
+  ledger). Apps in Toss functional messages never carry advertising;
   the gate refuses an `advertising` topic there before any call.
 <!-- @link ../packages/game-services/src/notifications/service.ts#createNotificationService -->
 <!-- @evidence /docs/specs/notifications/notifications-v2-rfc.md#remote-delivery -->

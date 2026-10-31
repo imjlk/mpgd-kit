@@ -772,19 +772,26 @@ const statuses = (result: NotificationBulkDeliveryResult) =>
     ['p1', 'delivered', undefined],
     ['p2', 'failed', 'NOTIFICATIONS_INVALID_INPUT'],
   ]);
-  // A resolver that throws fails the whole call as retryable, with nothing stored.
+  // A resolver that throws fails every recipient still owed a send, retryable, with nothing stored;
+  // a retry whose recipients were all sent never asks it.
   failing = true;
-  await assert.rejects(
-    service.deliverBulk({ ...bulkInput('event-24', ['p1', 'p2']), locale: 'ko' }),
-    (error: unknown) => {
-      assert.equal(
-        (error as { readonly code?: unknown }).code,
-        'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
-      );
-      return true;
-    },
-  );
+  const outage = await service.deliverBulk({
+    ...bulkInput('event-24', ['p1', 'p2']),
+    locale: 'ko',
+  });
+  assert.deepEqual(statuses(outage), [
+    ['p1', 'failed', 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE'],
+    ['p2', 'failed', 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE'],
+  ]);
   assert.equal(await store.getSend('event-24:p1'), undefined);
+  const retried = await service.deliverBulk({
+    ...bulkInput('event-23', []),
+    recipients: [
+      { player: 'p1', locale: 'ko' },
+      { player: 'p3', locale: 'en' },
+    ],
+  });
+  assert.equal(retried.summary.alreadyProcessed, 2);
 }
 
 // A device provider's deliveries count each device against the call's attempts.
