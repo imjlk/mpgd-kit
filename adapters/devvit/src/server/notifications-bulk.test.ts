@@ -106,6 +106,17 @@ describe('the Devvit provider bulk path', () => {
     ]);
   });
 
+  it('starts no call past startWithinMs: its recipients are rate-limited, nothing sent', async () => {
+    const { plugin, calls } = fakePlugin();
+    const provider = createDevvitNotificationDeliveryProvider({ notifications: plugin });
+    const answers = await provider.sendBatch?.([request('t2_a'), request('t2_b', 'Another text.')], { startWithinMs: 0 });
+    expect(answers).toEqual([
+      { status: 'rate-limited', retryAfterSeconds: 1 },
+      { status: 'rate-limited', retryAfterSeconds: 1 },
+    ]);
+    expect(calls).toEqual([]);
+  });
+
   it('splits a text past 1,000 recipients into another call', async () => {
     const { plugin, calls } = fakePlugin();
     const provider = createDevvitNotificationDeliveryProvider({ notifications: plugin });

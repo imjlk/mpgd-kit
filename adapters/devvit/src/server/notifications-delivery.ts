@@ -406,8 +406,11 @@ export function createDevvitNotificationDeliveryProvider(
      *   `DEVVIT_ENQUEUE_PARTIAL`), not replayed, since `enqueue` takes no
      *   idempotency key and a replay would notify the queued ones again.
      * - A call that throws is `ambiguous` for each of its recipients.
+     * - Past `startWithinMs` no further call starts: its recipients are
+     *   `rate-limited` (nothing was sent) and are replayed.
      */
-    async sendBatch(requests) {
+    async sendBatch(requests, options = {}) {
+      const startedAt = globalThis.performance.now();
       const answers: (NotificationRemoteDeliveryAnswer | undefined)[] = requests.map(() => undefined);
       const calls: { readonly title: string; readonly body: string; readonly members: { index: number; userId: string; link: string }[] }[] = [];
       requests.forEach((request, index) => {
@@ -430,6 +433,16 @@ export function createDevvitNotificationDeliveryProvider(
       });
       for (const call of calls) {
         const keyOf = (index: number): string => requests[index]?.sendKey ?? '';
+        if (
+          options.startWithinMs !== undefined
+          && globalThis.performance.now() - startedAt >= options.startWithinMs
+        ) {
+          // Too late to start another call within the recipients' claims: nothing was sent to them.
+          for (const member of call.members) {
+            answers[member.index] = { status: 'rate-limited', retryAfterSeconds: 1 };
+          }
+          continue;
+        }
         let response: DevvitEnqueueResponse;
         try {
           response = await input.notifications.enqueue({

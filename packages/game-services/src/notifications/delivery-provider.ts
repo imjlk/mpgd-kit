@@ -164,6 +164,17 @@ export interface NotificationRemoteBulkCapability {
   };
 }
 
+/** How long a provider may keep starting calls for one `sendBatch`. */
+export interface NotificationRemoteBatchOptions {
+  /**
+   * Milliseconds from the start of `sendBatch` after which the provider
+   * starts no further call (one batch may take several, such as one per
+   * text): the requests' claims must outlive the calls. A request it did not
+   * start answers `rate-limited`, which proves nothing was sent.
+   */
+  readonly startWithinMs?: number;
+}
+
 /**
  * The provider code of a `rejected` answer for a message that would arrive
  * after its expiry: nothing was sent, and it is routine, not a setup error.
@@ -187,6 +198,7 @@ export interface NotificationRemoteDeliveryProvider {
    */
   sendBatch?(
     requests: readonly NotificationRemoteDeliveryRequest[],
+    options?: NotificationRemoteBatchOptions,
   ): Promise<readonly NotificationRemoteDeliveryAnswer[]>;
   /**
    * The host's permission at send time, for a provider whose registry entry

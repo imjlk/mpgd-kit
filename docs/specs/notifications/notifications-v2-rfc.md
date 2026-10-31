@@ -3087,13 +3087,16 @@ announcements and event pushes.
     and 25,000 per app per day (the `rate`: the excess is `not-attempted`).
 - **The game-services Worker.** `deliverNotificationBulk(input)` on the
   service binding, beside `deliverNotification`, is never a fetch route. It
-  attempts at most `MPGD_NOTIFICATIONS_BULK_RECIPIENTS` players a call (400
-  by default), reads at most five times as many keys (`maxLookups`), and
-  runs inline. Devvit's backend bridge serves no bulk
+  attempts at most `MPGD_NOTIFICATIONS_BULK_RECIPIENTS` deliveries a call
+  (50 by default) and reads at most twice as many keys (`maxLookups`), to
+  stay under D1's 1,000 queries per Worker invocation, and runs inline. Devvit's backend bridge serves no bulk
   method.
 - **Left to follow-ups.**
   - Due replays of bulk rows (deferred, rate-limited, ambiguous) go one by
     one through the scheduler.
+  - Batching the ledger's D1 queries (`db.batch`), so one Worker call can
+    prepare more than about 50 deliveries under D1's 1,000 queries per
+    invocation.
   - A live run against the Apps in Toss bulk API and Devvit with the
     user's accounts.
   - Confirmation from Apps in Toss of how its counts relate to recipients.

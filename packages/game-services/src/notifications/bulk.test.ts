@@ -535,6 +535,27 @@ const statuses = (result: NotificationBulkDeliveryResult) =>
     ['delivered', 'count-budget'],
   );
   assert.deepEqual(sent.sort(), ['event-16:p1:i1', 'event-16:p1:i2', 'event-16:p1:i3']);
+
+  // Each device takes one of the provider's rate: a device over it stays queued for the scheduler's pace.
+  const paced = createNotificationService({
+    store,
+    registry: createNotificationProviderRegistry([
+      {
+        entry: { ...fcmLike, rate: { count: 2, windowSeconds: 3_600 } },
+        delivery: provider,
+        targets: ['device-target'],
+      },
+    ]),
+    catalog: { defaultLocale: 'ko', topicsFor: () => [topic] },
+    now: () => '2026-11-01T05:00:00Z',
+  });
+  sent.length = 0;
+  const pacedResult = await paced.deliverBulk({
+    ...bulkInput('event-17', ['p1']),
+    provider: 'devices',
+  });
+  assert.deepEqual(statuses(pacedResult), [['p1', 'delivered', undefined]]);
+  assert.equal(sent.length, 2, 'the third device waits for the pace');
 }
 
 // Malformed bulk sends fail as a whole; the registry checks each bulk capability once.

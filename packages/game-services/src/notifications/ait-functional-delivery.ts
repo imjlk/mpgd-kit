@@ -229,6 +229,7 @@ export interface AitFunctionalMessageDeliveryProvider {
    */
   sendBatch(
     requests: readonly AitFunctionalMessageDeliveryRequest[],
+    options?: { readonly startWithinMs?: number },
   ): Promise<readonly AitFunctionalMessageAnswer[]>;
 }
 
@@ -417,7 +418,8 @@ export function createAitFunctionalMessageDeliveryProvider(
       perRecipientOutcomes: false,
       holdWindow: { start: '21:00', end: '08:00', timeZone: 'Asia/Seoul' },
     },
-    async sendBatch(requests) {
+    async sendBatch(requests, batchOptions = {}) {
+      const startedAt = globalThis.performance.now();
       const answers: (AitFunctionalMessageAnswer | undefined)[] = requests.map(() => undefined);
       const groups = new Map<string, { readonly indexes: number[]; readonly contexts: Readonly<Record<string, unknown>>[] }>();
       requests.forEach((request, index) => {
@@ -452,7 +454,12 @@ export function createAitFunctionalMessageDeliveryProvider(
       for (const [templateSetCode, group] of groups) {
         for (let start = 0; start < group.contexts.length; start += aitFunctionalBulkMessageMaxRecipients) {
           const contexts = group.contexts.slice(start, start + aitFunctionalBulkMessageMaxRecipients);
-          const answer = await sendBulkGroup(templateSetCode, contexts);
+          const late = batchOptions.startWithinMs !== undefined
+            && globalThis.performance.now() - startedAt >= batchOptions.startWithinMs;
+          // Too late to start another call within the recipients' claims: nothing was sent to them.
+          const answer: AitFunctionalMessageAnswer = late
+            ? { status: 'rate-limited', retryAfterSeconds: 1 }
+            : await sendBulkGroup(templateSetCode, contexts);
           for (const index of group.indexes.slice(start, start + contexts.length)) {
             answers[index] = answer;
           }

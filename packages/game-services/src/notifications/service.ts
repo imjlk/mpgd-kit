@@ -2683,11 +2683,19 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         return { done: { outcome: { status: 'in-flight' } } };
       }
       const queued = planned.rows.filter((row) => row.state.status === 'in-flight');
-      // The first row was counted before the key was made; each further device is one more attempt.
+      // The first row was counted before the key was made; each further
+      // device is one more attempt and one more of the provider's rate. A
+      // device over the rate stays queued: the scheduler sends it at its pace.
       work.left -= Math.max(0, queued.length - 1);
+      const now: NotificationSendRow[] = queued.slice(0, 1);
+      for (const row of queued.slice(1)) {
+        if (await pace.take(row.provider)) {
+          now.push(row);
+        }
+      }
       return {
         key,
-        rows: queued,
+        rows: now,
         mode: 'job',
         refusals: planned.refusals,
         wasDelivered: false,
@@ -2706,8 +2714,11 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     provider: RegisteredNotificationProvider,
     requests: readonly NotificationRemoteDeliveryRequest[],
     calls: { batch: number; single: number },
+    // Milliseconds from now in which the last provider call may start, so every claim outlives the calls.
+    startWithinMs: number,
   ): Promise<NotificationRemoteDeliveryAnswer[]> => {
     const capability = provider.delivery.bulk;
+    const startedAt = nowMs();
     const sendBatch = provider.delivery.sendBatch;
     if (
       capability === undefined
@@ -2723,10 +2734,18 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     const answers: NotificationRemoteDeliveryAnswer[] = [];
     for (let start = 0; start < requests.length; start += capability.maxRecipients) {
       const slice = requests.slice(start, start + capability.maxRecipients);
+      const left = startWithinMs - (nowMs() - startedAt);
+      if (left <= 0) {
+        // Nothing was sent to them: they wait a moment and are replayed.
+        answers.push(
+          ...slice.map((): NotificationRemoteDeliveryAnswer => ({ status: 'rate-limited', retryAfterSeconds: 1 })),
+        );
+        continue;
+      }
       calls.batch += 1;
       let raw: unknown;
       try {
-        raw = await sendBatch.call(provider.delivery, slice);
+        raw = await sendBatch.call(provider.delivery, slice, { startWithinMs: left });
       } catch (error) {
         // The provider may have sent any of them: one rule for every failure it cannot prove.
         report(
@@ -2820,7 +2839,9 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         const holds = (item: { readonly claimedUntil: number }): boolean =>
           item.claimedUntil - now >= leaseMs / 2;
         const fresh = items.filter(holds);
-        const answers = await flushBulk(provider, fresh.map((item) => item.request), calls);
+        // The last call starts while every fresh claim still has a quarter lease left.
+        const startWithinMs = Math.min(...fresh.map((item) => item.claimedUntil)) - leaseMs / 4 - now;
+        const answers = await flushBulk(provider, fresh.map((item) => item.request), calls, startWithinMs);
         let next = 0;
         return items.map((item): NotificationRemoteDeliveryAnswer => {
           if (holds(item)) {

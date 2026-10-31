@@ -743,6 +743,19 @@ assert.equal(defaultAitFunctionalMessageTimeoutMs, defaultAppsInTossPartnerApiTi
   assert.deepEqual(await outcomes(json({ resultType: 'SUCCESS', success: {} })), [
     ['ambiguous', 'SUCCESS', undefined],
   ]);
+  // Past startWithinMs no call starts: nothing was sent.
+  const late = fakeMtls([]);
+  assert.deepEqual(
+    await createAitFunctionalMessageDeliveryProvider({ mtls: late.mtls, recipientKey: 'toss-user' }).sendBatch(
+      [bulkRequest('1'), bulkRequest('2')],
+      { startWithinMs: 0 },
+    ),
+    [
+      { status: 'rate-limited', retryAfterSeconds: 1 },
+      { status: 'rate-limited', retryAfterSeconds: 1 },
+    ],
+  );
+  assert.equal(late.calls.length, 0);
   const transport = fakeMtls([new Error('reset')]);
   assert.deepEqual(
     await createAitFunctionalMessageDeliveryProvider({ mtls: transport.mtls, recipientKey: 'toss-user' }).sendBatch([
