@@ -2633,15 +2633,9 @@ export function createNotificationService(input: CreateNotificationServiceInput)
           },
         };
       }
-      // The call's and the provider's app-wide budgets are spent before the
-      // key is made, so a recipient over either leaves nothing behind and the
-      // same call retried sends it once the budget frees.
+      // Spent out of the call's budget only once the gate allowed a row.
       if (work.left <= 0) {
         return { done: { notAttempted: 'count-budget' } };
-      }
-      work.left -= 1;
-      if (!await pace.take(provider)) {
-        return { done: { notAttempted: 'provider-rate' } };
       }
       const send: NotificationStoredSend = {
         key,
@@ -2673,6 +2667,28 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         await store.updateSend({ key, version, send: undefined });
         return { done: { outcome: bestNotificationOutcome(planned.refusals) ?? noEndpoint() } };
       }
+      // The call's and the provider's app-wide budgets are spent once the gate
+      // allowed a delivery, and before any row is stored: a recipient over
+      // either leaves nothing behind, and the same call retried sends it once
+      // the budget frees. A refused recipient spends neither.
+      const allowed = planned.rows.filter((row) => row.state.status === 'in-flight');
+      if (allowed.length > 0) {
+        // Taken at once, so recipients planned side by side cannot all pass it.
+        let over: NotificationBulkNotAttemptedReason | undefined;
+        if (work.left <= 0) {
+          over = 'count-budget';
+        } else {
+          work.left -= 1;
+          if (!await pace.take(provider)) {
+            work.left += 1;
+            over = 'provider-rate';
+          }
+        }
+        if (over !== undefined) {
+          await releaseQuietly(key, version);
+          return { done: { notAttempted: over } };
+        }
+      }
       const { claim: _claim, ...unclaimed } = send;
       const stored: NotificationStoredSend = {
         ...unclaimed,
@@ -2682,13 +2698,12 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       if (!await store.updateSend({ key, version, send: stored })) {
         return { done: { outcome: { status: 'in-flight' } } };
       }
-      const queued = planned.rows.filter((row) => row.state.status === 'in-flight');
-      // The first row was counted before the key was made; each further
-      // device is one more attempt and one more of the provider's rate. A
-      // device over the rate stays queued: the scheduler sends it at its pace.
-      work.left -= Math.max(0, queued.length - 1);
-      const now: NotificationSendRow[] = queued.slice(0, 1);
-      for (const row of queued.slice(1)) {
+      // The first allowed row was counted above; each further device is one
+      // more attempt and one more of the provider's rate. A device over the
+      // rate stays queued: the scheduler sends it at its pace.
+      work.left -= Math.max(0, allowed.length - 1);
+      const now: NotificationSendRow[] = allowed.slice(0, 1);
+      for (const row of allowed.slice(1)) {
         if (await pace.take(row.provider)) {
           now.push(row);
         }
@@ -2726,10 +2741,24 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       || requests.length < (capability.minRecipients ?? 2)
       || isInsideNotificationHoldWindow(capability.holdWindow, nowMs())
     ) {
-      // Fewer than the minimum after the gate (the round would have sent one
-      // by one otherwise): side by side, so no claim waits on the others' calls.
-      calls.single += requests.length;
-      return Promise.all(requests.map((request) => sendOne(provider, request)));
+      // Fewer than the minimum after the gate, or the hold window opened
+      // while the batch gathered: one call each, a few at a time, none
+      // started past the claims' deadline (those wait and are replayed).
+      const limiter = createNotificationLimiter(bulkConcurrency);
+      return Promise.all(
+        requests.map(async (request): Promise<NotificationRemoteDeliveryAnswer> => {
+          await limiter.acquire();
+          try {
+            if (nowMs() - startedAt >= startWithinMs) {
+              return { status: 'rate-limited', retryAfterSeconds: 1 };
+            }
+            calls.single += 1;
+            return await sendOne(provider, request);
+          } finally {
+            limiter.release();
+          }
+        }),
+      );
     }
     const answers: NotificationRemoteDeliveryAnswer[] = [];
     for (let start = 0; start < requests.length; start += capability.maxRecipients) {

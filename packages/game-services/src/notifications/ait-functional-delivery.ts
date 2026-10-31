@@ -204,7 +204,8 @@ export interface AitFunctionalMessageDeliveryProvider {
   /**
    * The bulk path: 50 to 2,500 recipients a call, answered as a whole (the
    * answer names no recipient), and held by the host from 21:00 to 08:00
-   * Asia/Seoul, when the service sends one by one instead.
+   * Asia/Seoul. The declared window starts at 20:55, so a call in flight
+   * never lands in the hold; the service sends one by one inside it.
    */
   readonly bulk: {
     readonly maxRecipients: number;
@@ -416,7 +417,8 @@ export function createAitFunctionalMessageDeliveryProvider(
       maxRecipients: aitFunctionalBulkMessageMaxRecipients,
       minRecipients: aitFunctionalBulkMessageMinRecipients,
       perRecipientOutcomes: false,
-      holdWindow: { start: '21:00', end: '08:00', timeZone: 'Asia/Seoul' },
+      // Five minutes early, so a call still in flight never lands in the hold.
+      holdWindow: { start: '20:55', end: '08:00', timeZone: 'Asia/Seoul' },
     },
     async sendBatch(requests, batchOptions = {}) {
       const startedAt = globalThis.performance.now();

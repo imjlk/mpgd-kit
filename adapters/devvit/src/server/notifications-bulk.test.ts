@@ -253,16 +253,18 @@ describe('Devvit bulk sends through the service', () => {
       ['t2_a', 'suppressed', 'provider-limit'],
       ['t2_b', 'delivered', undefined],
       ['t2_c', 'delivered', undefined],
-      ['t2_d', 'not-attempted', 'provider-rate'],
+      ['t2_d', 'delivered', undefined],
       ['t2_e', 'not-attempted', 'provider-rate'],
     ]);
-    // t2_a took one of the three budget places before the gate refused it.
-    expect(calls).toEqual([{ title: 'Live event', body: 'A live event started.', userIds: ['t2_b', 't2_c'] }]);
+    // The gate refused t2_a, which therefore spent none of the three places left.
+    expect(calls).toEqual([
+      { title: 'Live event', body: 'A live event started.', userIds: ['t2_b', 't2_c', 't2_d'] },
+    ]);
     // A day later the same call sends the rest; nobody is sent twice.
     now.value = '2026-11-02T03:00:01Z';
     const later = await service.deliverBulk(bulk(users));
-    expect(later.summary).toMatchObject({ delivered: 3, alreadyProcessed: 2, notAttempted: 0 });
-    expect(calls.at(-1)?.userIds).toEqual(['t2_a', 't2_d', 't2_e']);
+    expect(later.summary).toMatchObject({ delivered: 2, alreadyProcessed: 3, notAttempted: 0 });
+    expect(calls.at(-1)?.userIds).toEqual(['t2_a', 't2_e']);
   });
 
   it('pages the opted-in users, and the gate still refuses whom the kit records say no', async () => {
@@ -313,8 +315,8 @@ describe('Devvit bulk sends through the service', () => {
   });
 
   it('answers the users a budget left as pending, and sends them without reading the list again', async () => {
-    const { service, store, now, plugin, calls, listed } = setup(['t2_a', 't2_b']);
-    // t2_b, first on the page, turned the topic off: it takes the call's one attempt.
+    const { service, store, now, plugin, calls, listed } = setup(['t2_a', 't2_b', 't2_c']);
+    // t2_b turned the topic off: the gate refuses it, which spends none of the call's one attempt.
     await store.appendConsent({
       player: 't2_b',
       record: { kind: 'topic-preference', topic: 'live-event', state: 'withdrawn', source: 'player' },
@@ -324,16 +326,17 @@ describe('Devvit bulk sends through the service', () => {
       ...plugin,
       listOptedInUsers: async (input: { limit?: number; after?: string | undefined }) => {
         listed.push(input);
-        return { userIds: ['t2_b', 't2_a'], next: 'cursor-2' };
+        return { userIds: ['t2_b', 't2_a', 't2_c'], next: 'cursor-2' };
       },
     };
     const page = { service, notifications: paged, idempotencyKey: 'campaign-2', topic: 'live-event', options: { maxRecipients: 1 } };
     const first = await runDevvitNotificationBulkPage(page);
-    expect([first.pending, first.complete, first.next]).toEqual([['t2_a'], false, 'cursor-2']);
+    expect([first.pending, first.complete, first.next]).toEqual([['t2_c'], false, 'cursor-2']);
+    expect(first.result?.summary).toMatchObject({ delivered: 1, suppressed: 1, notAttempted: 1 });
     const again = await runDevvitNotificationBulkPage({ ...page, pending: first.pending });
     expect([again.pending, again.complete, again.next]).toEqual([[], true, undefined]);
     expect(again.result?.summary.delivered).toBe(1);
-    expect(calls.map((call) => call.userIds)).toEqual([['t2_a']]);
+    expect(calls.map((call) => call.userIds)).toEqual([['t2_a'], ['t2_c']]);
     expect(listed).toHaveLength(1);
   });
 

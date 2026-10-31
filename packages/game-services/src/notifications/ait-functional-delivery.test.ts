@@ -659,7 +659,7 @@ assert.equal(defaultAitFunctionalMessageTimeoutMs, defaultAppsInTossPartnerApiTi
     maxRecipients: 2_500,
     minRecipients: 50,
     perRecipientOutcomes: false,
-    holdWindow: { start: '21:00', end: '08:00', timeZone: 'Asia/Seoul' },
+    holdWindow: { start: '20:55', end: '08:00', timeZone: 'Asia/Seoul' },
   });
   const answers = await provider.sendBatch([
     bulkRequest('101'),

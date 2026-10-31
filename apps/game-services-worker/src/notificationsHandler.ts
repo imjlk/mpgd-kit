@@ -141,10 +141,10 @@ export interface GameServicesNotificationsEnv {
   /**
    * Deliveries one `deliverNotificationBulk` call attempts at most (one per
    * FCM device); the rest answer `not-attempted` (`count-budget`), and a
-   * later call sends them. 50 by default: a delivery costs about 16 D1
-   * queries, and the call also reads the keys of up to twice as many
-   * recipients (one query each, for players a retry finds already sent), so
-   * a call stays under D1's 1,000 queries per Worker invocation (Workers
+   * later call sends them. 50 by default, with the keys of at most 60
+   * recipients read (scaled with it): a recipient costs about 7 D1 queries
+   * to plan and an attempted delivery about 11 more, so a call stays under
+   * D1's 1,000 queries per Worker invocation (Workers
    * Paid, https://developers.cloudflare.com/d1/platform/limits/, checked
    * 2026-11-01). Raise it only with a store that is not bound by that limit.
    */
@@ -862,15 +862,19 @@ export async function deliverWorkerNotification(env: GameServicesNotificationsEn
 
 /** Recipients one bulk call attempts by default (`MPGD_NOTIFICATIONS_BULK_RECIPIENTS`). */
 export const defaultWorkerNotificationBulkRecipients = 50;
-/** Recipients' keys one bulk call reads, per delivery it may attempt. */
-const workerNotificationBulkLookupsPerRecipient = 2;
+/**
+ * Recipients' keys one bulk call reads by default. A recipient the gate
+ * refuses costs about 7 D1 queries and no attempt, one already sent costs 1,
+ * and an attempted delivery about 11 more: 60 × 7 + 50 × 11 = 970.
+ */
+const defaultWorkerNotificationBulkLookups = 60;
 
 /**
  * The bulk send a game server or operator tool makes through the service
  * binding (BK1), like `deliverWorkerNotification`: never a fetch route, so
  * no client session can reach it. At most `MPGD_NOTIFICATIONS_BULK_RECIPIENTS`
- * deliveries are attempted per call, and at most twice as many keys are
- * read.
+ * deliveries are attempted per call, and the keys of at most 60 recipients
+ * (scaled with it) are read.
  */
 export async function deliverWorkerNotificationBulk(
   env: GameServicesNotificationsEnv,
@@ -883,7 +887,12 @@ export async function deliverWorkerNotificationBulk(
     : defaultWorkerNotificationBulkRecipients;
   return readyService(env).deliverBulk(input, {
     maxRecipients,
-    maxLookups: maxRecipients * workerNotificationBulkLookupsPerRecipient,
+    maxLookups: Math.max(
+      maxRecipients,
+      Math.ceil(
+        (defaultWorkerNotificationBulkLookups * maxRecipients) / defaultWorkerNotificationBulkRecipients,
+      ),
+    ),
   });
 }
 

@@ -1672,9 +1672,9 @@ try {
     topic: 'energy-full',
     recipients: Array.from({ length: 60 }, (_, index) => ({ player: `p-bulk-${index + 1}` })),
   };
-  // Apps in Toss holds bulk messages from 21:00 to 08:00 in Seoul; the service then sends one by one.
+  // Apps in Toss holds bulk messages from 21:00 to 08:00 in Seoul; from 20:55 the service sends one by one.
   const held = isInsideNotificationHoldWindow(
-    { start: '21:00', end: '08:00', timeZone: 'Asia/Seoul' },
+    { start: '20:55', end: '08:00', timeZone: 'Asia/Seoul' },
     Date.now(),
   );
   const firstBulk = await asWorkerNotificationRpcResult(() =>

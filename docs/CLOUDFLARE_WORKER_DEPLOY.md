@@ -598,11 +598,13 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   each player a single send with its own key and gate check (see the
   [notifications guide](NOTIFICATIONS.md#bulk-sends)). It attempts at most
   `MPGD_NOTIFICATIONS_BULK_RECIPIENTS` deliveries per call (50 by default,
-  one per FCM device: a delivery costs about 16 D1 queries) and reads the
-  keys of at most twice as many (one query each, for players a retry finds
-  already sent), which keeps a call under D1's 1,000 queries per Worker
-  invocation on Workers Paid; the rest answer `not-attempted`, and a later
-  call sends them. A large audience therefore takes several calls on the
+  one per FCM device) and reads the keys of at most 60 recipients (scaled
+  with it): planning a recipient costs about 7 D1 queries and an attempted
+  delivery about 11 more, which keeps a call under D1's 1,000 queries per
+  Worker invocation on Workers Paid. The rest answer `not-attempted`, and a
+  later call sends them. Apps in Toss uses its bulk API only when a call's
+  allowed recipients reach its minimum of 50, so at these defaults most
+  Worker calls send one by one. A large audience therefore takes several calls on the
   Worker: bulk sends cut provider calls there, not D1 queries. It runs
   inline, not through the queue.
 - **Scheduler.** Each cron run fires the due server reminders as sends

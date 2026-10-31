@@ -3024,6 +3024,9 @@ announcements and event pushes.
       answer. Copy is rendered per recipient by the gate, so the
       server-side locale resolver (open question 4) applies to bulk sends
       wherever it plugs into the gate's content.
+  - **Budgets.** The call's attempt budget and the provider's `rate` are
+    spent only for a recipient the gate allowed, before its row is stored;
+    a refused recipient spends neither.
   - **Answers.** Per recipient: `answered` with the outcome `deliver` would
     give, `not-attempted` (`time-budget`, `count-budget`, or
     `provider-rate`: the registry `rate` has no room, as the scheduler's
@@ -3055,7 +3058,9 @@ announcements and event pushes.
     (per-channel counts and lists of `contentId` and `reachedFailReason`)
     and names no recipient.
   - **Capability.** `{ maxRecipients: 2500, minRecipients: 50,
-    perRecipientOutcomes: false, holdWindow: 21:00 to 08:00 Asia/Seoul }`.
+    perRecipientOutcomes: false, holdWindow: 20:55 to 08:00 Asia/Seoul }`:
+    the window opens five minutes before the host's hold, so a call in
+    flight never lands in it.
   - **Answers.** Every recipient of a call gets the call's answer:
     - `accepted` when one channel's sent count equals the recipients (the
       kit reads a channel as reaching a recipient at most once per message,
@@ -3088,8 +3093,11 @@ announcements and event pushes.
 - **The game-services Worker.** `deliverNotificationBulk(input)` on the
   service binding, beside `deliverNotification`, is never a fetch route. It
   attempts at most `MPGD_NOTIFICATIONS_BULK_RECIPIENTS` deliveries a call
-  (50 by default) and reads at most twice as many keys (`maxLookups`), to
-  stay under D1's 1,000 queries per Worker invocation, and runs inline. Devvit's backend bridge serves no bulk
+  (50 by default) and reads at most 60 recipients' keys (`maxLookups`), to
+  stay under D1's 1,000 queries per Worker invocation, and runs inline. At
+  those defaults a call reaches the Apps in Toss minimum of 50 only when
+  every attempted recipient passes the gate, so most Worker calls send one
+  by one until the ledger's D1 queries are batched. Devvit's backend bridge serves no bulk
   method.
 - **Left to follow-ups.**
   - Due replays of bulk rows (deferred, rate-limited, ambiguous) go one by
