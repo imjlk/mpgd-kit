@@ -1,3 +1,4 @@
+import type { NotificationDeliveryProviderEntry } from './notifications-policy.js';
 import {
   assertRecordNotificationNoticeInput,
   normalizeNotificationTimestamp,
@@ -111,6 +112,68 @@ function timestampOrUndefined(value: unknown): string | undefined {
   }
 }
 
+/**
+ * An error's name and message, or a thrown value's text, for another error's
+ * message. Never throws: a getter or `toString` that throws, or a `Proxy`
+ * whose traps throw, reads as a failure that cannot be read.
+ */
 export function describeError(error: unknown): string {
-  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  try {
+    return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  } catch {
+    return 'a failure that cannot be read';
+  }
+}
+
+/** An error's message, or a thrown value's text; never throws, as `describeError`. */
+export function errorMessageOf(error: unknown): string {
+  try {
+    return error instanceof Error ? error.message : String(error);
+  } catch {
+    return 'a failure that cannot be read';
+  }
+}
+
+/**
+ * A registry entry the runtime can compare its provider with, as a plain
+ * copy, or why it cannot. Only the fields `notificationRegistryMismatch`
+ * reads are checked, so an entry with fields a newer backend added still
+ * compares. The copy is plain data, so a getter or `Proxy` in the entry
+ * cannot answer differently later; an entry that cannot be copied is refused.
+ */
+export function comparableRegistryEntry(
+  entry: unknown,
+): { readonly entry: NotificationDeliveryProviderEntry } | { readonly issue: string } {
+  let copy: unknown;
+  try {
+    copy = JSON.parse(JSON.stringify(entry)) as unknown;
+  } catch {
+    return { issue: 'it cannot be read as JSON' };
+  }
+  if (!isRecord(copy)) {
+    return { issue: 'it is not an object' };
+  }
+  const { provider, addressing, content, purposes, permission } = copy;
+  if (typeof provider !== 'string' || provider.length === 0) {
+    return { issue: 'provider is not a non-empty string' };
+  }
+  if (typeof addressing !== 'string' || typeof content !== 'string') {
+    return { issue: 'addressing or content is not a string' };
+  }
+  if (!Array.isArray(purposes) || !purposes.every((purpose) => typeof purpose === 'string')) {
+    return { issue: 'purposes is not a list of strings' };
+  }
+  if (
+    !isRecord(permission)
+    || typeof permission['scope'] !== 'string'
+    || typeof permission['serverReadable'] !== 'boolean'
+    || typeof permission['allowance'] !== 'string'
+  ) {
+    return { issue: 'permission is not { scope, serverReadable, allowance }' };
+  }
+  return { entry: copy as unknown as NotificationDeliveryProviderEntry };
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
