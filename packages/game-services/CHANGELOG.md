@@ -1,5 +1,15 @@
 # @mpgd/game-services
 
+## 0.35.0 — 2026-11-01
+
+### Added
+
+- [370cc1b1](https://github.com/imjlk/mpgd-kit/commit/370cc1b18ac7204dc915baff9a6456ecfe67d889) Server-side localized copy for notifications (RFC open question 4). `createNotificationService` takes `resolveCopy`, a `NotificationCopyResolver` that answers a send's `{ title, body }` templates for `{ topic, provider, locale, defaultLocale, templateData, notice }`; it is asked only where the content comes from copy, for direct sends, server reminders, and consent notices. The default, `resolveCatalogNotificationCopy`, reads the catalog's `copy` for the send's or the recipient's locale, then its language, then `defaultLocale`, which is what sends did before. An answer that is missing or blank, a project resolver's text whose placeholders the send's data cannot fill, or a notice text that breaks the notice rules skips the recipient as `unavailable: copy-missing` and is reported to `onError` as `copy.resolve`. A resolver that throws fails the send as retryable before anything is stored (or backs off the row before a provider call); a `NotificationError` it throws keeps its own code. One answer per topic, provider, target, locale, notice variant, and template data is reused within one invocation (a `deliver`, a queued job, `dispatchDue`, or a scheduler run). Under a project resolver, `setReminder` no longer checks the template data against the catalog copy, which is not what is sent. A send whose catalog copy is missing now answers `unavailable: copy-missing` instead of throwing `NOTIFICATIONS_INVALID_INPUT`. `resolveNotificationCopy` checks one answer, and `resolveNotificationCopyByLocale` asks once per distinct locale for a send that groups recipients by locale. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/analytics@0.5.10, @mpgd/catalog@0.15.2, @mpgd/platform@0.36.0
+
 ## 0.34.0 — 2026-11-01
 
 ### Added
