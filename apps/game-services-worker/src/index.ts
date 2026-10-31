@@ -204,6 +204,7 @@ export {
 export { type GameServicesAccountDeletionBinding } from './accountDeletion.js';
 export {
   type GameServicesNotificationsAuthBinding,
+  type GameServicesNotificationsCopyBinding,
   type GameServicesNotificationsIdentityBinding,
 } from './notificationsHandler.js';
 export default GameServicesWorker;

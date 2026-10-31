@@ -244,6 +244,15 @@ head_sampling_rate = 1
 # service = "game-ait-identity"
 # entrypoint = "NotificationRecipients"
 #
+# Optional: the project's localized copy (any entrypoint with
+# resolveNotificationCopy; the name below is an example). Without it, sends
+# read the catalog's copy.
+#
+# [[services]]
+# binding = "GAME_SERVICES_NOTIFICATIONS_COPY"
+# service = "game-copy"
+# entrypoint = "NotificationCopy"
+#
 # [[queues.producers]]
 # binding = "NOTIFICATIONS_QUEUE"
 # queue = "mpgd-notifications"

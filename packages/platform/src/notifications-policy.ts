@@ -662,6 +662,12 @@ export type NotificationDeferralReason =
 export type NotificationUnavailableReason =
   | 'no-endpoint'
   | 'link-missing'
+  /**
+   * The server's copy resolver has no title and body for the recipient's
+   * locale, nor for a fallback it applies: the send is skipped rather than
+   * sent with empty or placeholder text (`resolvedCopy`).
+   */
+  | 'copy-missing'
   | 'endpoint-invalid'
   | 'provider-rejected'
   | 'provider-rate-limited';
@@ -793,6 +799,23 @@ export interface EvaluateNotificationDeliveryInput {
   readonly locale?: string;
   readonly defaultLocale: string;
   readonly templateData?: NotificationTemplateData;
+  /**
+   * The copy a server-side resolver chose for this recipient's locale, in
+   * place of the gate's own lookup of the topic's `copy`. It applies only
+   * where the content comes from copy (`notificationContentSource` is
+   * `catalog`): `{ copy }` is rendered as catalog copy is, placeholders and
+   * the advertising rendering included, and `{}` (the resolver had none) is
+   * `unavailable: copy-missing`. Absent, the gate looks the copy up itself.
+   */
+  readonly resolvedCopy?: NotificationResolvedCopy;
+}
+
+/**
+ * What a server-side copy resolver answered for one recipient: the title
+ * and body templates for its locale, or none (`{}`).
+ */
+export interface NotificationResolvedCopy {
+  readonly copy?: NotificationTopicCopy;
 }
 
 /**
@@ -829,7 +852,10 @@ export interface EvaluateNotificationDeliveryInput {
  * 8. under `kr`, advertising needs the deployment's sender with a contact
  *    that is not blank (`advertising-sender-missing`) and is rendered with the
  *    label, the sender line, the opt-out line, and the opt-out action, the
- *    settings read by `resolveNotificationAdvertisingSettings`.
+ *    settings read by `resolveNotificationAdvertisingSettings`;
+ * 9. content that comes from copy needs it: a `resolvedCopy` without copy is
+ *    `unavailable: copy-missing`. Resolved copy is rendered as catalog copy
+ *    is, so step 8 labels it too.
  *
  * Caller errors throw a `TypeError` instead of deciding: a missing
  * `serverPermission`, an advertising topic without the deployment's
@@ -913,12 +939,20 @@ export function evaluateNotificationDelivery(
   if (advertising !== undefined && advertising.sender === undefined) {
     return { status: 'suppressed', reason: 'advertising-sender-missing' };
   }
+  if (
+    input.resolvedCopy !== undefined
+    && input.resolvedCopy.copy === undefined
+    && notificationContentSource(topic, entry.content) === 'catalog'
+  ) {
+    return { status: 'unavailable', reason: 'copy-missing' };
+  }
   const content = resolveNotificationContent({
     topic,
     content: entry.content,
     defaultLocale: input.defaultLocale,
     ...(input.locale === undefined ? {} : { locale: input.locale }),
     ...(input.templateData === undefined ? {} : { templateData: input.templateData }),
+    ...(input.resolvedCopy === undefined ? {} : { resolvedCopy: input.resolvedCopy }),
   });
   if (advertising?.sender === undefined) {
     return { status: 'allowed', content };
@@ -1273,13 +1307,34 @@ export interface ResolveNotificationContentInput {
   readonly locale?: string;
   readonly defaultLocale: string;
   readonly templateData?: NotificationTemplateData;
+  /** Copy a server-side resolver chose, in place of the topic's own (`EvaluateNotificationDeliveryInput.resolvedCopy`). */
+  readonly resolvedCopy?: NotificationResolvedCopy;
+}
+
+/**
+ * Where a topic's content comes from on a provider, by the precedence of
+ * `resolveNotificationContent`: the target mapping when it carries both a
+ * `title` and a `body`, the host template when the provider's content is
+ * `host-template`, and otherwise copy (`catalog`): the topic's own, or what
+ * a server-side copy resolver answers for it. Only `catalog` content needs
+ * copy, so a backend asks its resolver only then.
+ */
+export function notificationContentSource(
+  topic: Pick<NotificationTopicDeclaration, 'mapping'>,
+  content: NotificationRemoteContent,
+): NotificationDeliveryContent['source'] {
+  if (typeof topic.mapping?.['title'] === 'string' && typeof topic.mapping['body'] === 'string') {
+    return 'mapping';
+  }
+  return content === 'host-template' ? 'host-template' : 'catalog';
 }
 
 /**
  * Content precedence (RFC "Topic catalog"): the target mapping when it
  * carries its own `title` and `body`, the host template when
- * `remote.content` is `host-template`, and otherwise the catalog copy for the
- * locale (`findNotificationCopy`). No copy, a missing template value, and a
+ * `remote.content` is `host-template`, and otherwise the copy a resolver
+ * chose (`resolvedCopy`) or else the catalog copy for the locale
+ * (`findNotificationCopy`). No copy, a missing template value, and a
  * route that `isRootRelativeNotificationRoute` refuses are caller errors, so
  * a catalog that skipped validation still never sends another host's link.
  */
@@ -1288,9 +1343,10 @@ export function resolveNotificationContent(
 ): NotificationDeliveryContent {
   const { topic, templateData } = input;
   assertRootRelativeRoute(topic.id, 'route', topic.route);
+  const source = notificationContentSource(topic, input.content);
   const mappedTitle = topic.mapping?.['title'];
   const mappedBody = topic.mapping?.['body'];
-  if (typeof mappedTitle === 'string' && typeof mappedBody === 'string') {
+  if (source === 'mapping' && typeof mappedTitle === 'string' && typeof mappedBody === 'string') {
     return {
       title: fillNotificationTemplate(mappedTitle, templateData),
       body: fillNotificationTemplate(mappedBody, templateData),
@@ -1298,10 +1354,12 @@ export function resolveNotificationContent(
       source: 'mapping',
     };
   }
-  if (input.content === 'host-template') {
+  if (source === 'host-template') {
     return { route: topic.route, source: 'host-template' };
   }
-  const copy = findNotificationCopy(topic, input.locale, input.defaultLocale);
+  const copy = input.resolvedCopy === undefined
+    ? findNotificationCopy(topic, input.locale, input.defaultLocale)
+    : input.resolvedCopy.copy;
   if (copy === undefined) {
     throw new TypeError(
       `Topic ${topic.id} has no copy for ${input.locale ?? input.defaultLocale} `
@@ -2317,8 +2375,14 @@ export function notificationNoticeCopyIssues(
 
 /**
  * One variant's title and body: strings, not blank, and filled only with
- * `{{consentDate}}`, which one of them uses.
+ * `{{consentDate}}`, which one of them uses. A backend checks a notice text
+ * its copy resolver answered by these rules, as `notificationNoticeCopyIssues`
+ * checks each text of `notices.copy`.
  */
+export function notificationNoticeTextIssues(text: unknown, path = 'notice'): NotificationTopicIssue[] {
+  return noticeTextIssues(text, path);
+}
+
 function noticeTextIssues(text: unknown, path: string): NotificationTopicIssue[] {
   if (!isPlainObject(text)) {
     return [{ path, message: 'expected NotificationTopicCopy: a title and a body' }];

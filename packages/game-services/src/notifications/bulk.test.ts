@@ -11,6 +11,7 @@ import {
   notificationBulkRecipientKey,
   type NotificationBulkDeliveryResult,
 } from './bulk.js';
+import type { NotificationCopyResolver, NotificationCopyResolverInput } from './copy.js';
 import type {
   NotificationRemoteBulkCapability,
   NotificationRemoteDeliveryAnswer,
@@ -95,6 +96,7 @@ async function setup(options: {
   readonly elapsedMs?: () => number;
   readonly resolve?: (player: string, time: ReturnType<typeof clock>) => Promise<string>;
   readonly topic?: NotificationTopicDeclaration;
+  readonly resolveCopy?: NotificationCopyResolver;
 }) {
   const time = clock(options.start ?? '2026-11-01T03:00:00Z');
   const store = createInMemoryNotificationStore();
@@ -109,6 +111,7 @@ async function setup(options: {
       options.resolve === undefined ? `u-${player}` : options.resolve(player, time),
     now: time.now,
     ...(options.elapsedMs === undefined ? {} : { elapsedMs: options.elapsedMs }),
+    ...(options.resolveCopy === undefined ? {} : { resolveCopy: options.resolveCopy }),
     onError: (error, context) => {
       reports.push(
         `${context.operation}: ${error instanceof Error ? error.message : String(error)}`,
@@ -683,6 +686,93 @@ const statuses = (result: NotificationBulkDeliveryResult) =>
     ],
   );
   assert.deepEqual(fake.singles, []);
+}
+
+// A project's copy resolver is asked once per locale group for the whole call; a single
+// send renders the same text, a locale without copy is copy-missing, and a throw fails the call.
+{
+  const asked: (string | undefined)[] = [];
+  let failing = false;
+  const resolveCopy: NotificationCopyResolver = (input: NotificationCopyResolverInput) => {
+    if (failing) {
+      throw new Error('copy service down');
+    }
+    asked.push(input.locale);
+    if (input.locale === 'ko') {
+      return { title: '이벤트', body: '{{event}} 시작!' };
+    }
+    if (input.locale === 'en') {
+      return { title: 'Event', body: '{{event}} is on!' };
+    }
+    return undefined;
+  };
+  const fake = bulkProvider({ maxRecipients: 10, minRecipients: 2, perRecipientOutcomes: true });
+  const { service, store, time } = await setup({
+    provider: fake.provider,
+    players: players(6),
+    resolveCopy,
+  });
+  // p5 names no locale: its registration says en, so it joins the en group through the call's cache.
+  await store.putPlatformRegistration({
+    player: 'p5',
+    provider: 'platform',
+    locale: 'en',
+    registeredAt: time.now(),
+  });
+  const result = await service.deliverBulk({
+    ...bulkInput('event-23', []),
+    recipients: [
+      { player: 'p1', locale: 'ko' },
+      { player: 'p2', locale: 'ko' },
+      { player: 'p3', locale: 'en' },
+      { player: 'p4', locale: 'fr' },
+      { player: 'p5' },
+    ],
+  });
+  assert.deepEqual(
+    statuses(result).map((row) => row[2] ?? row[1]),
+    ['delivered', 'delivered', 'delivered', 'copy-missing', 'delivered'],
+  );
+  assert.deepEqual(asked, ['ko', 'en', 'fr'], 'one resolver call per locale group');
+  assert.deepEqual(
+    fake.batches.flat().map((request) => [
+      request.player,
+      request.content.title,
+      request.content.body,
+    ]),
+    [
+      ['p1', '이벤트', 'Halloween 시작!'],
+      ['p2', '이벤트', 'Halloween 시작!'],
+      ['p3', 'Event', 'Halloween is on!'],
+      ['p5', 'Event', 'Halloween is on!'],
+    ],
+  );
+  // A single send renders the same project text.
+  await service.deliver({
+    idempotencyKey: 'single-23',
+    player: 'p6',
+    provider: 'platform',
+    topic: 'live-event',
+    locale: 'ko',
+    templateData: { event: 'Halloween' },
+  });
+  assert.deepEqual(
+    fake.singles.map((request) => [request.content.title, request.content.body]),
+    [['이벤트', 'Halloween 시작!']],
+  );
+  // A resolver that throws fails the whole call as retryable, with nothing stored.
+  failing = true;
+  await assert.rejects(
+    service.deliverBulk({ ...bulkInput('event-24', ['p1', 'p2']), locale: 'ko' }),
+    (error: unknown) => {
+      assert.equal(
+        (error as { readonly code?: unknown }).code,
+        'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+      );
+      return true;
+    },
+  );
+  assert.equal(await store.getSend('event-24:p1'), undefined);
 }
 
 // A device provider's deliveries count each device against the call's attempts.

@@ -51,6 +51,7 @@ const vectors: readonly NotificationConformanceVector[] = readdirSync(vectorsDir
 /** The vectors the Apps in Toss provider passes; every other vector is skipped by its `appliesTo`. */
 const aitVectors = [
   'advertising-unsupported-by-host',
+  'duplicate-topics-once',
   'host-agreement-dismissed',
   'host-agreement-recorded',
   'host-agreement-rejected',

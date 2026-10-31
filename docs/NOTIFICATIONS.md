@@ -303,7 +303,9 @@ invitation to buy.
    - **Targets.** A target that does not map the topic never delivers it.
      Apps in Toss needs the console template's code and `agreement`
      (`none` only for a `service` template without an agreement statement);
-     Devvit needs its pre-approved `title` (60) and `body` (100 characters).
+     Devvit needs its pre-approved `title` (60) and `body` (100 characters;
+     Devvit does not say which unit it counts, so the kit counts Unicode code
+     points of the filled text and refuses a longer one before sending).
    - **Copy** must include the catalog's `defaultLocale`; `{{name}}`
      placeholders are filled from the reminder's or send's template data.
      A server reminder whose data cannot fill every locale copy, or the
@@ -320,6 +322,45 @@ invitation to buy.
    starter lists every `requested` topic the target maps) and set reminders
    through `runtime.reminders.set({ key, topic, fireAt })`; the runtime picks
    a local or a server reminder from the target's capabilities.
+
+## Localized copy on the server {#server-copy}
+
+A push the server sends (a direct send, a server reminder, or a consent
+notice) takes its title and body from a copy resolver, per recipient:
+
+- **Default.** The catalog's `copy` for the send's locale, else the locale
+  the player's device or platform registration reported, falling back to the
+  language (`en` for `en-US`) and then to `defaultLocale`. The starter's
+  topics ship `ko` and `en`.
+- **Your own strings.** Pass `resolveCopy` to `createNotificationService`
+  (the Devvit service takes it too), or bind a Worker entrypoint with
+  `resolveNotificationCopy` as `GAME_SERVICES_NOTIFICATIONS_COPY`. It
+  answers `{ title, body }` templates for `{ topic, provider, locale,
+  defaultLocale, templateData, notice }`, or nothing. In the Worker, nothing
+  means the catalog's copy; in your own `resolveCopy`, call
+  `resolveCatalogNotificationCopy(input)` for the cases you do not cover.
+  `{{name}}` placeholders are filled from the send's template data afterwards,
+  so do not paste template data into the text yourself: a reminder's data
+  comes from the player's device.
+- **No copy, no push.** When nothing answers, the answer is blank, or the
+  send's data cannot fill your resolver's placeholders, the recipient is
+  skipped as `unavailable: copy-missing` and `onError` hears about it
+  (`copy.resolve`); nothing is sent with empty text. A resolver that throws
+  fails the send as retryable, with nothing stored, so a retry reaches every
+  device. With your own resolver, a server reminder's data is checked
+  against your text when it fires, not against the catalog copy when it is
+  set.
+- **Rules still apply.** Under the Korean rules an advertising push gets the
+  `(광고)` label, the sender line, the opt-out line, and the opt-out action
+  whatever the resolver answers. A consent notice's text must keep the
+  `notices.copy` rules (only `{{consentDate}}`, which it must use), or it is
+  not sent.
+- **Not affected.** Apps in Toss sends the console template, and Devvit sends
+  the mapping's pre-approved title and body; neither asks the resolver.
+  Local notifications use the catalog copy on the device.
+
+<!-- @link ../packages/game-services/src/notifications/copy.ts#resolveCatalogNotificationCopy -->
+<!-- @evidence /docs/specs/notifications/notifications-v2-rfc.md#open-questions -->
 
 ## Bulk sends {#bulk-sends}
 
@@ -371,8 +412,12 @@ const result = await service.deliverBulk({
   user. Call it from a scheduler task or a moderator action: run the
   `pending` users it answers (budgets, the daily app limit, retryable
   failures) again until none are left, then the page at the `next` cursor.
-- **Copy.** A bulk send uses the topic's catalog copy or target mapping, as
-  any send does. Apps in Toss functional messages never carry advertising;
+- **Copy.** A bulk send takes its title and body from the copy resolver
+  (see [Localized copy on the server](#server-copy)), asked once per locale
+  group for the whole call, so every player of a locale gets the same text
+  a single send would. A group with no copy is `unavailable: copy-missing`;
+  a resolver that throws fails the whole call, retryable, before anything
+  is stored. Apps in Toss functional messages never carry advertising;
   the gate refuses an `advertising` topic there before any call.
 <!-- @link ../packages/game-services/src/notifications/service.ts#createNotificationService -->
 <!-- @evidence /docs/specs/notifications/notifications-v2-rfc.md#remote-delivery -->

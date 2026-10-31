@@ -19,9 +19,11 @@ import {
   listNotificationNotices,
   normalizeNotificationTimestamp,
   notificationConsentResultDueBy,
+  notificationContentSource,
   notificationKeyIssue,
   notificationNoticeCopyIssues,
   notificationNoticeSendFrom,
+  notificationNoticeTextIssues,
   notificationNoticeTopic,
   notificationNoticeVariantCopy,
   notificationNoticeVariantFallbacks,
@@ -1570,5 +1572,69 @@ describe('notification permission helpers and registry', () => {
       ...capabilities,
       remote: { supported: false, purposes: [], addressing: 'none', content: 'free-form' },
     }, fcm)).toBe('the provider declares no remote delivery');
+  });
+});
+
+describe('resolved copy (RFC "Remote copy")', () => {
+  it('reads content from copy only where neither a mapping nor a host template supplies it', () => {
+    expect(notificationContentSource(service, 'free-form')).toBe('catalog');
+    expect(notificationContentSource(service, 'host-template')).toBe('host-template');
+    expect(notificationContentSource({ mapping: { title: 'T', body: 'B' } }, 'host-template')).toBe('mapping');
+    // A mapping with only a title does not stand in for the copy.
+    expect(notificationContentSource({ mapping: { title: 'T' } }, 'free-form')).toBe('catalog');
+  });
+
+  it('renders resolved copy in place of the catalog lookup, and answers copy-missing without it', () => {
+    const resolvedCopy = { copy: { title: 'Duel', body: '{{rival}} wants a duel.' } };
+    expect(evaluateNotificationDelivery(input({ locale: 'ko', resolvedCopy }))).toEqual({
+      status: 'allowed',
+      content: { title: 'Duel', body: 'Mina wants a duel.', route: '/?entry=challenge', source: 'catalog' },
+    });
+    expect(evaluateNotificationDelivery(input({ resolvedCopy: {} })))
+      .toEqual({ status: 'unavailable', reason: 'copy-missing' });
+    // An earlier step still decides first.
+    expect(evaluateNotificationDelivery(input({ resolvedCopy: {}, endpointPermission: 'denied' })))
+      .toEqual({ status: 'suppressed', reason: 'permission-denied' });
+    // Mapping text and host templates never read it.
+    expect(evaluateNotificationDelivery(input({
+      topic: { ...service, mapping: { title: 'Mapped', body: 'Text' } },
+      resolvedCopy: {},
+    }))).toMatchObject({ status: 'allowed', content: { title: 'Mapped', source: 'mapping' } });
+    expect(evaluateNotificationDelivery(input({
+      entry: { ...appUser, content: 'host-template' },
+      consent: [record('delivery-permission', 'granted')],
+      resolvedCopy: {},
+    }))).toEqual({ status: 'allowed', content: { route: '/?entry=challenge', source: 'host-template' } });
+  });
+
+  it('labels resolved advertising copy under the Korean rules', () => {
+    expect(evaluateNotificationDelivery(input({
+      topic: advertising,
+      consent: [record('advertising', 'granted')],
+      resolvedCopy: { copy: { title: 'Weekend event', body: 'The weekend event has started.' } },
+    }))).toEqual({
+      status: 'allowed',
+      content: {
+        title: '(광고) Weekend event',
+        body: '(광고) 080-1234-5678\nThe weekend event has started.\n무료 수신거부: 수신거부 버튼',
+        route: '/events/weekend',
+        actions: [{ id: 'advertising-opt-out', title: '수신거부', route: '/settings/notifications' }],
+        source: 'catalog',
+      },
+      expiresAt: '2026-10-12T12:00:00Z',
+    });
+    expect(evaluateNotificationDelivery(input({
+      topic: advertising,
+      consent: [record('advertising', 'granted')],
+      resolvedCopy: {},
+    }))).toEqual({ status: 'unavailable', reason: 'copy-missing' });
+  });
+
+  it('checks one notice text by the notices.copy rules', () => {
+    expect(notificationNoticeTextIssues({ title: '[Game] 결과', body: '{{consentDate}} 처리됐어요.' })).toEqual([]);
+    expect(notificationNoticeTextIssues({ title: '[Game] 결과', body: '처리됐어요.' }, 'answer')
+      .map((issue) => issue.path)).toEqual(['answer']);
+    expect(notificationNoticeTextIssues({ title: ' ', body: '{{consentDate}} {{name}}' })
+      .map((issue) => issue.path)).toEqual(['notice.title', 'notice.body']);
   });
 });
