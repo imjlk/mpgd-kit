@@ -20,6 +20,7 @@ import {
   resolveGameServicesRequestHeaders,
   type GameServicesHeaderResolver,
 } from '../request-headers.js';
+import { describeError } from './text.js';
 
 /**
  * The game-services notifications client: the notifications runtime's
@@ -139,7 +140,11 @@ export interface GameServicesNotificationsClient extends NotificationRuntimeBack
   /**
    * The registry the Worker publishes (`GET /providers`, no session needed):
    * pass `providers.find((entry) => entry.provider === provider.provider)` as
-   * the runtime's `registryEntry`.
+   * the runtime's `registryEntry`. A provider entry this client cannot read
+   * (malformed, or shaped by a Worker this client does not know) is left out,
+   * so the other entries still load; a target whose provider has no entry
+   * left finds none, which a caller should report rather than read as a
+   * target the Worker does not serve.
    */
   getProviders(): Promise<GameServicesNotificationProviders>;
 }
@@ -509,8 +514,14 @@ export function createGameServicesNotificationsClient(
       }
       return {
         protocolVersion,
-        providers: providers.map((entry: unknown) =>
-          checked('/providers', () => assertNotificationDeliveryProviderEntry(entry))),
+        // One entry the client cannot read does not break the others.
+        providers: providers.flatMap((entry: unknown): NotificationDeliveryProviderEntry[] => {
+          try {
+            return [assertNotificationDeliveryProviderEntry(entry)];
+          } catch {
+            return [];
+          }
+        }),
         targets: { ...(targets as Readonly<Record<string, string>>) },
       };
     },
@@ -554,7 +565,7 @@ function checked<Value>(route: Route, read: () => Value): Value {
   try {
     return read();
   } catch (error) {
-    throw contractBroken(route, 200, error instanceof Error ? error.message : String(error));
+    throw contractBroken(route, 200, describeError(error));
   }
 }
 
