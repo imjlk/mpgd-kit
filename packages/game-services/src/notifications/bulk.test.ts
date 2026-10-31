@@ -452,33 +452,89 @@ const statuses = (result: NotificationBulkDeliveryResult) =>
   );
 }
 
-// A recipient whose claim may have run out while its batch gathered is not sent with it.
+// A recipient whose claim may run out before the batch's call answers is not sent with it.
 {
   const fake = bulkProvider({ maxRecipients: 10, minRecipients: 2, perRecipientOutcomes: true });
   let p3Reads = 0;
-  const { service, reports } = await setup({
+  const { service, time, reports } = await setup({
     provider: fake.provider,
     players: players(3),
-    resolve: async (player, time) => {
+    resolve: async (player, clockNow) => {
       if (player === 'p3' && (p3Reads += 1) === 2) {
-        // p1 and p2 have gated and wait for the batch; p3's gate runs 200 s later (the lease is 300 s).
+        // Every row is claimed; p3's gate is slow and ends 200 s later (the lease is 300 s).
         await new Promise((resolve) => setTimeout(resolve, 50));
-        time.advance(200);
+        clockNow.advance(200);
       }
       return `u-${player}`;
     },
   });
   const result = await service.deliverBulk(bulkInput('event-15', players(3)));
-  assert.deepEqual(statuses(result), [
-    ['p1', 'deferred', 'provider-rate-limited'],
-    ['p2', 'deferred', 'provider-rate-limited'],
-    ['p3', 'delivered', undefined],
-  ]);
   assert.deepEqual(
-    [fake.batches.length, fake.singles.map((request) => request.idempotencyKey)],
-    [0, ['event-15:p3']],
+    statuses(result).map((row) => row[2]),
+    ['provider-rate-limited', 'provider-rate-limited', 'provider-rate-limited'],
   );
-  assert.equal(reports.filter((report) => report.startsWith('dispatch.stale: ')).length, 2);
+  assert.deepEqual([fake.batches.length, fake.singles.length], [0, 0]);
+  assert.equal(reports.filter((report) => report.startsWith('dispatch.stale: ')).length, 3);
+  // Nothing was sent, so the scheduler sends them once they are due.
+  time.advance(120);
+  await service.dispatchDue();
+  assert.deepEqual(fake.singles.map((request) => request.idempotencyKey).sort(), [
+    'event-15:p1',
+    'event-15:p2',
+    'event-15:p3',
+  ]);
+}
+
+// A device provider's deliveries count each device against the call's attempts.
+{
+  const fcmLike: NotificationDeliveryProviderEntry = {
+    ...entry,
+    provider: 'devices',
+    addressing: 'device',
+  };
+  const sent: string[] = [];
+  const provider: NotificationRemoteDeliveryProvider = {
+    id: 'devices',
+    async send(request) {
+      sent.push(request.idempotencyKey);
+      return { status: 'accepted' };
+    },
+  };
+  const store = createInMemoryNotificationStore();
+  const service = createNotificationService({
+    store,
+    registry: createNotificationProviderRegistry([
+      { entry: fcmLike, delivery: provider, targets: ['device-target'] },
+    ]),
+    catalog: { defaultLocale: 'ko', topicsFor: () => [topic] },
+    now: () => '2026-11-01T03:00:00Z',
+  });
+  for (const [player, installations] of [
+    ['p1', ['i1', 'i2', 'i3']],
+    ['p2', ['i4']],
+  ] as const) {
+    for (const installationId of installations) {
+      await service.registerEndpoint(
+        { player, sessionId: `s-${installationId}`, installationId },
+        {
+          registration: {
+            provider: 'devices',
+            address: { kind: 'fcm-token', value: `tok-${installationId}`, permission: 'granted' },
+          },
+        },
+      );
+    }
+  }
+  const result = await service.deliverBulk(
+    // One recipient a batch: recipients of one batch are prepared side by side and may pass the budget by a few.
+    { ...bulkInput('event-16', ['p1', 'p2']), provider: 'devices', batchSize: 1 },
+    { maxRecipients: 2 },
+  );
+  assert.deepEqual(
+    statuses(result).map((row) => row[2] ?? row[1]),
+    ['delivered', 'count-budget'],
+  );
+  assert.deepEqual(sent.sort(), ['event-16:p1:i1', 'event-16:p1:i2', 'event-16:p1:i3']);
 }
 
 // Malformed bulk sends fail as a whole; the registry checks each bulk capability once.

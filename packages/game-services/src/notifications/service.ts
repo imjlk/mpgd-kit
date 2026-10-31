@@ -979,6 +979,8 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     topic: NotificationTopicDeclaration,
     decision: Extract<NotificationDeliveryDecision, { readonly status: 'allowed' }>,
     at: number,
+    // When the caller's claim on the row ends (epoch ms); a bulk batch checks it before its call.
+    _claimedUntil?: number,
   ): Promise<NotificationRemoteDeliveryAnswer> =>
     sendOne(recipient.provider, deliveryRequestOf(recipient, request, topic, decision, at));
 
@@ -1328,7 +1330,14 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       await complete(sendKey, row, token, { kind: 'remove' }, nowMs());
       return {};
     }
-    const answer = await call(recipient, send.request, topic, decision, at);
+    const answer = await call(
+      recipient,
+      send.request,
+      topic,
+      decision,
+      at,
+      row.state.status === 'in-flight' ? Date.parse(row.state.leaseUntil) : undefined,
+    );
     const answeredAt = nowMs();
     switch (answer.status) {
       case 'accepted':
@@ -2606,7 +2615,8 @@ export function createNotificationService(input: CreateNotificationServiceInput)
           if (work.left <= 0) {
             return { done: { notAttempted: 'count-budget' } };
           }
-          work.left -= 1;
+          // Each delivery row is an attempt: a player's devices each cost one.
+          work.left -= expired.length;
           for (const row of expired) {
             if (!await pace.take(row.provider)) {
               return { done: { notAttempted: 'provider-rate' } };
@@ -2672,9 +2682,12 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       if (!await store.updateSend({ key, version, send: stored })) {
         return { done: { outcome: { status: 'in-flight' } } };
       }
+      const queued = planned.rows.filter((row) => row.state.status === 'in-flight');
+      // The first row was counted before the key was made; each further device is one more attempt.
+      work.left -= Math.max(0, queued.length - 1);
       return {
         key,
-        rows: planned.rows.filter((row) => row.state.status === 'in-flight'),
+        rows: queued,
         mode: 'job',
         refusals: planned.refusals,
         wasDelivered: false,
@@ -2796,24 +2809,26 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         && members.length >= (capability.minRecipients ?? 2)
         && !isInsideNotificationHoldWindow(capability.holdWindow, nowMs());
       const barrier = createNotificationBatchBarrier<
-        { readonly request: NotificationRemoteDeliveryRequest; readonly gatedAt: number },
+        { readonly request: NotificationRemoteDeliveryRequest; readonly claimedUntil: number },
         NotificationRemoteDeliveryAnswer
       >(members.length, async (items) => {
-        // A recipient whose claim may have run out while the batch gathered
-        // is not sent: another holder may own its row by now. Nothing was
-        // sent, so it waits a moment and is replayed (its own claim settles
-        // only while it still holds the row).
+        // A recipient whose claim has less than half a lease left (it may run
+        // out before the call answers, and another holder may then own its
+        // row) is not sent. Nothing was sent, so it waits a moment and is
+        // replayed (its own claim settles only while it still holds the row).
         const now = nowMs();
-        const fresh = items.filter((item) => now - item.gatedAt < leaseMs / 2);
+        const holds = (item: { readonly claimedUntil: number }): boolean =>
+          item.claimedUntil - now >= leaseMs / 2;
+        const fresh = items.filter(holds);
         const answers = await flushBulk(provider, fresh.map((item) => item.request), calls);
         let next = 0;
         return items.map((item): NotificationRemoteDeliveryAnswer => {
-          if (now - item.gatedAt < leaseMs / 2) {
+          if (holds(item)) {
             next += 1;
             return answers[next - 1] ?? { status: 'ambiguous' };
           }
           report(
-            new Error('A bulk recipient waited for its batch past half its claim lease; it is not sent now.'),
+            new Error('A bulk recipient has less than half a claim lease left when its batch is sent; it is not sent now.'),
             'dispatch.stale',
             { sendKey: item.request.sendKey, provider: provider.entry.provider, rowKey: item.request.idempotencyKey },
           );
@@ -2835,7 +2850,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
           }
         };
         try {
-          const { refusal } = await runRow(entry.key, row.provider, row.key, entry.mode, async (recipient, request, topic, decision, at) => {
+          const { refusal } = await runRow(entry.key, row.provider, row.key, entry.mode, async (recipient, request, topic, decision, at, claimedUntil) => {
             arrived = true;
             if (!gathers) {
               calls.single += 1;
@@ -2845,7 +2860,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
             release();
             const answer = await barrier.arrive({
               request: deliveryRequestOf(recipient, request, topic, decision, at),
-              gatedAt: at,
+              claimedUntil: claimedUntil ?? at,
             });
             await limiter.acquire();
             holding = true;
@@ -2888,7 +2903,13 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       if (thrown !== undefined) {
         return { error: thrown };
       }
-      const settled = await settle(entry.key, slot?.refusals ?? []);
+      let settled: NotificationDeliveryOutcome;
+      try {
+        settled = await settle(entry.key, slot?.refusals ?? []);
+      } catch (error) {
+        // The read failed, not the send: this recipient alone answers it.
+        return { error };
+      }
       return {
         outcome: entry.wasDelivered && settled.status === 'delivered'
           ? { status: 'delivered', alreadyProcessed: true }

@@ -597,8 +597,9 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   never a client route: one topic to many players through one provider,
   each player a single send with its own key and gate check (see the
   [notifications guide](NOTIFICATIONS.md#bulk-sends)). It attempts at most
-  `MPGD_NOTIFICATIONS_BULK_RECIPIENTS` players per call (400 by default: an
-  attempt costs about 20 D1 calls and identity lookups) and reads the keys
+  `MPGD_NOTIFICATIONS_BULK_RECIPIENTS` deliveries per call (400 by default,
+  one per FCM device: a delivery costs about 20 D1 calls and identity
+  lookups) and reads the keys
   of at most five times as many (one D1 read each, for players a retry
   finds already sent), which keeps a call under the Workers Paid cap of
   10,000 subrequests per invocation; the rest answer `not-attempted`, and

@@ -62,9 +62,12 @@ export interface NotificationBulkDeliverOptions {
   /** Wall time after which no further batch starts; 20 seconds by default. */
   readonly budgetMs?: number;
   /**
-   * Recipients one call attempts at most (sends it makes or replays); the
-   * rest answer `not-attempted` (`count-budget`). A recipient answered from
-   * the ledger does not count.
+   * Deliveries one call attempts at most (sends it makes or replays, one
+   * per device of a device provider); recipients past it answer
+   * `not-attempted` (`count-budget`). A recipient answered from the ledger
+   * does not count. The recipient that crosses it is still sent to every
+   * device it has, and the recipients of one batch are prepared side by
+   * side, so they may pass it by a few.
    */
   readonly maxRecipients?: number;
   /**
