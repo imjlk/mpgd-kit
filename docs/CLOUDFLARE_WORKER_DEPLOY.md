@@ -376,8 +376,9 @@ item after they "switch devices"
   at most the limit's number of guests in total, and the ledger keeps every
   share (player ids and the store's verification id, no other personal data).
 - **Refunds and revocations.** A store refund, chargeback, or voided purchase
-  revokes every holder's grant (the Play voided-purchase sweep and the App
-  Store refund notification included), and a refunded purchase is never
+  revokes every holder's grant (the Play voided-purchase sweep, Play
+  real-time developer notifications, and the App Store refund notification
+  included), and a refunded purchase is never
   shared again. An operator's `admin` revocation stays on the grant it names.
 - **What is not shared.** Consumables (there is nothing to restore once
   granted) and subscriptions (no subscription verifier yet). A checkout this
@@ -934,9 +935,9 @@ verifier binding gets neither; that finalizer owns its retries and refunds.
   needs, under Users and permissions, the app's "View financial reports"
   permission for the Voided Purchases API and "Manage orders and
   subscriptions" for acknowledge and consume (Play Console's names; check them
-  in your console, they change). Real-time developer notifications (a Pub/Sub
-  topic under Monetization setup) are optional and not consumed by the Worker
-  yet; the sweep is what keeps the ledger correct.
+  in your console, they change). Real-time developer notifications revoke
+  faster (next section); the sweep stays on next to them and is what keeps
+  the ledger correct.
 
 The cron shares the notifications trigger:
 
@@ -968,6 +969,142 @@ default); together (1,300 by default) they stay under the Workers Paid cap of
 earlier cap of 1,000. A void whose revocation keeps failing on a store error
 holds the sweep for 30 runs, then is skipped with a log line naming its
 order id, to be revoked by hand.
+
+### Google Play: real-time developer notifications
+
+The Worker mounts `POST /google-play/rtdn` for Google Play Real-time
+developer notifications (RTDN) delivered by a Cloud Pub/Sub push
+subscription. A `voidedPurchaseNotification` for a fully refunded or voided
+one-time product is a trigger, not proof: the Worker looks the purchase
+token up with the Voided Purchases API (the sweep's client, one query over a
+window from 15 minutes before the notification's event time to the earlier
+of now and six hours after it) and revokes the grant with the listed entry. The revocation goes through the
+same `revokeGooglePlayVoidedPurchase` path and key as the sweep and records
+the same reason (`chargeback` for `voidedReason` 7), source, and void time;
+a redelivered push and the sweep's later read of the same token both answer
+the first `revoke` entry (`alreadyProcessed`). A message published to the
+topic by anyone but Google cannot revoke a purchase Google did not void.
+
+**The sweep stays required.** Pub/Sub delivers at least once and can drop a
+message for good (a wrong push endpoint or audience past the subscription's
+retention, a topic that Play Console stopped publishing to, a deleted
+subscription). Keep `MPGD_GOOGLE_PLAY_VOIDED_SWEEP_MINUTES` on; RTDN is the
+fast path, the sweep is the backstop.
+
+**Quota.** Google allows 6,000 Voided Purchases API queries a day and 30 in
+any 30 seconds per package, shared by the sweep and this route
+([Voided Purchases API](https://developers.google.com/android-publisher/voided-purchases)).
+A voided notification costs one query (a second only when more than 1,000
+voids share its window); every other kind costs none. The sweep uses about
+24 a day once caught up. A void Google does not list yet is redelivered with
+the subscription's retry policy (10 to 600 seconds below), about ten
+queries over its hour. A `429` (or any lookup failure, a stuck token service
+included) is answered `503`, so Pub/Sub backs off and redelivers with that
+policy; refund volume stays far below 30 queries in 30 seconds, so the
+Worker keeps no rate limiter of its own.
+
+```toml
+[vars]
+# GAME_SERVICES_GOOGLE_PLAY_PACKAGE_NAME is the in-Worker Play boundary's (above).
+# The push subscription's audience and the service account it signs as.
+GAME_SERVICES_GOOGLE_PLAY_RTDN_AUDIENCE = "https://<worker-host>/google-play/rtdn"
+GAME_SERVICES_GOOGLE_PLAY_RTDN_SERVICE_ACCOUNT = "play-rtdn-push@<project-id>.iam.gserviceaccount.com"
+```
+
+Either RTDN setting mounts the route. With one of the three missing, or
+without the in-Worker Play boundary (`GAME_SERVICES_GOOGLE_PLAY_PACKAGE_NAME`
+with `GAME_SERVICES_GOOGLE_PLAY_PUBLISHER_AUTH` and the account binding or
+the unbound opt-in), whose Voided Purchases client confirms each void, the
+route answers `503` to every push (logged at startup), so Pub/Sub keeps the
+messages until the settings are complete. It never revokes unconfirmed. Like
+the sweep, it only finds grants that boundary verified, and it revokes in
+the Worker's store: D1 in production.
+
+**Authentication.** Every push must carry the OIDC token an authenticated
+push subscription sends (`Authorization: Bearer <JWT>`). The Worker checks
+the RS256 signature against Google's published keys
+(`https://www.googleapis.com/oauth2/v3/certs`, cached per isolate for the
+response's `max-age`; while that endpoint is down a held key keeps
+verifying for at most six hours past its expiry, then pushes answer `503`), the issuer (`https://accounts.google.com` or
+`accounts.google.com`), the audience, the `email` claim against
+`GAME_SERVICES_GOOGLE_PLAY_RTDN_SERVICE_ACCOUNT` with `email_verified`, and
+`exp`/`iat` with a minute of clock skew
+([Authenticate push subscriptions](https://cloud.google.com/pubsub/docs/authenticate-push-subscriptions)).
+The email check matters: any Google service account can mint a token for any
+audience. A push that fails is answered `401` and not acknowledged; a Google
+key outage is `503`. There is no shared-secret fallback. The token proves the
+push came from your subscription, not who published to the topic; the Voided
+Purchases API lookup is what makes a revocation Google's.
+
+**Push formats.** Both are read: the default wrapped body
+(`{ "message": { "data": "<base64 DeveloperNotification>", "messageId": … },
+"subscription": … }`) and an unwrapped one (payload unwrapping on: the body is
+the `DeveloperNotification` JSON itself, with a top-level `packageName`).
+An unwrapped push carries its message id only in the `x-goog-pubsub-message-id`
+header, sent when "write metadata" is on
+([Payload unwrapping](https://cloud.google.com/pubsub/docs/payload-unwrapping)).
+
+**Responses.** Pub/Sub acknowledges a `102`, `200`, `201`, `202`, or `204` and
+redelivers on anything else
+([Push subscriptions](https://cloud.google.com/pubsub/docs/push)).
+
+| Push | Answer |
+| --- | --- |
+| Voided one-time product, full refund (`refundType` 1), listed by the Voided Purchases API, grant found | `200 revoked` (`alreadyProcessed` on a repeat) |
+| Voided, not listed yet, or grant not on this ledger, event less than an hour old | `503` (redelivered: Google lists voids with some lag, and a purchase may still be writing its grant) |
+| Voided, not listed or grant not found after that hour, or no event time | `200 ignored`; the sweep reads the void again |
+| The Voided Purchases API lookup failed (outage, quota) | `503` |
+| Quantity-based partial refund (`refundType` 2) | `200 ignored`, logged; the grant stays, as with the sweep |
+| Voided subscription (`productType` 1), `subscriptionNotification` | `200 ignored`: the kit sells no Play subscriptions |
+| `testNotification`, `oneTimeProductNotification`, other kinds | `200 ignored`, logged: purchases are granted only when the game verifies them |
+| Another package, a malformed envelope or payload, a body over 64 KiB | `200` (`ignored` or `rejected`), so it is not redelivered until retention runs out |
+| A ledger conflict | `200 conflict`, logged at error |
+| Unauthenticated | `401`; incomplete settings `503`; a store error `500` |
+
+The log line names the Pub/Sub message id, the outcome, and, once the
+Voided Purchases API lists the void, its order id (never one the push body
+claims); the purchase token is never logged. Revocations are keyed by the purchase
+token, so a redelivery needs no message id bookkeeping.
+
+**Setup** (Google Cloud project of the app's Play Console link, then Play
+Console; see
+[Configure real-time developer notifications](https://developer.android.com/google/play/billing/getting-ready)):
+
+1. Create the topic, for example `play-rtdn`:
+   `gcloud pubsub topics create play-rtdn`.
+2. Grant `google-play-developer-notifications@system.gserviceaccount.com`
+   the **Pub/Sub Publisher** role on that topic (topic permissions in the
+   Cloud console, or
+   `gcloud pubsub topics add-iam-policy-binding play-rtdn --member=serviceAccount:google-play-developer-notifications@system.gserviceaccount.com --role=roles/pubsub.publisher`).
+   An organization policy that restricts domains needs an exception for it.
+3. Create a service account for the push token, for example
+   `play-rtdn-push`, and let the Pub/Sub service agent
+   (`service-<project-number>@gcp-sa-pubsub.iam.gserviceaccount.com`) mint
+   tokens for it (`roles/iam.serviceAccountTokenCreator`).
+4. Create the push subscription with authentication and an explicit
+   audience (wrapped is the default; payload unwrapping works too, with
+   "write metadata" for the message id in logs), and an exponential retry
+   policy so a `503` waits between redeliveries:
+
+   ```sh
+   gcloud pubsub subscriptions create play-rtdn-worker \
+     --topic=play-rtdn \
+     --push-endpoint=https://<worker-host>/google-play/rtdn \
+     --push-auth-service-account=play-rtdn-push@<project-id>.iam.gserviceaccount.com \
+     --push-auth-token-audience=https://<worker-host>/google-play/rtdn \
+     --min-retry-delay=10s --max-retry-delay=600s
+   ```
+
+   Set the same audience and service account in the Worker settings above.
+5. In Play Console, open the app, **Monetize > Monetization setup**, then
+   **Real-time developer notifications**: enable them, enter the topic as
+   `projects/<project-id>/topics/play-rtdn`, and pick "Get notifications for
+   subscriptions and all voided purchases" (one-time product purchase events
+   are acknowledged and ignored, so the other option only adds traffic).
+6. Click **Send Test Message**. The Worker answers `200` and logs
+   `Google Play RTDN ignored <message id> GOOGLE_PLAY_RTDN_TEST`. A `401` in
+   the subscription's delivery metrics means the audience or the service
+   account does not match the Worker settings.
 
 ## Production Notes
 

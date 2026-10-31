@@ -27,7 +27,12 @@ export function createGooglePlayPublisherClient(
     path: string,
     signal: AbortSignal,
   ): Promise<Response> {
-    const accessToken = await options.getAccessToken(signal);
+    // A token source that ignores the signal (a service binding) is still
+    // bounded by it: the request fails when the caller gives up.
+    const accessToken = await untilAborted(
+      Promise.resolve().then(() => options.getAccessToken(signal)),
+      signal,
+    );
     if (accessToken.length === 0 || /[\s\x00-\x1f\x7f]/u.test(accessToken)) {
       throw new TypeError('Google Play Publisher access token is invalid.');
     }
@@ -231,4 +236,31 @@ async function readBoundedJson(response: Response): Promise<unknown> {
     offset += chunk.byteLength;
   }
   return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) as unknown;
+}
+
+/** The promise, or an AbortError as soon as the signal aborts, whichever comes first. */
+function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) {
+    void promise.catch(() => undefined);
+    return Promise.reject(
+      new DOMException('Google Play Publisher request was cancelled.', 'AbortError'),
+    );
+  }
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => {
+      void promise.catch(() => undefined);
+      reject(new DOMException('Google Play Publisher request was cancelled.', 'AbortError'));
+    };
+    signal.addEventListener('abort', abort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', abort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', abort);
+        reject(error);
+      },
+    );
+  });
 }

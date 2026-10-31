@@ -171,3 +171,35 @@ await assert.rejects(
   /returned invalid purchase JSON/u,
 );
 assert.equal(cancelled, true, 'oversized response body should be cancelled');
+
+// A token source that ignores the signal is bounded by it anyway.
+const stuckClient = createGooglePlayPublisherClient({
+  getAccessToken: () => new Promise<string>(() => undefined),
+  fetch: async () => {
+    throw new Error('fetch must not run without a token');
+  },
+});
+// A ref'd timer: AbortSignal.timeout's does not keep Node's event loop alive.
+const stuckDeadline = new AbortController();
+setTimeout(() => stuckDeadline.abort(), 50);
+const stuckStarted = Date.now();
+await assert.rejects(
+  stuckClient.listVoidedPurchases({
+    packageName: input.packageName,
+    startTimeMillis: 1_761_000_000_000,
+    endTimeMillis: 1_761_300_000_000,
+    signal: stuckDeadline.signal,
+  }),
+  (error) => error instanceof DOMException && error.name === 'AbortError',
+);
+assert.equal(
+  Date.now() - stuckStarted < 5_000,
+  true,
+  'a stuck token source answers at the deadline',
+);
+const abortedBefore = new AbortController();
+abortedBefore.abort();
+await assert.rejects(
+  stuckClient.getProductPurchaseV2({ ...input, signal: abortedBefore.signal }),
+  (error) => error instanceof DOMException && error.name === 'AbortError',
+);
