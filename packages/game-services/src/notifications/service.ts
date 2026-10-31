@@ -420,6 +420,21 @@ class NotificationSendInputError extends Error {
 }
 
 /**
+ * The copy resolver could not answer. Retryable, like a host that cannot
+ * answer, but a send's first check fails as a whole on it: copy is resolved
+ * per locale, so skipping only the recipients of one locale would store a
+ * send that never reaches them.
+ */
+class NotificationCopyUnavailableError extends NotificationError {
+  constructor(topic: string, options: { readonly cause: unknown }) {
+    super('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', {
+      message: `The copy resolver could not answer for topic ${topic}.`,
+      cause: options.cause,
+    });
+  }
+}
+
+/**
  * The provider accepted or may have sent, but storing its answer failed. It
  * is retryable for the caller, who answers from the ledger by the same key;
  * the row itself recovers through the due replay once its lease ends, since
@@ -469,6 +484,12 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     Math.min(leaseMs * 2 ** Math.min(attempts, 16), Math.max(leaseMs, maxAmbiguousLeaseMs));
   const random = input.random ?? Math.random;
   const resolveCopy = input.resolveCopy ?? resolveCatalogNotificationCopy;
+  /**
+   * A project's resolver answers text the backend cannot check ahead of the
+   * send: its placeholders are checked against the send's data when it
+   * answers, and a reminder's set time checks no catalog copy.
+   */
+  const customCopy = input.resolveCopy !== undefined;
   const noticeTopic = catalog.notices?.topic;
   if (catalog.notices !== undefined) {
     const issues = notificationNoticeCopyIssues(catalog.notices.copy, catalog.defaultLocale);
@@ -576,18 +597,29 @@ export function createNotificationService(input: CreateNotificationServiceInput)
             ...(origin.kind === 'notice' ? { notice: { variant: origin.variant } } : {}),
           });
         } catch (error) {
-          throw new NotificationError('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', {
-            message: `The copy resolver could not answer for topic ${topic.id}.`,
-            cause: error,
-          });
+          throw new NotificationCopyUnavailableError(topic.id, { cause: error });
         }
-        if (resolution.issue !== undefined) {
-          report(new TypeError(`Topic ${topic.id}: ${resolution.issue}.`), 'copy.resolve', {
-            sendKey: request.idempotencyKey,
-            provider,
-          });
+        const where = { sendKey: request.idempotencyKey, provider };
+        if (resolution.copy === undefined) {
+          // Reported, so a missing translation is not only a quiet copy-missing.
+          report(
+            new TypeError(`Topic ${topic.id}: ${resolution.issue ?? `no copy for ${locale ?? catalog.defaultLocale}`}.`),
+            'copy.resolve',
+            where,
+          );
+          return {};
         }
-        return resolution.copy === undefined ? {} : { copy: resolution.copy };
+        if (customCopy) {
+          try {
+            fillNotificationTemplate(resolution.copy.title, request.templateData);
+            fillNotificationTemplate(resolution.copy.body, request.templateData);
+          } catch (error) {
+            // The project's text needs a value this send does not carry.
+            report(new TypeError(`Topic ${topic.id}: ${describe(error)}`), 'copy.resolve', where);
+            return {};
+          }
+        }
+        return { copy: resolution.copy };
       })();
       cache.set(key, resolved);
     }
@@ -1076,7 +1108,11 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         }
         checked += 1;
       } catch (error) {
-        if (error instanceof NotificationError && error.code === 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE') {
+        if (
+          error instanceof NotificationError
+          && error.code === 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE'
+          && !(error instanceof NotificationCopyUnavailableError)
+        ) {
           hostFailure ??= error;
           continue;
         }
@@ -3019,7 +3055,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       }
       // A placeholder the fire would throw on is refused now, before the
       // previous reminder's send is stopped or this one is written.
-      assertReminderCopyFills(declaring, reminder.topic, reminder.templateData, catalog);
+      assertReminderCopyFills(declaring, reminder.topic, reminder.templateData, catalog, !customCopy);
       // One reminder per key: setting it replaces the previous one and, before
       // the write, stops the previous one's send that waits; a scheduler run
       // that fires the previous one meanwhile then fails to mark it and stops
@@ -3172,6 +3208,8 @@ function assertReminderCopyFills(
   topicId: string,
   templateData: NotificationTemplateData | undefined,
   catalog: NotificationServiceCatalog,
+  /** False under a project's copy resolver, whose text replaces the catalog's copy. */
+  catalogCopy: boolean,
 ): void {
   const data = templateData ?? {};
   for (const provider of providers) {
@@ -3190,7 +3228,7 @@ function assertReminderCopyFills(
       }
       const texts: string[] = mapped
         ? [mappedTitle, mappedBody]
-        : topic.copy === undefined
+        : topic.copy === undefined || !catalogCopy
           ? []
           : Object.values(topic.copy).flatMap((localeCopy) => [localeCopy.title, localeCopy.body]);
       for (const text of texts) {

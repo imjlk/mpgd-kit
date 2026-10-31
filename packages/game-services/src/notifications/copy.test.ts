@@ -271,6 +271,7 @@ function recording(answer: (input: NotificationCopyResolverInput) => ReturnType<
   );
   assert.equal(h.fcm.calls.length, 0);
   assert.deepEqual(h.store.inspect().sends, []);
+  assert.deepEqual(h.errors, ['copy.resolve'], 'a missing translation is reported');
   // An answer that cannot be sent is no copy, and the operator hears why.
   for (const answer of [{ title: ' ', body: 'B' }, { title: 'T' }, 'text', 7]) {
     const bad = harness({ resolveCopy: () => answer as never });
@@ -526,6 +527,107 @@ function recording(answer: (input: NotificationCopyResolverInput) => ReturnType<
     }),
     { copy: { title: 'T', body: 'B' } },
     'only the title and body are kept',
+  );
+}
+
+// A resolver failure for one locale fails the whole first check: nothing is stored, and a retry reaches everyone.
+{
+  let enDown = true;
+  const h = harness({
+    resolveCopy: (input) => {
+      if (input.locale === 'en' && enDown) {
+        throw new Error('en strings unavailable');
+      }
+      return resolveCatalogNotificationCopy(input);
+    },
+  });
+  await h.service.registerEndpoint(
+    { player: 'p-1', sessionId: 's-ko', installationId: 'install-ko' },
+    {
+      registration: {
+        provider: 'fcm',
+        address: { kind: 'fcm-token', value: 'tok-ko', permission: 'granted' },
+        locale: 'ko',
+      },
+      target: 'ios',
+    },
+  );
+  await h.service.registerEndpoint(
+    { player: 'p-1', sessionId: 's-en', installationId: 'install-en' },
+    {
+      registration: {
+        provider: 'fcm',
+        address: { kind: 'fcm-token', value: 'tok-en', permission: 'granted' },
+        locale: 'en',
+      },
+      target: 'ios',
+    },
+  );
+  const send = {
+    idempotencyKey: 'mixed',
+    player: 'p-1',
+    topic: challenge.id,
+    templateData: { name: 'A' },
+  };
+  await assert.rejects(h.service.deliver(send), { code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE' });
+  assert.equal(h.fcm.calls.length, 0);
+  assert.deepEqual(h.store.inspect().sends, [], 'the key is released');
+  enDown = false;
+  assert.deepEqual(await h.service.deliver(send), { status: 'delivered', alreadyProcessed: false });
+  assert.deepEqual(h.fcm.calls.map((call) => [call.locale, call.content.body]).sort(), [
+    ['en', 'A challenged you.'],
+    ['ko', 'A님이 도전했어요.'],
+  ]);
+}
+
+// Under a project's resolver, a reminder's set time checks no catalog copy; its own placeholders are checked when it answers.
+{
+  const needsName = { ...challenge, copy: { ko: { title: 'T', body: '{{name}}' } } };
+  const { resolver } = recording(() => ({ title: 'Rematch', body: '{{rival}} is waiting.' }));
+  const h = harness({ topics: [needsName], resolveCopy: resolver });
+  await h.register('p-1', 'en');
+  // The catalog's {{name}} would have refused this reminder; the resolver's text is what is sent.
+  assert.deepEqual(
+    await h.service.setReminder(session('p-1'), {
+      key: 'rematch',
+      topic: challenge.id,
+      fireAt: '2026-10-19T04:00:00Z',
+      templateData: { rival: 'Jun' },
+    }),
+    { status: 'scheduled' },
+  );
+  assert.deepEqual(
+    await h.service.setReminder(session('p-1'), {
+      key: 'no-data',
+      topic: challenge.id,
+      fireAt: '2026-10-19T04:00:00Z',
+    }),
+    { status: 'scheduled' },
+  );
+  h.set('2026-10-19T04:00:00Z');
+  const run = await h.service.runScheduler();
+  assert.deepEqual(
+    Object.fromEntries(run.results.map((result) => [result.sendKey.split(':')[2], result.outcome])),
+    {
+      rematch: { status: 'delivered', alreadyProcessed: false },
+      'no-data': { status: 'unavailable', reason: 'copy-missing' },
+    },
+  );
+  assert.deepEqual(
+    h.fcm.calls.map((call) => call.content.body),
+    ['Jun is waiting.'],
+  );
+  assert.ok(h.errors.includes('copy.resolve'));
+  // The default resolver still checks the catalog copy at set time.
+  const catalogOnly = harness({ topics: [needsName] });
+  await catalogOnly.register('p-1');
+  await assert.rejects(
+    catalogOnly.service.setReminder(session('p-1'), {
+      key: 'r',
+      topic: challenge.id,
+      fireAt: '2026-10-19T04:00:00Z',
+    }),
+    { code: 'NOTIFICATIONS_INVALID_INPUT' },
   );
 }
 

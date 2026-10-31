@@ -1013,7 +1013,7 @@ export async function runScheduledNotifications(
         return;
       }
       const limit = dueBatchOf(env, budget.remaining);
-      budget.roundReserve = limit * estimatedOperationsPerDueItem;
+      budget.roundReserve = limit * operationsPerDueItemOf(env);
       // The service always runs one round before it checks elapsed time, so
       // a round that cannot finish is not started.
       if (limit < 1 || budget.remaining < budget.roundReserve) {
@@ -1057,6 +1057,13 @@ export const defaultNotificationCronSubrequestBudget = 1_000;
 const estimatedStoreOperationsPerDueItem = 12;
 const maxProviderFetchesPerSend = 4;
 const estimatedOperationsPerDueItem = estimatedStoreOperationsPerDueItem + maxProviderFetchesPerSend;
+/** A send asks the copy binding at its first check and again before the provider call. */
+const copyBindingCallsPerDueItem = 2;
+
+function operationsPerDueItemOf(env: GameServicesNotificationsEnv): number {
+  return estimatedOperationsPerDueItem
+    + (env.GAME_SERVICES_NOTIFICATIONS_COPY === undefined ? 0 : copyBindingCallsPerDueItem);
+}
 const defaultCronWallBudgetSeconds = 20;
 const endpointWriteWindowMs = 86_400_000;
 
@@ -1139,7 +1146,7 @@ function dueBatchOf(env: GameServicesNotificationsEnv, operationBudget: number):
   const declared = env.MPGD_NOTIFICATIONS_DUE_BATCH?.trim();
   const asked = declared === undefined || declared === '' ? 25 : Number(declared);
   const clamped = Number.isFinite(asked) ? Math.min(Math.max(Math.floor(asked), 1), 100) : 25;
-  const affordable = Math.floor(operationBudget / estimatedOperationsPerDueItem);
+  const affordable = Math.floor(operationBudget / operationsPerDueItemOf(env));
   return affordable < 1 ? 0 : Math.min(clamped, affordable);
 }
 

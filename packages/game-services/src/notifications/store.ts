@@ -425,7 +425,8 @@ export function notificationRowOutcome(row: NotificationSendRow): StoredOutcome 
 /**
  * How far a recipient's answer got, for a send's result across recipients:
  * delivered, in flight, waiting, a provider's refusal, a policy refusal, and
- * last a recipient that did not resolve.
+ * last a recipient that did not resolve. `copy-missing` ranks with a
+ * provider's refusal: it comes after every policy step.
  */
 function outcomeRank(outcome: NotificationDeliveryOutcome): number {
   switch (outcome.status) {

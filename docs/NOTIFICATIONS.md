@@ -340,9 +340,14 @@ notice) takes its title and body from a copy resolver, per recipient:
   `{{name}}` placeholders are filled from the send's template data afterwards,
   so do not paste template data into the text yourself: a reminder's data
   comes from the player's device.
-- **No copy, no push.** When nothing answers, or the answer is blank, the
-  recipient is skipped as `unavailable: copy-missing`; nothing is sent with
-  empty text. A resolver that throws makes the send retry.
+- **No copy, no push.** When nothing answers, the answer is blank, or the
+  send's data cannot fill your resolver's placeholders, the recipient is
+  skipped as `unavailable: copy-missing` and `onError` hears about it
+  (`copy.resolve`); nothing is sent with empty text. A resolver that throws
+  fails the send as retryable, with nothing stored, so a retry reaches every
+  device. With your own resolver, a server reminder's data is checked
+  against your text when it fires, not against the catalog copy when it is
+  set.
 - **Rules still apply.** Under the Korean rules an advertising push gets the
   `(광고)` label, the sender line, the opt-out line, and the opt-out action
   whatever the resolver answers. A consent notice's text must keep the

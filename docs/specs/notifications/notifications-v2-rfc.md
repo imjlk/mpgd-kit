@@ -3142,12 +3142,23 @@ that also removes commerce v1.
      `notices.copy`.
    - **What it may answer.** A title and a body that are strings and not
      blank; for a notice, also the notice text rules
-     (`notificationNoticeTextIssues`). Anything else is no copy and is
-     reported to `onError` as `copy.resolve`. No copy skips the recipient as
-     `unavailable: copy-missing` ([gate step 9](#policy-gate)), never a send
-     with empty or placeholder text. A resolver that throws is a host that
-     cannot answer: the attempt fails with
-     `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` and the row is retried.
+     (`notificationNoticeTextIssues`). A project resolver's placeholders
+     must also be filled by the send's template data. Anything else is no
+     copy. No copy, including no answer, is reported to `onError` as
+     `copy.resolve` and skips the recipient as `unavailable: copy-missing`
+     ([gate step 9](#policy-gate)), never a send with empty or placeholder
+     text.
+   - **A resolver that throws** fails the attempt with
+     `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`. At a send's first check the
+     whole send fails and its key is released, rather than skipping the
+     recipients of one locale, so the caller's retry (or the scheduler's
+     next run) reaches every recipient. Before a provider call the row goes
+     back with the backoff a failing host read gets.
+   - **Reminders.** Under the default resolver, `reminders.set` still checks
+     that the template data fills every locale's catalog copy. Under a
+     project resolver it checks only a mapping's own text, because the
+     catalog copy is not what is sent; a reminder whose data cannot fill the
+     resolver's text then fires as `copy-missing`.
    - **Server-side only.** A send and a reminder carry no title or body; the
      backend refuses either field. The text comes from the resolver or the
      catalog on the server, and the client supplies at most the values of
