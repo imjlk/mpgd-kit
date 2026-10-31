@@ -3031,7 +3031,10 @@ announcements and event pushes.
       wherever it plugs into the gate's content.
   - **Budgets.** The call's attempt budget and the provider's `rate` are
     spent only for a recipient the gate allowed, before its row is stored;
-    a refused recipient spends neither.
+    a refused recipient spends neither. Each device of a device provider is
+    one attempt and one of the `rate`: a device past either stays queued,
+    and the scheduler sends it at its pace. A single call that falls back
+    to one `send` per recipient runs the gate again as each call starts.
   - **Answers.** Per recipient: `answered` with the outcome `deliver` would
     give, `not-attempted` (`time-budget`, `count-budget`, or
     `provider-rate`: the registry `rate` has no room, as the scheduler's

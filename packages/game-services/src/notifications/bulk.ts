@@ -65,9 +65,7 @@ export interface NotificationBulkDeliverOptions {
    * Deliveries one call attempts at most (sends it makes or replays, one
    * per device of a device provider); recipients past it answer
    * `not-attempted` (`count-budget`). A recipient answered from the ledger
-   * does not count. The recipient that crosses it is still sent to every
-   * device it has, and the recipients of one batch are prepared side by
-   * side, so they may pass it by a few.
+   * does not count. A device past it stays queued for the scheduler.
    */
   readonly maxRecipients?: number;
   /**

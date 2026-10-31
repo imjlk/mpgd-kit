@@ -565,7 +565,6 @@ const statuses = (result: NotificationBulkDeliveryResult) =>
     }
   }
   const result = await service.deliverBulk(
-    // One recipient a batch: recipients of one batch are prepared side by side and may pass the budget by a few.
     { ...bulkInput('event-16', ['p1', 'p2']), provider: 'devices', batchSize: 1 },
     { maxRecipients: 2 },
   );
@@ -573,7 +572,8 @@ const statuses = (result: NotificationBulkDeliveryResult) =>
     statuses(result).map((row) => row[2] ?? row[1]),
     ['delivered', 'count-budget'],
   );
-  assert.deepEqual(sent.sort(), ['event-16:p1:i1', 'event-16:p1:i2', 'event-16:p1:i3']);
+  // p1's third device waits for the scheduler; p2 is not attempted.
+  assert.deepEqual(sent.sort(), ['event-16:p1:i1', 'event-16:p1:i2']);
 
   // Each device takes one of the provider's rate: a device over it stays queued for the scheduler's pace.
   const paced = createNotificationService({
