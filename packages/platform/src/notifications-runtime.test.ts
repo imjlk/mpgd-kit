@@ -644,37 +644,84 @@ describe('createNotificationRuntime storage', () => {
     expect(calls).toEqual(['listConsent', 'recordConsent', 'listConsent']);
   });
 
-  it('cancels each local reminder alone when the host fails a batch, and throws for the one it cannot cancel', async () => {
+  /** A runtime with three pending local reminders of the topic, over a provider whose cancelLocal `cancel` decides. */
+  async function withThreeReminders(
+    cancel: (keys: readonly string[], cancelLocal: (keys: readonly string[]) => Promise<void>) => Promise<void>,
+  ) {
     const { host, backend } = setup();
-    const stuck = new Error('the host cannot cancel this one');
+    const errors: unknown[] = [];
     const batches: (readonly string[])[] = [];
     const cancelLocal = host.provider.cancelLocal;
     const provider = {
       ...host.provider,
       cancelLocal: async (request: { readonly keys: readonly string[] }) => {
         batches.push([...request.keys]);
-        if (request.keys.includes('stuck')) {
-          throw stuck;
-        }
-        await cancelLocal?.call(host.provider, request);
+        await cancel(request.keys, async (keys) => {
+          await cancelLocal?.call(host.provider, { keys });
+        });
       },
     };
-    const runtime = createNotificationRuntime({ provider, backend, catalog: [energy], defaultLocale: 'ko' });
+    const runtime = createNotificationRuntime({
+      provider,
+      backend,
+      catalog: [energy],
+      defaultLocale: 'ko',
+      onError: (error) => errors.push(error),
+    });
     await runtime.start();
     backend.authenticate('p-1');
     host.queuePrompt('granted');
     await runtime.requestPermission({ topics: ['energy-full'], gesture: true });
     await runtime.setTopicPreference({ topic: 'energy-full', enabled: true });
-    for (const key of ['early', 'stuck', 'late']) {
-      await runtime.reminders.set({ key, topic: 'energy-full', fireAt: '2026-10-12T05:00:00Z' });
+    // Pending in this order: early, stuck, late.
+    for (const [key, fireAt] of [['early', '05:00'], ['stuck', '06:00'], ['late', '07:00']] as const) {
+      await runtime.reminders.set({ key, topic: 'energy-full', fireAt: `2026-10-12T${fireAt}:00Z` });
     }
     await runtime.runUntilIdle();
+    batches.length = 0;
+    return { host, runtime, batches, errors };
+  }
+
+  it('cancels each local reminder alone when the host fails a batch, and throws for the one it cannot cancel', async () => {
+    const stuck = new Error('the host cannot cancel this one');
+    const { host, runtime, batches } = await withThreeReminders(async (keys, cancel) => {
+      if (keys.includes('stuck')) {
+        throw stuck;
+      }
+      await cancel(keys);
+    });
     await expect(runtime.setTopicPreference({ topic: 'energy-full', enabled: false })).rejects.toBe(stuck);
     expect(host.localPending.map((entry) => entry.key)).toEqual(['stuck']);
-    // One batch of three, then each key alone.
-    const [batch, ...alone] = batches.slice(-4);
-    expect([...(batch ?? [])].sort()).toEqual(['early', 'late', 'stuck']);
-    expect(alone).toEqual((batch ?? []).map((key) => [key]));
+    // One batch of three, then each key alone: a key after the stuck one is still tried.
+    expect(batches).toEqual([['early', 'stuck', 'late'], ['early'], ['stuck'], ['late']]);
+  });
+
+  it('reports a failed batch whose keys then cancel alone, and the sweep succeeds', async () => {
+    const flaky = new Error('the batch cancel failed once');
+    let failures = 1;
+    const { host, runtime, batches, errors } = await withThreeReminders(async (keys, cancel) => {
+      if (failures > 0) {
+        failures -= 1;
+        throw flaky;
+      }
+      await cancel(keys);
+    });
+    await runtime.setTopicPreference({ topic: 'energy-full', enabled: false });
+    expect(host.localPending).toEqual([]);
+    expect(batches).toEqual([['early', 'stuck', 'late'], ['early'], ['stuck'], ['late']]);
+    expect(errors).toEqual([flaky]);
+    await expect(runtime.runUntilIdle()).rejects.toBe(flaky);
+  });
+
+  it('stops after one single-key retry when the host fails every cancel', async () => {
+    const down = new Error('the host fails every call');
+    const { host, runtime, batches } = await withThreeReminders(async () => {
+      throw down;
+    });
+    await expect(runtime.setTopicPreference({ topic: 'energy-full', enabled: false })).rejects.toBe(down);
+    // One batch call and one single-key call, not one per key.
+    expect(batches).toEqual([['early', 'stuck', 'late'], ['early']]);
+    expect(host.localPending.map((entry) => entry.key)).toEqual(['early', 'stuck', 'late']);
   });
 
   it('still cancels local reminders the host reports revoked when the records cannot be read', async () => {

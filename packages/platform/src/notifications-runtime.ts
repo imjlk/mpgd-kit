@@ -1300,21 +1300,32 @@ export function createNotificationRuntime(
         throw error;
       }
       // One key the host cannot cancel must not keep the rest of the batch
-      // pending: each is tried alone, and the first that still fails is thrown.
-      // When every key then cancels, the batch failure was the host's alone
-      // and the sweep succeeded.
+      // pending, so each key is tried alone. A first single-key call that
+      // fails too means the host is failing every call: the rest are not
+      // tried, and that failure is thrown. Once a single-key call succeeds,
+      // a later key that fails is that key's own: the others are still
+      // tried, and the first such failure is thrown.
       let failed: { readonly error: unknown } | undefined;
+      let succeeded = false;
       for (const key of keys) {
         try {
           await cancelLocal.call(provider, { keys: [key] });
           scheduledLocal.delete(key);
+          succeeded = true;
         } catch (keyError) {
+          if (!succeeded) {
+            throw keyError;
+          }
           failed ??= { error: keyError };
         }
       }
       if (failed !== undefined) {
         throw failed.error;
       }
+      // Every key cancelled alone: the sweep succeeded, and the batch
+      // failure is reported, not thrown, so a host whose batch cancel is
+      // broken still shows.
+      fail(error);
       return;
     }
     for (const key of keys) {

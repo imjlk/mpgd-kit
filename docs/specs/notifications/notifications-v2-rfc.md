@@ -643,7 +643,10 @@ Runtime rules:
   topic from the catalog or took away its `local` channel.
   - When the host fails a batch cancel, the runtime cancels each of its keys
     alone, so one reminder the host cannot cancel does not keep the others
-    pending; the first key that still fails is thrown.
+    pending; the first key that still fails is thrown. When the first
+    single-key call fails too, the host is taken to be failing every call:
+    the rest are not tried, and that failure is thrown. When every key
+    cancels alone, the batch failure is reported, not thrown.
   - When the backend's records cannot be read, the reminders whose
     permission the host itself reports as not granted are still cancelled,
     and the read's error is thrown after.
