@@ -1360,7 +1360,11 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         && evaluated.decision.status === 'allowed'
         && evaluated.decision.content.source === 'catalog'
       ) {
-        evaluated = evaluate(await copyFor(recipient, send.request, send.origin, new Map()));
+        const resolvedCopy = await copyFor(recipient, send.request, send.origin, new Map());
+        // The resolver took time: the gate decides again at the time of the
+        // call, so a window that opened meanwhile (the night window) holds it.
+        at = nowMs();
+        evaluated = evaluate(resolvedCopy);
       }
     } catch (error) {
       if (error instanceof NotificationSendInputError) {

@@ -631,4 +631,36 @@ function recording(answer: (input: NotificationCopyResolverInput) => ReturnType<
   );
 }
 
+// The gate decides again at the time of the call once the resolver answered: a slow answer across 21:00 KST defers advertising.
+{
+  let calls = 0;
+  const slow = harness({
+    topics: [events],
+    deployment: kr,
+    start: '2026-10-19T11:59:58Z',
+    resolveCopy: (input) => {
+      calls += 1;
+      if (calls === 2) {
+        // The answer before the provider call arrives after 21:00 KST.
+        slow.set('2026-10-19T12:00:02Z');
+      }
+      return resolveCatalogNotificationCopy(input);
+    },
+  });
+  await slow.register('p-1');
+  await slow.service.recordConsent(session('p-1'), {
+    kind: 'advertising',
+    state: 'granted',
+    source: 'player',
+    textVersion: 'v1',
+  });
+  const outcome = await slow.service.deliver({
+    idempotencyKey: 'late',
+    player: 'p-1',
+    topic: events.id,
+  });
+  assert.equal(outcome.status, 'deferred');
+  assert.equal(slow.fcm.calls.length, 0);
+}
+
 console.info('Notifications copy tests passed.');
