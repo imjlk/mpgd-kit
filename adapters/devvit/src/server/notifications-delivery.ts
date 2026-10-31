@@ -391,7 +391,12 @@ export function createDevvitNotificationDeliveryProvider(
 
   return {
     id: devvitNotificationProviderId,
-    bulk: { maxRecipients: devvitNotificationEnqueueMaxRecipients, perRecipientOutcomes: true },
+    bulk: {
+      maxRecipients: devvitNotificationEnqueueMaxRecipients,
+      perRecipientOutcomes: true,
+      // One title and body an `enqueue`: the service calls once per text, each just after its gate check.
+      callKey: (request) => JSON.stringify([request.content.title ?? '', request.content.body ?? '']),
+    },
     /**
      * One `enqueue` per distinct title and body (Devvit takes one title and
      * body a call, with a link per recipient), each user once a call. Each

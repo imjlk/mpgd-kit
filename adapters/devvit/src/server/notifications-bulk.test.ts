@@ -79,7 +79,10 @@ const answerShape = (answer: { readonly status: string } & Record<string, unknow
 describe('the Devvit provider bulk path', () => {
   it('declares 1,000 recipients a call with per-recipient answers', () => {
     const provider = createDevvitNotificationDeliveryProvider({ notifications: fakePlugin().plugin });
-    expect(provider.bulk).toEqual({ maxRecipients: 1_000, perRecipientOutcomes: true });
+    expect(provider.bulk).toMatchObject({ maxRecipients: 1_000, perRecipientOutcomes: true });
+    // One call group per title and body.
+    expect(provider.bulk?.callKey?.(request('t2_a'))).toBe(provider.bulk?.callKey?.(request('t2_b')));
+    expect(provider.bulk?.callKey?.(request('t2_a'))).not.toBe(provider.bulk?.callKey?.(request('t2_a', 'Other.')));
     expect(devvitNotificationEnqueueMaxRecipients).toBe(1_000);
   });
 

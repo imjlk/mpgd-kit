@@ -655,12 +655,14 @@ assert.equal(defaultAitFunctionalMessageTimeoutMs, defaultAppsInTossPartnerApiTi
     });
   const { mtls, calls } = fakeMtls([bulkSuccess(3)]);
   const provider = createAitFunctionalMessageDeliveryProvider({ mtls, recipientKey: 'toss-user' });
-  assert.deepEqual(provider.bulk, {
+  const { callKey, ...capability } = provider.bulk;
+  assert.deepEqual(capability, {
     maxRecipients: 2_500,
     minRecipients: 50,
     perRecipientOutcomes: false,
     holdWindow: { start: '20:55', end: '08:00', timeZone: 'Asia/Seoul' },
   });
+  assert.equal(callKey(bulkRequest('1')), 'energy-template');
   const answers = await provider.sendBatch([
     bulkRequest('101'),
     bulkRequest('9007199254740993'),

@@ -2736,10 +2736,14 @@ export function createNotificationService(input: CreateNotificationServiceInput)
   };
 
   /**
-   * The flush of one batch: one `sendBatch` call per `maxRecipients`, or one
-   * `send` per request below `minRecipients` and inside the provider's hold
-   * window. Every answer is one of the five kinds; a missing or broken one,
-   * or a call that threw, is `ambiguous` for its requests.
+   * The flush of one batch: the requests in the provider's call groups
+   * (`bulk.callKey`, one title and body a call on Devvit), one `sendBatch`
+   * per group and `maxRecipients`, or one `send` per request below
+   * `minRecipients` and inside the provider's hold window. The gate runs
+   * again for each request as its call starts, and no call starts past the
+   * claims' deadline: a request the gate now refuses, or one past the
+   * deadline, answers `rate-limited` (nothing sent; it is replayed). Every answer is one of the five kinds; a
+   * missing or broken one, or a call that threw, is `ambiguous`.
    */
   const flushBulk = async (
     provider: RegisteredNotificationProvider,
@@ -2747,102 +2751,132 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     calls: { batch: number; single: number },
     // Milliseconds from now in which the last provider call may start, so every claim outlives the calls.
     startWithinMs: number,
-    // Each request as the gate allows it at a later instant (undefined: no longer), for calls made one by one.
+    // Each request as the gate allows it at a later instant (undefined: no longer).
     regates: readonly ((when: number) => NotificationRemoteDeliveryRequest | undefined)[] = [],
   ): Promise<NotificationRemoteDeliveryAnswer[]> => {
     const capability = provider.delivery.bulk;
     const startedAt = nowMs();
     const sendBatch = provider.delivery.sendBatch;
+    const answers: NotificationRemoteDeliveryAnswer[] = requests.map(() => ({
+      status: 'ambiguous',
+    }));
+    const notSent: NotificationRemoteDeliveryAnswer = {
+      status: 'rate-limited',
+      retryAfterSeconds: 1,
+    };
+    /** The request as the gate allows it at `at`, or `undefined`. */
+    const current = (index: number, at: number): NotificationRemoteDeliveryRequest | undefined => {
+      const regate = regates[index];
+      try {
+        return regate === undefined ? requests[index] : regate(at);
+      } catch {
+        return undefined;
+      }
+    };
+    const singles = async (indexes: readonly number[]): Promise<void> => {
+      const limiter = createNotificationLimiter(bulkConcurrency);
+      await Promise.all(
+        indexes.map(async (index) => {
+          await limiter.acquire();
+          try {
+            const at = nowMs();
+            const request = at - startedAt >= startWithinMs ? undefined : current(index, at);
+            if (request === undefined) {
+              answers[index] = notSent;
+              return;
+            }
+            calls.single += 1;
+            answers[index] = await sendOne(provider, request);
+          } finally {
+            limiter.release();
+          }
+        }),
+      );
+    };
     if (
       capability === undefined
       || sendBatch === undefined
       || requests.length < (capability.minRecipients ?? 2)
       || isInsideNotificationHoldWindow(capability.holdWindow, nowMs())
     ) {
-      // Fewer than the minimum after the gate, or the hold window opened
-      // while the batch gathered: one call each, a few at a time, none
-      // started past the claims' deadline (those wait and are replayed).
-      const limiter = createNotificationLimiter(bulkConcurrency);
-      return Promise.all(
-        requests.map(async (request, index): Promise<NotificationRemoteDeliveryAnswer> => {
-          await limiter.acquire();
-          try {
-            const at = nowMs();
-            if (at - startedAt >= startWithinMs) {
-              return { status: 'rate-limited', retryAfterSeconds: 1 };
-            }
-            // The gate again now that this call starts: a window may have opened while it queued.
-            const regate = regates[index];
-            let current: NotificationRemoteDeliveryRequest | undefined = request;
-            try {
-              current = regate === undefined ? request : regate(at);
-            } catch {
-              current = undefined;
-            }
-            if (current === undefined) {
-              return { status: 'rate-limited', retryAfterSeconds: 1 };
-            }
-            calls.single += 1;
-            return await sendOne(provider, current);
-          } finally {
-            limiter.release();
-          }
-        }),
-      );
+      // Fewer than the minimum after the gate, or the hold window opened while the batch gathered.
+      await singles(requests.map((_, index) => index));
+      return answers;
     }
-    const answers: NotificationRemoteDeliveryAnswer[] = [];
-    for (let start = 0; start < requests.length; start += capability.maxRecipients) {
-      const slice = requests.slice(start, start + capability.maxRecipients);
-      const left = startWithinMs - (nowMs() - startedAt);
-      if (left <= 0) {
-        // Nothing was sent to them: they wait a moment and are replayed.
-        answers.push(
-          ...slice.map((): NotificationRemoteDeliveryAnswer => ({ status: 'rate-limited', retryAfterSeconds: 1 })),
-        );
-        continue;
-      }
-      calls.batch += 1;
-      let raw: unknown;
+    const groups = new Map<string, number[]>();
+    requests.forEach((request, index) => {
+      let key = '';
       try {
-        raw = await sendBatch.call(provider.delivery, slice, { startWithinMs: left });
-      } catch (error) {
-        // The provider may have sent any of them: one rule for every failure it cannot prove.
-        report(
-          error,
-          'provider.sendBatch',
-          { sendKey: slice[0]?.sendKey ?? '', provider: provider.entry.provider },
-          true,
-        );
-        answers.push(
-          ...slice.map((): NotificationRemoteDeliveryAnswer => ({ status: 'ambiguous' })),
-        );
-        continue;
+        key = capability.callKey?.(request) ?? '';
+      } catch {
+        key = '';
       }
-      const list = Array.isArray(raw) ? raw as readonly unknown[] : [];
-      if (list.length !== slice.length) {
-        report(
-          new TypeError(
-            `The provider answered ${list.length} answers for a batch of ${slice.length}.`,
-          ),
-          'provider.sendBatch',
-          { sendKey: slice[0]?.sendKey ?? '', provider: provider.entry.provider },
-        );
-      }
-      slice.forEach((request, index) => {
-        const known = list.length === slice.length ? deliveryAnswerOf(list[index]) : undefined;
-        if (known === undefined && list.length === slice.length) {
-          report(
-            new TypeError('The provider answered no known delivery answer.'),
-            'provider.sendBatch',
-            {
-              sendKey: request.sendKey,
-              provider: provider.entry.provider,
-              rowKey: request.idempotencyKey,
-            },
-          );
+      const group = groups.get(key) ?? [];
+      group.push(index);
+      groups.set(key, group);
+    });
+    for (const group of groups.values()) {
+      for (let start = 0; start < group.length; start += capability.maxRecipients) {
+        const at = nowMs();
+        const left = startWithinMs - (at - startedAt);
+        const sending: { readonly index: number; readonly request: NotificationRemoteDeliveryRequest }[] = [];
+        for (const index of group.slice(start, start + capability.maxRecipients)) {
+          const request = left > 0 ? current(index, at) : undefined;
+          if (request === undefined) {
+            answers[index] = notSent;
+          } else {
+            sending.push({ index, request });
+          }
         }
-        answers.push(known ?? { status: 'ambiguous' });
-      });
+        if (sending.length === 0) {
+          continue;
+        }
+        if (sending.length < (capability.minRecipients ?? 2)) {
+          await singles(sending.map((entry) => entry.index));
+          continue;
+        }
+        const slice = sending.map((entry) => entry.request);
+        calls.batch += 1;
+        let raw: unknown;
+        try {
+          raw = await sendBatch.call(provider.delivery, slice, { startWithinMs: left });
+        } catch (error) {
+          // The provider may have sent any of them: one rule for every failure it cannot prove.
+          report(
+            error,
+            'provider.sendBatch',
+            { sendKey: slice[0]?.sendKey ?? '', provider: provider.entry.provider },
+            true,
+          );
+          continue;
+        }
+        const list = Array.isArray(raw) ? raw as readonly unknown[] : [];
+        if (list.length !== slice.length) {
+          report(
+            new TypeError(
+              `The provider answered ${list.length} answers for a batch of ${slice.length}.`,
+            ),
+            'provider.sendBatch',
+            { sendKey: slice[0]?.sendKey ?? '', provider: provider.entry.provider },
+          );
+          continue;
+        }
+        sending.forEach(({ index, request }, position) => {
+          const known = deliveryAnswerOf(list[position]);
+          if (known === undefined) {
+            report(
+              new TypeError('The provider answered no known delivery answer.'),
+              'provider.sendBatch',
+              {
+                sendKey: request.sendKey,
+                provider: provider.entry.provider,
+                rowKey: request.idempotencyKey,
+              },
+            );
+          }
+          answers[index] = known ?? { status: 'ambiguous' };
+        });
+      }
     }
     return answers;
   };

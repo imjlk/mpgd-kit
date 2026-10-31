@@ -524,6 +524,48 @@ const statuses = (result: NotificationBulkDeliveryResult) =>
   );
 }
 
+// One provider call per call group, each just after its own gate check: a window that opens between them holds the later group.
+{
+  const fake = bulkProvider(
+    { maxRecipients: 10, minRecipients: 2, perRecipientOutcomes: true, callKey: (request) => request.content.body ?? '' },
+    (requests) => {
+      // The first group's call takes a minute, into the quiet hours.
+      groupClock.current?.advance(60);
+      return requests.map(() => ({ status: 'accepted' }));
+    },
+  );
+  const groupClock: { current?: ReturnType<typeof clock> } = {};
+  const { service, store, time } = await setup({
+    provider: fake.provider,
+    players: players(4),
+    topic: { ...topic, quietHours: { start: '03:01', end: '04:00' } },
+  });
+  groupClock.current = time;
+  for (const [player, locale] of [
+    ['p1', 'ko'],
+    ['p2', 'en'],
+    ['p3', 'ko'],
+    ['p4', 'en'],
+  ] as const) {
+    await store.putPlatformRegistration({
+      player,
+      provider: 'platform',
+      locale,
+      timeZone: 'UTC',
+      registeredAt: time.now(),
+    });
+  }
+  const result = await service.deliverBulk(bulkInput('event-19', players(4)));
+  assert.deepEqual(
+    fake.batches.map((batch) => batch.map((request) => request.idempotencyKey)),
+    [['event-19:p1', 'event-19:p3']],
+  );
+  assert.deepEqual(
+    statuses(result).map((row) => row[2] ?? row[1]),
+    ['delivered', 'provider-rate-limited', 'delivered', 'provider-rate-limited'],
+  );
+}
+
 // A device provider's deliveries count each device against the call's attempts.
 {
   const fcmLike: NotificationDeliveryProviderEntry = {

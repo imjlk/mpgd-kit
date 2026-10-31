@@ -154,6 +154,14 @@ export interface NotificationRemoteBulkCapability {
    * 08:00). The service sends one recipient per call inside it, so the
    * gate's timing stands.
    */
+  /**
+   * The provider's call group of a request: requests with different keys
+   * never share a call (Devvit takes one title and body a call). The
+   * service makes one `sendBatch` per group and runs the gate again for
+   * each request just before its group's call, so a later call never sends
+   * on a stale gate check. One group when absent.
+   */
+  callKey?(request: NotificationRemoteDeliveryRequest): string;
   readonly holdWindow?: {
     /** `HH:MM`, inclusive. */
     readonly start: string;

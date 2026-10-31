@@ -3034,7 +3034,10 @@ announcements and event pushes.
     a refused recipient spends neither. Each device of a device provider is
     one attempt and one of the `rate`: a device past either stays queued,
     and the scheduler sends it at its pace. A single call that falls back
-    to one `send` per recipient runs the gate again as each call starts.
+    to one `send` per recipient runs the gate again as each call starts,
+    and so does each of a provider's call groups (`bulk.callKey`: one
+    title and body a call on Devvit, one template a call on Apps in Toss),
+    one `sendBatch` per group.
   - **Answers.** Per recipient: `answered` with the outcome `deliver` would
     give, `not-attempted` (`time-budget`, `count-budget`, or
     `provider-rate`: the registry `rate` has no room, as the scheduler's

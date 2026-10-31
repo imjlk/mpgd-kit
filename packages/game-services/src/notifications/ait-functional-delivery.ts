@@ -211,6 +211,7 @@ export interface AitFunctionalMessageDeliveryProvider {
     readonly maxRecipients: number;
     readonly minRecipients: number;
     readonly perRecipientOutcomes: false;
+    callKey(request: AitFunctionalMessageDeliveryRequest): string;
     readonly holdWindow: { readonly start: string; readonly end: string; readonly timeZone: string };
   };
   /**
@@ -417,6 +418,11 @@ export function createAitFunctionalMessageDeliveryProvider(
       maxRecipients: aitFunctionalBulkMessageMaxRecipients,
       minRecipients: aitFunctionalBulkMessageMinRecipients,
       perRecipientOutcomes: false,
+      // One template set code a `send-bulk-message`.
+      callKey: (request: AitFunctionalMessageDeliveryRequest) => {
+        const code = request.topic.mapping?.['templateSetCode'];
+        return typeof code === 'string' ? code : '';
+      },
       // Five minutes early, so a call still in flight never lands in the hold.
       holdWindow: { start: '20:55', end: '08:00', timeZone: 'Asia/Seoul' },
     },
