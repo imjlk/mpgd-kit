@@ -117,7 +117,7 @@ headers. `resolveURL` does not affect ordinary `scene.load` URL settings. Pack U
 page-relative by default; they do not inherit `scene.load.baseURL/path/prefix`.
 
 Storage providers and quota/eviction policy remain application-owned; the
-optional `/pack-cache` port and `/prefetch` scheduler are described below.
+optional `/pack-cache` port, `/prefetch` scheduler and `/residency` budget are described below.
 Deployment uses CLI tooling rather than an upload service in the runtime API. `snapshot()` reports owned textures and width × height
 × 4 estimates, excluding engine overhead, GPU format, mipmaps and transient
 buffers. Games own catalog rollout, bundle membership and memory budgets.
@@ -541,6 +541,119 @@ shared dependencies count once. Admission evicts the oldest warm leases; a pack
 larger than the retained-byte limit is released without evicting useful warm packs.
 The limit bounds retained known payload after preparation, not peak/GPU/process
 memory. Results distinguish `warmed`, `cancelled`, `evicted` and `failed`.
+
+## Resident memory budget (residency)
+
+`/packs` leases are scene-bound and release eagerly. Games that switch between
+screens with large fixed-key atlases (character sets, UI themes, data tables) often
+want the opposite: keep recently used groups warm across scene changes, but cap
+decoded memory. A single 2048 × 2048 RGBA texture is 16 MiB once decoded, so a few
+of them can push low-memory mobile WebViews into reloads.
+`@mpgd/phaser-assets/residency` is an opt-in, game-level layer for that:
+
+```ts
+import { createPhaserResidency, definePhaserResidencyGroups } from '@mpgd/phaser-assets/residency';
+
+const groups = definePhaserResidencyGroups([
+  { id: 'ui', assets: [{ kind: 'atlas', key: 'ui', textureUrl: 'ui.webp', atlasUrl: 'ui.json' }] },
+  {
+    id: 'forest',
+    dependsOn: ['ui'],
+    estimateBytes: 2048 * 2048 * 4,
+    assets: [
+      { kind: 'atlas', key: 'forest', textureUrl: 'forest.webp', atlasUrl: 'forest.json' },
+      { kind: 'json', key: 'forest-waves', url: 'forest-waves.json' },
+    ],
+  },
+  {
+    id: 'desert',
+    dependsOn: ['ui'],
+    estimateBytes: 2048 * 2048 * 4,
+    assets: [{ kind: 'atlas', key: 'desert', textureUrl: 'desert.webp', atlasUrl: 'desert.json' }],
+  },
+]);
+
+const residency = createPhaserResidency(game, groups, {
+  budgetBytes: 64 * 1024 * 1024,
+  onEvict: (_groupId, keys) => keys.forEach((key) => game.anims.remove(`${key}-walk`)),
+});
+
+// In a scene: claim what it draws. The claim ends when the scene shuts down.
+await residency.claimForScene(this, ['forest']);
+residency.prefetch(['desert']); // Only into free budget (with its dependencies); never evicts.
+
+// Runtime-generated textures can share a group's lifetime.
+const detach = residency.attach('forest', { textureKey: 'forest-tinted', dispose: () => {} });
+```
+
+Rules:
+
+- **Ownership.** `claim(owner, ids)` replaces the owner's previous claim and adds
+  `dependsOn` groups. Owned and loading groups are never evicted, even when owned
+  bytes exceed the budget. `release(owner)` keeps groups cached.
+- **Keep-warm and eviction.** Unowned resident groups stay until room is needed,
+  then go least-recently-used first.
+- **Prefetch.** `prefetch()` admits each requested group together with its missing
+  dependencies, by estimate, into free budget only, or not at all; it never evicts.
+  If a prefetched group is still unclaimed when it loads and no longer fits next to
+  what is resident or loading (it measured above its estimate, for example the
+  default 0, or a claim took the room meanwhile), it is unloaded again and the warm
+  groups stay. Only the files that prefetch loaded are removed; assets that were
+  already in the caches stay where they were. Claiming a group while it is still
+  prefetching turns it into a normal claimed load.
+- **Make room before load.** A claim evicts against the groups' `estimateBytes`
+  before queueing files, so swapping screens does not hold old and new sets at once.
+  A group without `estimateBytes` counts as 0 bytes until it loads, so no room is made
+  for it and its load can overlap old unowned groups; set `estimateBytes` on groups
+  that replace large sets. Measured bytes replace the estimate after load.
+- **Measurement.** Measured bytes are texture sources at width × height × 4, decoded
+  audio PCM when the cache exposes an `AudioBuffer`, and attachment bytes. JSON and
+  binary count as 0. Like `/packs`, this is an estimate, not a GPU or process bound.
+  Attachment `bytes` must be non-negative safe integers; `attach()` and `refresh()`
+  throw a `RangeError` otherwise.
+- **Unplayable audio.** Phaser's `load.audio` queues nothing when sound is disabled
+  (`audio.noAudio`, or neither Web Audio nor HTML5 audio is available) or when no URL
+  has a type the device can play, so such a file could never arrive. Residency
+  mirrors that check: these audio assets count as satisfied with 0 bytes, the rest of
+  the group still becomes resident, and the snapshot lists their keys in each group's
+  `skippedAudio`. A missing sound is a degradation games already handle on these
+  devices (a muted game must still start), while failing the whole group would also
+  block its textures and data on every claim. Provide a playable fallback URL (for
+  example `.m4a` next to `.ogg`) when the sound matters.
+- **Host scene.** Loading runs on a hidden host scene (`hostSceneKey`, default
+  `__mpgdResidency`), so claims survive scene changes. Do not stop that scene. A second
+  instance on the same game needs its own `hostSceneKey`. Assets already in the texture
+  or JSON caches are adopted instead of loaded again. Asset keys are fixed manifest
+  keys and must be unique across groups; the host loader clears the game's
+  `loader.prefix` so cache keys match them. URLs still use the game's loader `baseURL`
+  and `path`. If something else removes a resident group's asset, `isResident`
+  reports false and the next claim reloads the group, keeping its other owners;
+  `prefetch` skips a group whose closure contains such a group.
+- **Failure.** If one file fails, its group's claim rejects, the files that attempt
+  loaded are removed (assets already cached before it stay), and the next claim
+  retries. A retry made while that loader batch is still running queues its files
+  after the batch completes, so it does not collide with the failed attempt's files
+  still in flight. Aborting a claim's `signal` drops that claim (if it is still the
+  owner's latest); the load itself continues and stays cached. A claim whose signal
+  is already aborted rejects with the signal's reason and changes nothing: no owner,
+  eviction or load.
+- **Re-entrancy.** Claims and prefetches made inside loader callbacks, such as
+  `onEvict` during another group's load, do not fail when that batch completes;
+  their files are queued right after it, in the loader's next batch. Claiming the
+  group that `onEvict` is evicting reloads it after the removal finishes.
+- **Eviction cleanup.** `onEvict` runs before removal. Then attachments are
+  disposed, their `textureKey` is removed, and textures, JSON and binary caches,
+  sounds and audio are unloaded. Errors are collected by `takeCleanupErrors()`.
+- **Re-measuring.** `refresh()` re-measures (for attachments with a `bytes()`
+  function), and `setBudget()` trims immediately.
+- **Dispose.** `dispose()` rejects pending claims, unloads every tracked group and
+  removes the host scene (also when it is disposed before the scene manager has
+  started that scene) and the release hooks of consumer scenes. Afterwards `claim()`
+  and `claimForScene()` return a rejected promise (and register no scene hooks),
+  while the synchronous `prefetch()` and `attach()` throw.
+
+The engine-free policy (refcount, byte budget, LRU, prefetch admission) is
+exported from `@mpgd/phaser-assets/residency-policy` for other loaders or engines.
 
 ## Render density and backing-pixel budgets
 
