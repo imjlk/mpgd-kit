@@ -1,5 +1,15 @@
 # @mpgd/capacitor-storekit
 
+## 0.7.2 — 2026-11-01
+
+### Changed
+
+- [a42e13d6](https://github.com/imjlk/mpgd-kit/commit/a42e13d60af5a48213bc8ced63153ea47987335f) Bump the pinned OpenIAP Apple core to `4.0.7` (from `4.0.5`; the SwiftPM pin stays exact). Upstream, the core no longer finishes inactive (expired, revoked, or upgraded) auto-renewable subscription transactions on its own, so it no longer finishes any transaction unless asked (the plugin never enables its automatic finish). The plugin sells only consumables and non-consumables, so purchases, recovery, revocation events, and the finish gate behave as before. A game rebuilding its iOS app resolves the new tag through SwiftPM on the next `cap sync ios`. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/adapter-capacitor@0.19.2, @mpgd/bridge@0.19.0, @mpgd/game-services@0.34.0, @mpgd/platform@0.35.1
+
 ## 0.7.1 — 2026-10-31
 
 ### Patch changes

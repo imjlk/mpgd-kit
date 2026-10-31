@@ -1,5 +1,17 @@
 # @mpgd/bridge
 
+## 0.19.0 — 2026-11-01
+
+### Added
+
+- [aef7e004](https://github.com/imjlk/mpgd-kit/commit/aef7e004aeae912979ae34ba56d47efbf5a26578) The shared notifications bridge handlers (`createNotificationsV2BridgeHandler`, `createNotificationsBackendBridgeHandler`) read a thrown value defensively. A thrown `Proxy` whose `getPrototypeOf` trap throws no longer rejects the request when `onError` is set: a class check that throws counts as no match. Each field of a thrown value is read once, and a field whose read throws counts as missing, so a readable notifications code and retryable flag still cross when the message getter throws, instead of falling back to a retryable `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`. A value whose `toString` throws crosses as `<method> failed: a failure that cannot be read`. An `unexpectedFailureMessage` callback that throws, or answers a value that is not a string, is reported through `onError`, and the failure crosses as `<method> failed.` with its code and retryable flag.
+  
+  The main entry exports the helpers it reads them with, so adapters share one implementation: `readThrownField(value, key)` (a field, or `undefined` when the read throws), `isThrownInstance(value, Class)` (`false` when the check throws), and `thrownMessage(value)` (the `message`, else the text, else `a failure that cannot be read`). None of them throws. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/platform@0.35.1
+
 ## 0.18.1 — 2026-10-30
 
 ### Patch changes
