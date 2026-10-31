@@ -156,6 +156,25 @@ describe('the Devvit provider bulk path', () => {
     expect(reports).toEqual(['event:t2_b rate-limited', 'event:t2_c rejected']);
   });
 
+  it('classifies unnamed errors only when the failures account for every recipient', async () => {
+    const { plugin } = fakePlugin({
+      answers: [
+        // One unnamed link error for a call of three: it cannot speak for all three.
+        () => ({ successCount: 0, failureCount: 1, errors: [{ userId: undefined, message: 'invalid link t3_x' }] }),
+        () => ({ successCount: 0, failureCount: 3, errors: [{ userId: undefined, message: 'invalid link t3_x' }] }),
+      ],
+    });
+    const provider = createDevvitNotificationDeliveryProvider({ notifications: plugin });
+    const partial = await provider.sendBatch?.([request('t2_a'), request('t2_b'), request('t2_c')]);
+    expect(partial?.map((answer) => answerShape(answer))).toEqual(
+      Array.from({ length: 3 }, () => ['ambiguous', devvitNotificationProviderCodes.enqueueUnclassified, undefined]),
+    );
+    const complete = await provider.sendBatch?.([request('t2_a'), request('t2_b'), request('t2_c')]);
+    expect(complete?.map((answer) => answerShape(answer))).toEqual(
+      Array.from({ length: 3 }, () => ['rejected', 'configuration', undefined]),
+    );
+  });
+
   it('answers a partial count over unnamed users as unattributed, never accepted', async () => {
     const { plugin } = fakePlugin({
       answers: [() => ({ successCount: 2, failureCount: 1, errors: [{ userId: undefined, message: 'internal' }] })],

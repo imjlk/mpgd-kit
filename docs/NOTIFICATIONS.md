@@ -389,8 +389,9 @@ const result = await service.deliverBulk({
 - **Provider calls are shared.** Apps in Toss sends 50 to 2,500 recipients
   in one `send-bulk-message` call, and Devvit up to 1,000 in one `enqueue`
   per distinct title and body. Fewer than 50 recipients on Apps in Toss, or
-  a call between 21:00 and 08:00 Seoul time (when Apps in Toss would hold a
-  bulk message until 08:00), go one `send-message` call per player. FCM has
+  a call between 20:55 and 08:00 Seoul time (Apps in Toss holds a bulk
+  message from 21:00 to 08:00, and the kit starts five minutes early), go
+  one `send-message` call per player. FCM has
   no bulk path and sends one message per device.
 - **Retries are safe.** The same call again answers the players already
   sent from the ledger and sends only the rest. Players a call did not

@@ -608,7 +608,9 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   sends one by one otherwise. With account-deletion tombstones bound
   (another query per new send and per delivery record) the defaults are
   45 deliveries and 50 keys, so Apps in Toss sends one by one (raising
-  them needs the ledger's D1 queries batched, a follow-up). A large audience therefore takes several calls on the
+  them needs the ledger's D1 queries batched, a follow-up). On D1 these
+  defaults are also the ceiling: a larger `MPGD_NOTIFICATIONS_BULK_RECIPIENTS`
+  is lowered to them. A large audience therefore takes several calls on the
   Worker: bulk sends cut provider calls there, not D1 queries. It runs
   inline, not through the queue.
 - **Scheduler.** Each cron run fires the due server reminders as sends

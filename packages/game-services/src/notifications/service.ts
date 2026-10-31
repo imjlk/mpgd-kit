@@ -728,8 +728,9 @@ export function createNotificationService(input: CreateNotificationServiceInput)
    * (a host template or a mapping's own text asks no resolver). It runs
    * when the first recipient needs a send (`ensureCopies` in `deliverBulk`),
    * so a retry whose recipients were all sent never asks the resolver. A
-   * resolver that throws fails every recipient still owed a send,
-   * retryable, before its key is made.
+   * resolver that throws here is reported and caches nothing: each locale
+   * group is then asked when a recipient the gate allows needs it, and a
+   * failure there fails that group's recipients, retryable.
    */
   const primeBulkCopies = async (
     provider: RegisteredNotificationProvider,
@@ -762,10 +763,12 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         locales: wanted,
       });
     } catch (error) {
-      if (error instanceof NotificationError) {
-        throw error;
-      }
-      throw new NotificationCopyUnavailableError(topic.id, { cause: error });
+      // The up-front answers are an optimization: a failure caches nothing,
+      // so each locale group is asked again only when a recipient the gate
+      // allows needs it (`copyFor`), and a locale of refused recipients never
+      // fails the others.
+      report(error, 'copy.resolve.bulk', { sendKey: request.idempotencyKey, provider: id });
+      return;
     }
     for (const locale of wanted) {
       cache.set(
@@ -2019,6 +2022,13 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         budgets.set(provider, left - 1);
         return left > 0;
       },
+      /** Gives back one `take` that made no delivery after all. */
+      refund(provider: string): void {
+        const left = budgets.get(provider);
+        if (left !== undefined) {
+          budgets.set(provider, left + 1);
+        }
+      },
     };
   };
 
@@ -3059,6 +3069,12 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         changedAt: formatNotificationInstant(at),
       };
       if (!await store.updateSend({ key, version, send: stored })) {
+        // Another caller took the key over: this call delivers nothing for it,
+        // so the attempt and the provider's rate it reserved go back.
+        if (allowed.length > 0) {
+          work.left += 1;
+          pace.refund(provider);
+        }
         return { done: { outcome: { status: 'in-flight' } } };
       }
       // The first allowed row was counted above; each further device is one
@@ -3468,6 +3484,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         paced = taken.catch(() => undefined);
         return taken;
       },
+      refund: (provider) => budgets.refund(provider),
     };
     const calls = { batch: 0, single: 0 };
     // One copy answer per locale group for the whole call, shared by

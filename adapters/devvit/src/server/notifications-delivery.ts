@@ -405,8 +405,8 @@ export function createDevvitNotificationDeliveryProvider(
      * - the recipients no error names are `accepted` only when
      *   `successCount` equals their number. With `successCount` 0 none of
      *   them was queued, and the errors that name no user decide as for
-     *   `send` when they agree (else `ambiguous`, replayed: nothing was
-     *   queued). Any other count means some were queued and some not,
+     *   `send` when they agree and `failureCount` counts every recipient of
+     *   the call (else `ambiguous`, replayed: nothing was queued). Any other count means some were queued and some not,
      *   without saying which: `ambiguous` with `unattributed` (code
      *   `DEVVIT_ENQUEUE_PARTIAL`), not replayed, since `enqueue` takes no
      *   idempotency key and a replay would notify the queued ones again.
@@ -493,8 +493,18 @@ export function createDevvitNotificationDeliveryProvider(
           const messages = unnamed.map((error) => (typeof error?.message === 'string' ? error.message : ''));
           const kinds = new Set(messages.map((message) => fallbackOf(message, false)));
           const failed = typeof response?.failureCount === 'number' && response.failureCount > call.members.length - rest.length;
+          // Unnamed errors speak for every unnamed recipient only when Devvit
+          // counted a failure for each recipient of the call.
+          const accounted = typeof response?.failureCount === 'number' && response.failureCount >= call.members.length;
           for (const member of rest) {
-            if (messages.length > 0) {
+            if (messages.length > 0 && !accounted) {
+              answers[member.index] = report(
+                keyOf(member.index),
+                'answer',
+                `${messages[0] ?? ''} (failureCount ${String(response?.failureCount)} for ${call.members.length} recipients)`,
+                { status: 'ambiguous', providerCode: devvitNotificationProviderCodes.enqueueUnclassified },
+              );
+            } else if (messages.length > 0) {
               // Errors that agree decide for every unnamed recipient; errors that differ prove nothing for any one.
               answers[member.index] = failure(
                 keyOf(member.index),

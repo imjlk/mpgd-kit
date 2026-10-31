@@ -215,7 +215,12 @@ export function parseNotificationBulkRequest(raw: unknown): ParsedNotificationBu
       throw invalid(`Invalid bulk send: recipients[${index}].player: a player is named once.`);
     }
     players.add(player);
-    keys.push(notificationBulkRecipientKey(raw.idempotencyKey, player));
+    try {
+      keys.push(notificationBulkRecipientKey(raw.idempotencyKey, player));
+    } catch {
+      // `encodeURIComponent` refuses a lone surrogate, which no key may hold.
+      throw invalid(`Invalid bulk send: recipients[${index}].player: holds a lone surrogate.`);
+    }
   }
   return { input: raw as unknown as NotificationBulkDeliverInput, keys };
 }

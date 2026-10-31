@@ -169,7 +169,8 @@ export interface GameServicesNotificationsEnv {
    * recipients read (scaled with it): a recipient costs about 7 D1 queries
    * to plan and an attempted delivery about 11 more. With account-deletion
    * tombstones bound, which add a query to each new send and delivery
-   * record, 45 and 50. Either way a call stays under
+   * record, 45 and 50. On D1 these are also the ceiling: a larger value
+   * is lowered to them. Either way a call stays under
    * D1's 1,000 queries per Worker invocation (Workers
    * Paid, https://developers.cloudflare.com/d1/platform/limits/, checked
    * 2026-11-01). Raise it only with a store that is not bound by that limit.
@@ -930,20 +931,36 @@ export async function deliverWorkerNotificationBulk(
   env: GameServicesNotificationsEnv,
   input: unknown,
 ): Promise<NotificationBulkDeliveryResult> {
+  return readyService(env).deliverBulk(input, workerNotificationBulkLimits(env));
+}
+
+/**
+ * The bounds of one `deliverNotificationBulk` call. On D1 they keep a call
+ * under D1's 1,000 queries per invocation: 50 deliveries and 60 keys, or 45
+ * and 50 with account-deletion tombstones bound (a query more per new send
+ * and per delivery record), and `MPGD_NOTIFICATIONS_BULK_RECIPIENTS` may
+ * lower them but not raise them past that ceiling. Another store takes the
+ * setting as it is.
+ */
+export function workerNotificationBulkLimits(
+  env: GameServicesNotificationsEnv,
+): { readonly maxRecipients: number; readonly maxLookups: number } {
   const declared = env.MPGD_NOTIFICATIONS_BULK_RECIPIENTS?.trim();
   const asked = declared === undefined || declared === '' ? Number.NaN : Number(declared);
-  const tombstones = resolveAccountDeletionTombstones(env) !== undefined;
+  const d1 = env.MPGD_STORE === 'd1';
+  const tombstones = d1 && resolveAccountDeletionTombstones(env) !== undefined;
   const attempts = tombstones
     ? defaultWorkerNotificationBulkRecipientsWithTombstones
     : defaultWorkerNotificationBulkRecipients;
   const reads = tombstones
     ? defaultWorkerNotificationBulkLookupsWithTombstones
     : defaultWorkerNotificationBulkLookups;
-  const maxRecipients = Number.isSafeInteger(asked) && asked >= 1 ? asked : attempts;
-  return readyService(env).deliverBulk(input, {
+  const wanted = Number.isSafeInteger(asked) && asked >= 1 ? asked : attempts;
+  const maxRecipients = d1 ? Math.min(wanted, attempts) : wanted;
+  return {
     maxRecipients,
     maxLookups: Math.max(maxRecipients, Math.ceil((reads * maxRecipients) / attempts)),
-  });
+  };
 }
 
 /**

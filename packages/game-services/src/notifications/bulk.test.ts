@@ -20,7 +20,11 @@ import type {
 } from './delivery-provider.js';
 import { createNotificationProviderRegistry } from './registry.js';
 import { createNotificationService } from './service.js';
-import { createInMemoryNotificationStore, type InMemoryNotificationStore } from './store.js';
+import {
+  createInMemoryNotificationStore,
+  type InMemoryNotificationStore,
+  type NotificationStore,
+} from './store.js';
 
 /**
  * Bulk sends (RFC open question 5, BK1) against fakes: every gate step runs
@@ -97,12 +101,13 @@ async function setup(options: {
   readonly resolve?: (player: string, time: ReturnType<typeof clock>) => Promise<string>;
   readonly topic?: NotificationTopicDeclaration;
   readonly resolveCopy?: NotificationCopyResolver;
+  readonly wrapStore?: (store: InMemoryNotificationStore) => NotificationStore;
 }) {
   const time = clock(options.start ?? '2026-11-01T03:00:00Z');
   const store = createInMemoryNotificationStore();
   const reports: string[] = [];
   const service = createNotificationService({
-    store,
+    store: options.wrapStore === undefined ? store : options.wrapStore(store),
     registry: createNotificationProviderRegistry([
       { entry: options.entry ?? entry, delivery: options.provider, targets: ['platform-target'] },
     ]),
@@ -794,6 +799,62 @@ const statuses = (result: NotificationBulkDeliveryResult) =>
   assert.equal(retried.summary.alreadyProcessed, 2);
 }
 
+// A recipient whose key another caller took over gives back its attempt and its provider rate.
+{
+  const fake = bulkProvider({ maxRecipients: 10, minRecipients: 2, perRecipientOutcomes: true });
+  let lost = false;
+  const { service } = await setup({
+    provider: fake.provider,
+    entry: { ...entry, rate: { count: 1, windowSeconds: 3_600 } },
+    players: players(2),
+    wrapStore: (inner) => ({
+      ...inner,
+      async updateSend(input) {
+        if (!lost && input.key === 'event-26:p1' && (input.send?.rows.length ?? 0) > 0) {
+          lost = true;
+          return false;
+        }
+        return inner.updateSend(input);
+      },
+    }),
+  });
+  // One recipient a batch, so p2 is planned after p1's key was lost.
+  const result = await service.deliverBulk(bulkInput('event-26', players(2), { batchSize: 1 }));
+  assert.deepEqual(
+    statuses(result).map((row) => row[1]),
+    ['in-flight', 'delivered'],
+  );
+}
+
+// A copy outage for a locale only refused recipients use never fails the allowed ones.
+{
+  const resolveCopy: NotificationCopyResolver = (input) => {
+    if (input.locale === 'fr') {
+      throw new Error('fr copy service down');
+    }
+    return { title: '이벤트', body: '{{event}} 시작!' };
+  };
+  const fake = bulkProvider({ maxRecipients: 10, minRecipients: 1, perRecipientOutcomes: true });
+  // p2 never granted delivery permission: the gate refuses it before any copy is needed.
+  const { service, reports } = await setup({
+    provider: fake.provider,
+    players: ['p1'],
+    resolveCopy,
+  });
+  const result = await service.deliverBulk({
+    ...bulkInput('event-27', []),
+    recipients: [
+      { player: 'p1', locale: 'ko' },
+      { player: 'p2', locale: 'fr' },
+    ],
+  });
+  assert.deepEqual(statuses(result), [
+    ['p1', 'delivered', undefined],
+    ['p2', 'suppressed', 'permission-denied'],
+  ]);
+  assert.ok(reports.some((report) => report.startsWith('copy.resolve.bulk: ')));
+}
+
 // A device provider's deliveries count each device against the call's attempts.
 {
   const fcmLike: NotificationDeliveryProviderEntry = {
@@ -873,6 +934,7 @@ const statuses = (result: NotificationBulkDeliveryResult) =>
   const { service } = await setup({ provider: fake.provider });
   for (const [input, pattern] of [
     [bulkInput('event-x', ['p1', 'p1']), /a player is named once/u],
+    [bulkInput('event-x', ['p1', 'p\uD800']), /recipients\[1\]\.player: holds a lone surrogate/u],
     [bulkInput('reminder:x', ['p1']), /reserved for the scheduler/u],
     [bulkInput('event-x', []), /expected 1 to 10000 recipients/u],
     [{ ...bulkInput('event-x', ['p1']), provider: 'fcm' }, /no notifications provider fcm/u],

@@ -262,6 +262,8 @@ const channelFields: Readonly<Record<AitFunctionalMessageChannel, string>> = {
   friendtalk: 'sentFriendtalk',
 };
 const maximumResponseBodyBytes = 256 * 1_024;
+/** A bulk answer lists up to 2,500 messages per channel. */
+const maximumBulkResponseBodyBytes = 4 * 1_024 * 1_024;
 /** The longest `reachedFailReason` the provider keeps; a longer one is cut to this. */
 const maximumFailReasonLength = 1_024;
 const maximumIdentifierLength = 2_048;
@@ -367,11 +369,19 @@ export function createAitFunctionalMessageDeliveryProvider(
       headers: {},
       body: { templateSetCode, contextList },
       timeoutMs,
+      // Per-channel lists of up to 2,500 messages each outgrow the single
+      // send's 256 KiB.
+      maxBodyBytes: maximumBulkResponseBodyBytes,
     });
     if (response.kind === 'failed') {
       return { status: 'ambiguous', providerCode: response.reason };
     }
     const { status, body } = response;
+    if (status >= 200 && status < 300 && body === undefined) {
+      // Taken, but its counts cannot be read: some or all may have been sent,
+      // and a replay would reach them again.
+      return { status: 'ambiguous', providerCode: 'BULK_UNREADABLE', unattributed: true };
+    }
     if (status >= 500 || status === 408 || status === 425) {
       return { status: 'ambiguous', ...providerCodeOf(body) };
     }
@@ -435,6 +445,11 @@ export function createAitFunctionalMessageDeliveryProvider(
       const answers: (AitFunctionalMessageAnswer | undefined)[] = requests.map(() => undefined);
       const groups = new Map<string, { readonly indexes: number[]; readonly contexts: Readonly<Record<string, unknown>>[] }>();
       requests.forEach((request, index) => {
+        if (request.signal?.aborted === true) {
+          // Aborted before its call: it joins none, and nothing is sent to it.
+          answers[index] = { status: 'not-sent' };
+          return;
+        }
         const templateSetCode = request.topic.mapping?.['templateSetCode'];
         const context = request.templateData ?? {};
         if (
@@ -643,6 +658,15 @@ function readBulkSuccess(success: unknown, recipients: number): AitFunctionalMes
     const listed = isRecord(detail) ? detail[channelFields[channel]] : undefined;
     return Math.max(isCount(counted) ? counted : 0, Array.isArray(listed) ? listed.length : 0);
   };
+  // A count and its list that disagree prove nothing about who was reached.
+  const disagree = (Object.keys(channelFields) as AitFunctionalMessageChannel[]).some((channel) => {
+    const counted = success[countFields[channel]];
+    const listed = isRecord(detail) ? detail[channelFields[channel]] : undefined;
+    return isCount(counted) && Array.isArray(listed) && listed.length !== counted;
+  });
+  if (disagree) {
+    return { status: 'ambiguous', providerCode: 'BULK_COUNTS_DISAGREE', unattributed: true };
+  }
   const channels = Object.fromEntries(
     channelNames.map((channel) => [
       channel,
@@ -714,6 +738,8 @@ async function post(input: {
   readonly body: Readonly<Record<string, unknown>>;
   readonly timeoutMs: number;
   readonly signal?: AbortSignal;
+  /** The largest body read; 256 KiB by default. */
+  readonly maxBodyBytes?: number;
 }): Promise<PartnerResponse> {
   // A function, so the check reads the signal at each call rather than once.
   const callerAborted = (): boolean => input.signal?.aborted === true;
@@ -741,7 +767,7 @@ async function post(input: {
       redirect: 'manual',
       signal: controller.signal,
     });
-    const text = await readBoundedText(response);
+    const text = await readBoundedText(response, input.maxBodyBytes ?? maximumResponseBodyBytes);
     let body: unknown;
     if (text !== undefined && text.length > 0) {
       try {
@@ -769,13 +795,13 @@ async function post(input: {
   }
 }
 
-/** The body as UTF-8 text, or `undefined` when it is larger than 256 KiB or not UTF-8. */
-async function readBoundedText(response: Response): Promise<string | undefined> {
+/** The body as UTF-8 text, or `undefined` when it is larger than `maxBytes` or not UTF-8. */
+async function readBoundedText(response: Response, maxBytes: number): Promise<string | undefined> {
   const declaredLength = response.headers.get('content-length');
   if (
     declaredLength !== null
     && /^\d+$/u.test(declaredLength)
-    && Number(declaredLength) > maximumResponseBodyBytes
+    && Number(declaredLength) > maxBytes
   ) {
     await response.body?.cancel().catch(() => {});
     return undefined;
@@ -793,7 +819,7 @@ async function readBoundedText(response: Response): Promise<string | undefined> 
         break;
       }
       length += chunk.value.byteLength;
-      if (length > maximumResponseBodyBytes) {
+      if (length > maxBytes) {
         await reader.cancel().catch(() => {});
         return undefined;
       }

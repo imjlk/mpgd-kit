@@ -23,6 +23,7 @@ import {
   notificationFailureCause,
   resolveWorkerNotifications,
   runScheduledNotifications,
+  workerNotificationBulkLimits,
 } from './notificationsHandler.js';
 
 // A service-account key generated for this run: no real Firebase credential.
@@ -1839,13 +1840,14 @@ try {
     recipients: Array.from({ length: 60 }, (_, index) => ({ player: `p-bulk-${index + 1}` })),
   };
   // Apps in Toss holds bulk messages from 21:00 to 08:00 in Seoul; from 20:55 the service sends one by one.
-  const held = isInsideNotificationHoldWindow(
-    { start: '20:55', end: '08:00', timeZone: 'Asia/Seoul' },
-    Date.now(),
-  );
+  // The provider's own choice decides what to expect; the clock samples around the call check it
+  // whenever both fall on the same side of the boundary.
+  const holdWindow = { start: '20:55', end: '08:00', timeZone: 'Asia/Seoul' } as const;
+  const heldBefore = isInsideNotificationHoldWindow(holdWindow, Date.now());
   const firstBulk = await asWorkerNotificationRpcResult(() =>
     deliverWorkerNotificationBulk(bulkEnv, bulkSend),
   );
+  const heldAfter = isInsideNotificationHoldWindow(holdWindow, Date.now());
   assert.ok(firstBulk.ok);
   assert.deepEqual(firstBulk.value.summary, {
     delivered: 55,
@@ -1857,6 +1859,10 @@ try {
     notAttempted: 5,
     failed: 0,
   });
+  const held = !bulkCalls.some((partnerCall) => partnerCall.url.endsWith('/send-bulk-message'));
+  if (heldBefore === heldAfter) {
+    assert.equal(held, heldBefore);
+  }
   assert.deepEqual(
     firstBulk.value.providerCalls,
     held ? { batch: 0, single: 55 } : { batch: 1, single: 0 },
@@ -1889,6 +1895,22 @@ try {
     [55, 5, { batch: 0, single: 5 }],
   );
   assert.ok(bulkCalls.every((partnerCall) => partnerCall.url.endsWith('/send-message')));
+  // On D1 the bulk bounds never pass the D1 query budget; another store takes the setting.
+  assert.deepEqual(
+    workerNotificationBulkLimits({ MPGD_STORE: 'd1', MPGD_NOTIFICATIONS_BULK_RECIPIENTS: '500' }),
+    { maxRecipients: 50, maxLookups: 60 },
+  );
+  assert.deepEqual(
+    workerNotificationBulkLimits({ MPGD_STORE: 'd1', MPGD_NOTIFICATIONS_BULK_RECIPIENTS: '20' }),
+    { maxRecipients: 20, maxLookups: 24 },
+  );
+  assert.deepEqual(
+    workerNotificationBulkLimits({
+      MPGD_STORE: 'memory',
+      MPGD_NOTIFICATIONS_BULK_RECIPIENTS: '500',
+    }),
+    { maxRecipients: 500, maxLookups: 600 },
+  );
   // A malformed bulk send keeps its code across the binding.
   assert.deepEqual(
     await asWorkerNotificationRpcResult(() => deliverWorkerNotificationBulk(bulkEnv, { ...bulkSend, recipients: [] })),

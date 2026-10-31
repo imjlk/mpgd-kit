@@ -739,7 +739,11 @@ assert.equal(defaultAitFunctionalMessageTimeoutMs, defaultAppsInTossPartnerApiTi
         sentSmsCount: 0,
         sentAlimtalkCount: 0,
         sentFriendtalkCount: 0,
-        detail: emptyChannels,
+        detail: {
+          ...emptyChannels,
+          sentPush: Array.from({ length: push }, (_, index) => ({ contentId: `p-${index}` })),
+          sentInbox: Array.from({ length: inbox }, (_, index) => ({ contentId: `i-${index}` })),
+        },
         fail: emptyChannels,
       },
     });
@@ -767,6 +771,78 @@ assert.equal(defaultAitFunctionalMessageTimeoutMs, defaultAppsInTossPartnerApiTi
   assert.deepEqual(await outcomes(json({ resultType: 'SUCCESS', success: {} })), [
     ['ambiguous', 'SUCCESS', undefined],
   ]);
+  // A channel count that disagrees with its list proves nothing about who was reached.
+  assert.deepEqual(
+    await outcomes(
+      json({
+        resultType: 'SUCCESS',
+        success: {
+          msgCount: 0,
+          sentPushCount: 0,
+          sentInboxCount: 0,
+          sentSmsCount: 0,
+          sentAlimtalkCount: 0,
+          sentFriendtalkCount: 0,
+          detail: { ...emptyChannels, sentPush: [{ contentId: 'a' }, { contentId: 'b' }, { contentId: 'c' }] },
+          fail: emptyChannels,
+        },
+      }),
+    ),
+    [['ambiguous', 'BULK_COUNTS_DISAGREE', true]],
+  );
+  // A bulk answer over the single send's 256 KiB is still read (up to 4 MiB);
+  // a 2xx answer that cannot be read is unattributed, never replayed.
+  const big = 2_500;
+  const padded = (size: number) =>
+    json({
+      resultType: 'SUCCESS',
+      success: {
+        msgCount: size,
+        sentPushCount: size,
+        sentInboxCount: 0,
+        sentSmsCount: 0,
+        sentAlimtalkCount: 0,
+        sentFriendtalkCount: 0,
+        detail: {
+          ...emptyChannels,
+          sentPush: Array.from({ length: size }, (_, index) => ({
+            contentId: `content-${index}-${'x'.repeat(100)}`,
+          })),
+        },
+        fail: emptyChannels,
+      },
+    });
+  assert.deepEqual(
+    (await outcomes(padded(big), big)).map((answer) => answer[0]),
+    ['accepted'],
+  );
+  const huge = fakeMtls([new Response('x'.repeat(5 * 1_024 * 1_024), { status: 200 })]);
+  assert.deepEqual(
+    await createAitFunctionalMessageDeliveryProvider({ mtls: huge.mtls, recipientKey: 'toss-user' }).sendBatch([
+      bulkRequest('1'),
+      bulkRequest('2'),
+    ]),
+    [
+      { status: 'ambiguous', providerCode: 'BULK_UNREADABLE', unattributed: true },
+      { status: 'ambiguous', providerCode: 'BULK_UNREADABLE', unattributed: true },
+    ],
+  );
+  // A request aborted before its call joins none.
+  const aborted = new AbortController();
+  aborted.abort();
+  const signalled = fakeMtls([bulkSuccess(1)]);
+  const signalledAnswers = await createAitFunctionalMessageDeliveryProvider({
+    mtls: signalled.mtls,
+    recipientKey: 'toss-user',
+  }).sendBatch([bulkRequest('1'), { ...bulkRequest('2'), signal: aborted.signal }]);
+  assert.deepEqual(
+    signalledAnswers.map((answer) => answer.status),
+    ['accepted', 'not-sent'],
+  );
+  assert.equal(
+    (JSON.parse(String(signalled.calls[0]?.init?.body)) as { readonly contextList: readonly unknown[] }).contextList.length,
+    1,
+  );
   // Past startWithinMs no call starts: nothing was sent.
   const late = fakeMtls([]);
   assert.deepEqual(
