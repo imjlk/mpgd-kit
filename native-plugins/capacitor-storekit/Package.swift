@@ -28,7 +28,7 @@ let package = Package(
     ]) + [
         // OpenIAP Apple core (StoreKit 2), pinned exactly. See
         // docs/specs/commerce/openiap-migration.md before changing it.
-        .package(url: "https://github.com/hyodotdev/openiap.git", exact: "4.0.5")
+        .package(url: "https://github.com/hyodotdev/openiap.git", exact: "4.0.7")
     ],
     targets: bridgeTestsOnly ? [
         bridge,

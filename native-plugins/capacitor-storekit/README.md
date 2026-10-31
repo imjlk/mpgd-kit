@@ -1,7 +1,7 @@
 # @mpgd/capacitor-storekit
 
 Opt-in StoreKit 2 one-time purchase collector for Capacitor 8 on iOS, built
-on the [OpenIAP](https://github.com/hyodotdev/openiap) Apple core (4.0.5).
+on the [OpenIAP](https://github.com/hyodotdev/openiap) Apple core (4.0.7).
 It does not enable native IAP in the base Capacitor shell. Install it only in a
 game-owned iOS project and register `createCapacitorStoreKitServiceProvider(...)`
 in that game's provider list.

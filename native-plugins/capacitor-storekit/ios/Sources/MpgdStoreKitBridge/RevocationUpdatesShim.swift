@@ -3,7 +3,7 @@ import StoreKit
 
 /// Compatibility shim: forwards verified **revoked** one-time transactions.
 ///
-/// Why: OpenIAP Apple 4.0.5's `Transaction.updates` listener skips any
+/// Why: OpenIAP Apple 4.0.7's `Transaction.updates` listener skips any
 /// transaction with a `revocationDate` (`OpenIapStoreKitModule`
 /// `startTransactionListener`, "Skipping revoked transaction"). The 0.3 mpgd
 /// plugin forwarded those updates as `transactionUpdated` with `revokedAt`,

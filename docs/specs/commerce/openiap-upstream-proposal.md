@@ -17,8 +17,9 @@ reuse `OpenIapModule` and `OpenIapStore` and add no store logic of its own.
 **Where it comes from.** mpgd-kit ships two Capacitor plugins for a Phaser
 game that sells consumables and non-consumables, verifies every receipt on
 its own backend, and grants only through a server ledger. Since mpgd-kit's
-OpenIAP migration both plugins call the OpenIAP 4.0.5 (Apple) and 4.0.6
-(Google) cores. What has been verified is listed in the migration record:
+OpenIAP migration both plugins call the OpenIAP Apple and Google cores
+(pinned at 4.0.7 and 4.0.8 since 2026-10-31; first 4.0.5 and 4.0.6). What
+has been verified is listed in the migration record:
 native unit tests of the mapping, compiled and packed consumer builds, and
 the game's checkout and recovery suites. No sandbox purchase has run yet; the
 proposal should wait for the game's store acceptance.
@@ -74,7 +75,10 @@ checklist later rather than being declared before they work.
    `getAvailablePurchases` throw on the first unverified entry, so one
    unverifiable transaction hides every verified one on that device. An
    option to skip (and report) unverified entries would let apps recover the
-   verified ones while still never trusting the rest. mpgd reads
+   verified ones while still never trusting the rest. (Since Apple 4.0.7,
+   `getAvailablePurchases` with `alsoPublishToEventListenerIOS` publishes
+   the verified entries to listeners but still throws, so its result stays
+   all or nothing.) mpgd reads
    `Transaction.unfinished`, `currentEntitlements`, and `all` itself for now
    (a read-only shim); this option would let it remove that shim.
 4. **Finish result.** `finishTransaction` treats a purchase it cannot find

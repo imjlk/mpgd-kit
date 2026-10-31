@@ -18,9 +18,9 @@ verifies every receipt and owns every grant.
 
 | Component | Version | Source |
 | --- | --- | --- |
-| OpenIAP Apple | `4.0.5` (git tag `4.0.5`, `d1239c9a`) | SwiftPM `.package(url: "https://github.com/hyodotdev/openiap.git", exact: "4.0.5")` |
-| OpenIAP Google | `4.0.6` (git tag `google-4.0.6`, `f6372aa2`) | Maven Central `io.github.hyochan.openiap:openiap-google:4.0.6` (Play flavor) |
-| OpenIAP Client Protocol | `1.3.0` | carried by both cores (`openiap-versions.json`) |
+| OpenIAP Apple | `4.0.7` (git tag `4.0.7`, `99c97d70`) | SwiftPM `.package(url: "https://github.com/hyodotdev/openiap.git", exact: "4.0.7")` |
+| OpenIAP Google | `4.0.8` (git tag `google-4.0.8`, `0f7dbf68`) | Maven Central `io.github.hyochan.openiap:openiap-google:4.0.8` (Play flavor) |
+| OpenIAP Client Protocol | `1.3.1` | carried by both cores (`openiap-versions.json`) |
 | Capacitor | 8.5.2 | unchanged |
 | iOS | deployment target 15, swift-tools 5.9, Swift 5 language mode | unchanged; OpenIAP Apple declares the same |
 | Xcode / Swift used here | Xcode 26.6, Swift 6.3.3 | local verification; CI runs `macos-26` |
@@ -30,8 +30,9 @@ verifies every receipt and owns every grant.
 | JVM | Java/Kotlin bytecode 21 | matches `capacitor-android` |
 | AGP / Gradle | 8.13.0 / 8.14.3 | the reference shell; unchanged |
 
-These are the newest Apple and Google releases at the time of the change
-(`gh release list -R hyodotdev/openiap`, 2026-10-26). No floating `main`,
+These are the newest Apple and Google releases at the time of the latest
+bump (`gh release list -R hyodotdev/openiap`, 2026-10-31; see
+[Pin history](#pin-history)). No floating `main`,
 `latest`, or version range is used. Change a pin only with the checks under
 [Verification](#verification).
 
@@ -50,6 +51,13 @@ What the dependency adds to a consumer:
   Nep wrapper a minified (R8) release APK grows from 1.65 MB with the 0.3.7
   plugin to 2.11 MB, and R8 keeps the provider factory and its interface
   (see [Verification](#verification)).
+
+### Pin history
+
+| Date | Apple | Google | Upstream changes in the pinned sources, and their effect here |
+| --- | --- | --- | --- |
+| 2026-10-26 | `4.0.5` | `4.0.6` | first pins (the migration) |
+| 2026-10-31 | `4.0.7` | `4.0.8` | Apple `4.0.6` changed only the generated version strings in `packages/apple/Sources`, and Google `4.0.7` only `packages/google/package.json`. Apple `4.0.7` ([#574](https://github.com/hyodotdev/openiap/pull/574), `5db82f74`) no longer finishes inactive auto-renewable subscription transactions on its own (difference 18), lets `getAvailablePurchases` publish its verified entries when `alsoPublishToEventListenerIOS` is set and one entry fails (it still throws), and maps StoreKit's new `invalidPresentationContext` error under Swift 6.4+ compilers. Google `4.0.8` ([#575](https://github.com/hyodotdev/openiap/pull/575), `30ef2786`) clears `OpenIapStore.currentPurchase` in `OpenIapStore.finishTransaction`; the plugin calls neither. The published dependencies of `openiap-google` and `openiap-core` are unchanged. No shim or workaround below became removable. |
 
 ## Layers
 
@@ -113,7 +121,7 @@ on this contract:
 | `sync` | `syncIOS()` (`AppStore.sync`) | user-initiated only; the reconciler's automatic passes never call it |
 | `finishTransaction` | lookup through `RecoveryReadShim` (unfinished, then `Transaction.all`); the finish itself is `finishTransaction(purchase:isConsumable:)` | verified, one-time, not revoked, `appAccountToken` equals the session token; OpenIAP's own `storeId` check still runs |
 | `finishTransaction` with `revoked` | lookup through `RecoveryReadShim.unfinished()` only; the same OpenIAP finish (it takes the transaction by id from `Transaction.unfinished` and does not check the revocation date) | verified, **revoked**, consumable, `appAccountToken` equals the session token (`finishableRevoked`); anything else answers `finished: false`. A build from before the flag ignores it and refuses the revoked transaction. The `ledgerEntryId` the method requires is the reversed grant's entry, or a `revoked-without-grant:` marker the SDK fills when nothing was granted |
-| revocations | not delivered by OpenIAP 4.0.5 | `RevocationUpdatesShim` (below) |
+| revocations | not delivered by OpenIAP 4.0.7 | `RevocationUpdatesShim` (below) |
 
 ### Android
 
@@ -130,7 +138,7 @@ on this contract:
 
 1. **Revocations (blocker in the spec).** OpenIAP Apple's update listener
    skips any transaction with a `revocationDate`
-   (`OpenIapStoreKitModule.swift` line 2178 at `4.0.5`). The 0.3 plugin
+   (`OpenIapStoreKitModule.swift` line 2149 at `4.0.7`). The 0.3 plugin
    forwarded them with `revokedAt`, and `StoreSdk` maps them to
    `state: 'revoked'` so the server re-checks the grant.
    `RevocationUpdatesShim` observes `Transaction.updates` and forwards only
@@ -147,7 +155,7 @@ on this contract:
    dropped non-one-time transactions. Upstream request 2.
 3. **Unverified transactions (recovery read shim).** OpenIAP's
    `getPendingTransactionsIOS` and `getAvailablePurchases` throw on the first
-   unverified entry (`checkVerified`, line 2335), so one transaction StoreKit
+   unverified entry (`checkVerified`, line 2215), so one transaction StoreKit
    cannot verify (tampering, or a device clock StoreKit rejects) would hide
    every verified transaction on that device from recovery and block
    finishing them. The 0.3 plugin skipped an unverified entry on its own.
@@ -166,7 +174,7 @@ on this contract:
    `testAnUnverifiableTransactionIsSkippedNextToVerifiedOnes`,
    `testAnUnverifiableTransactionDoesNotBlockFinishingAVerifiedOne`.
 4. **Purchase results also reach the listener.** OpenIAP emits the result of
-   `requestPurchase` to its update listener (line 607). The same transaction
+   `requestPurchase` to its update listener (line 577). The same transaction
    now arrives as the `purchase` result and as `transactionUpdated`; the
    reconciler journals it once, verifies once, and finishes once
    (`openiap-engine-swap.test.ts` case 1). Google Play behaved this way
@@ -175,7 +183,7 @@ on this contract:
    `dedupeTransactionIOS: false`, so every StoreKit replay is forwarded as
    the 0.3 `Transaction.updates` loop did; the reconciler deduplicates.
 6. **Finish takes an id.** OpenIAP finishes whatever purchase it is handed
-   and treats an unknown one as already finished (line 764). The plugin
+   and treats an unknown one as already finished (line 753). The plugin
    resolves the full verified purchase first and answers `finished: false`
    only when no purchase passes the gate, so finishing an already finished
    durable stays an idempotent `finished: true`. A finished consumable is
@@ -191,13 +199,13 @@ on this contract:
    first finish keeps the native answer.
 7. **Purchase presentation.** On iOS 17+ OpenIAP calls
    `purchase(confirmIn:)` with the active window scene and fails before the
-   sheet when there is none (line 2574); a Capacitor app always has one. When
+   sheet when there is none (line 2454); a Capacitor app always has one. When
    `AppStore.canMakePayments` is false (Screen Time, MDM) OpenIAP fails before
-   the sheet (line 454): `STOREKIT_UNAVAILABLE`.
+   the sheet (line 448): `STOREKIT_UNAVAILABLE`.
 8. **Ask to Buy** is OpenIAP's `deferredPayment` and stays `pending`, never
    `cancelled`.
 9. **Already owned (Google).** OpenIAP resolves `ITEM_ALREADY_OWNED` with the
-   owned purchase (line 1993 at `google-4.0.6`) and delivers it to
+   owned purchase (line 1993 at `google-4.0.8`) and delivers it to
    listeners. The plugin keeps the 0.3 rejection,
    `PLAY_BILLING_ALREADY_OWNED`, by comparing the result's token with the
    in-app purchases Play reported just before the flow; the owned purchase
@@ -229,7 +237,7 @@ on this contract:
     example `BILLING_UNAVAILABLE` to `PLAY_BILLING_ERROR`). Both map to an
     unavailable store in TypeScript.
 15. **Extra refresh (Google).** `OpenIapStore` re-reads owned purchases
-    500 ms after every update (`OpenIapStore.kt` line 157). It only updates
+    500 ms after every update (`OpenIapStore.kt` line 158). It only updates
     the facade's state; nothing is delivered or finished.
 16. **iOS 15 currency.** OpenIAP reads the product currency from the
     product's price locale below iOS 16; the 0.3 plugin used
@@ -240,11 +248,15 @@ on this contract:
     drops (any non-revoked one) reaches JavaScript only through the next
     `getTransactions`, which the reconciler runs on start and resume. Listed
     under [Not verified](#not-verified-and-release-conditions).
-18. **OpenIAP finishes some subscription transactions itself.** The Apple
-    core finishes inactive (expired, revoked, or upgraded) auto-renewable
-    subscription transactions it meets. The plugins sell no subscriptions, so
-    no one-time transaction is affected, but "nothing finishes outside
-    `finishTransaction`" holds for one-time purchases only.
+18. **OpenIAP no longer finishes subscription transactions itself.** Up to
+    `4.0.6` the Apple core finished inactive (expired, revoked, or upgraded)
+    auto-renewable subscription transactions it met. From `4.0.7` its only
+    finishes are `finishTransaction`, the opt-in
+    `andDangerouslyFinishTransactionAutomatically` (the plugin passes
+    `false`), and `clearTransactionIOS` (never called), so "nothing finishes
+    outside `finishTransaction`" holds for every transaction. The plugins sell
+    no subscriptions; an inactive subscription transaction stays unfinished,
+    and the policy drops it as before (difference 2).
 
 None of these changes recovery, account binding, or refund handling of a
 verified transaction, so OpenIAP is the default engine on both platforms. No
@@ -301,6 +313,17 @@ The CI generic-simulator `xcodebuild` step could not run on this machine
 equivalent SwiftPM simulator build passed, and `xcodebuild -list` shows the
 `MpgdCapacitorStoreKit` scheme. CI's `macos-26` job runs the `xcodebuild`
 step.
+
+Pin bump to Apple `4.0.7` / Google `4.0.8` (2026-10-31, same machine): SwiftPM
+resolved `openiap` at `4.0.7` (`99c97d70`) and the 24 bridge XCTests passed;
+`swift build --target MpgdCapacitorStoreKit` for the iOS 15 simulator passed;
+Gradle resolved `openiap-google` and `openiap-core` `4.0.8` with Play Billing
+9.1.0, the 23 JVM tests passed, and the release AAR assembled; the plugin
+TypeScript suites, `validate:capacitor-alignment`,
+`validate:capacitor-fail-closed`, `validate:commerce-alignment`,
+`smoke:native-packed-consumer`, and `smoke:native-packed-store-plugins android`
+passed. The generic-simulator `xcodebuild` step and the packed iOS compile are
+left to CI, as above. mpgd-games was not rebuilt.
 
 mpgd-games (`80dc56a0`, Nep Nep Nem Nep), same commands for three
 dependency sets: the game's own 0.3.7 (patched), npm 0.3.9 (the last

@@ -1,6 +1,6 @@
 buildscript {
     // Same Kotlin line as the Capacitor 8 community plugins; a shell that pins
-    // `kotlin_version` in its root project wins. OpenIAP Google 4.0.6 needs a
+    // `kotlin_version` in its root project wins. OpenIAP Google 4.0.8 needs a
     // 2.1.20+ Kotlin compiler.
     ext.kotlin_version = project.hasProperty('kotlin_version') ? rootProject.ext.kotlin_version : '2.2.20'
     repositories {
@@ -54,7 +54,7 @@ dependencies {
     // OpenIAP Google core, Play flavor, pinned exactly. It brings Play Billing
     // 9.1.0 as an API dependency, so the plugin no longer declares Billing
     // itself. See docs/specs/commerce/openiap-migration.md before changing it.
-    implementation 'io.github.hyochan.openiap:openiap-google:4.0.6'
+    implementation 'io.github.hyochan.openiap:openiap-google:4.0.8'
     // OpenIAP publishes coroutines as a runtime dependency; the plugin calls
     // its suspend API directly, so it needs them at compile time too.
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0'

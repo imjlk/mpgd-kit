@@ -4,7 +4,7 @@ import StoreKit
 /// Compatibility shim: the verified, read-only transaction lists behind
 /// `getTransactions` and the `finishTransaction` lookup.
 ///
-/// Why: OpenIAP Apple 4.0.5's `getPendingTransactionsIOS` and
+/// Why: OpenIAP Apple 4.0.7's `getPendingTransactionsIOS` and
 /// `getAvailablePurchases` throw on the first transaction StoreKit cannot
 /// verify (`OpenIapStoreKitModule.checkVerified`), so one unverifiable
 /// transaction on a device would hide every verified one from recovery and

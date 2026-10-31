@@ -2,7 +2,7 @@
 
 Android-only, opt-in Google Play one-time purchase collection for Capacitor 8.
 The Kotlin native module runs on the [OpenIAP](https://github.com/hyodotdev/openiap)
-Google core (`io.github.hyochan.openiap:openiap-google` 4.0.6, which brings
+Google core (`io.github.hyochan.openiap:openiap-google` 4.0.8, which brings
 Google Play Billing Library 9.1.0). It queries product details, launches a
 purchase, listens for purchase updates, and requeries currently owned,
 unconsumed purchases. It intentionally does **not** acknowledge, consume, or
