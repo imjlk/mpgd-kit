@@ -641,6 +641,15 @@ Runtime rules:
   It also cancels, without waiting for the backend, every pending reminder
   whose topic no longer takes the local route: an app update removed the
   topic from the catalog or took away its `local` channel.
+  - When the host fails a batch cancel, the runtime cancels each of its keys
+    alone, so one reminder the host cannot cancel does not keep the others
+    pending; the first key that still fails is thrown.
+  - When the backend's records cannot be read, the reminders whose
+    permission the host itself reports as not granted are still cancelled,
+    and the read's error is thrown after.
+  - One call reads the player's records from the backend once: the records
+    it then writes and the sweep after it reuse that read, unless the
+    runtime recorded something since.
 - **Restarts.** A restart drops runtime memory and listeners. Host state,
   backend records, the persisted registration, the unbound state after
   `unregister()`, and the backend authentication persist.
@@ -1710,7 +1719,9 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
     - Devvit's guidance says "titles ≤ 60 characters, body ≤ 100
       characters" without a unit. The SDK (`@devvit/notifications` 0.14.1)
       checks nothing before `Enqueue`, and Devvit admins approve the copy
-      before a game may send it.
+      before a game may send it. Re-checked on 2026-11-01 against the
+      Devvit 0.15 docs and `@devvit/notifications` 0.15.0: still no unit,
+      and still no check before `Enqueue`.
     - The kit counts Unicode code points, as the catalog validator counts its
       mapping fields. An accented letter or most emoji count once, as a
       reader sees them; a grapheme cluster of several code points counts
@@ -2992,6 +3003,24 @@ left open: Android advertising pushes with the opt-out action.
   system kills and recreates from the original launch intent reports that
   open again: the messaging plugin does so for every FCM tap, so the
   renderer's opens share the behaviour.
+
+**What NF2 landed.** NF2 closes the low-severity items N2 deferred, each to
+the phase that owned it, as far as they were still open on main.
+
+- `@mpgd/platform/notifications-runtime`: one backend read per call for the
+  records, the write, and the local sweep; per-key local cancels after a
+  batch the host fails; and the permission sweep when the records cannot be
+  read (see [Runtime](#runtime), Local reminders).
+- Vectors for runtime rules that only unit tests pinned:
+  `endpoint-registration-refresh`, `endpoint-unbind-until-register` (the
+  first vector to call `register()`), and `duplicate-topics-once`.
+- Already closed before NF2: the refused-notice backoff (S2), the mapping
+  per target when two targets share a provider (S1), and checking Devvit's
+  filled text rather than the template (P3).
+- Left open: Devvit's length unit, which Devvit's docs and SDK still leave
+  unstated (see [Delivery providers](#remote-delivery)); and helpers that
+  look like commerce's (event buffers, the vector matcher, timestamp
+  formatting) but differ in what they keep or accept, so none was a drop-in.
 
 All of N1–C1 is the first release wave. Releases follow N3, S2, and C1. The
 v1 adapter and the deprecated delivery aliases go away in the major release
