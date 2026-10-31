@@ -63,6 +63,8 @@
       "@mpgd/runtime-diagnostics/frame-profiler": ["./packages/runtime-diagnostics/src/frame-profiler.ts"],
       "@mpgd/phaser-assets/packs": ["./packages/phaser-assets/src/packs.ts"],
       "@mpgd/phaser-assets/prefetch": ["./packages/phaser-assets/src/prefetch.ts"],
+      "@mpgd/phaser-assets/residency": ["./packages/phaser-assets/src/residency.ts"],
+      "@mpgd/phaser-assets/residency-policy": ["./packages/phaser-assets/src/residency-policy.ts"],
       "@mpgd/phaser-assets/pack-format": ["./packages/phaser-assets/src/pack-format.ts"],
       "@mpgd/phaser-assets/pack-cache": ["./packages/phaser-assets/src/pack-cache.ts"],
       "@mpgd/phaser-assets/archives": ["./packages/phaser-assets/src/archives.ts"],

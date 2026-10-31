@@ -50,6 +50,14 @@
       "types": "./dist/prefetch.d.ts",
       "default": "./dist/prefetch.js"
     },
+    "./residency": {
+      "types": "./dist/residency.d.ts",
+      "default": "./dist/residency.js"
+    },
+    "./residency-policy": {
+      "types": "./dist/residency-policy.d.ts",
+      "default": "./dist/residency-policy.js"
+    },
     "./test-utils": {
       "types": "./dist/test-utils.d.ts",
       "default": "./dist/test-utils.js"
