@@ -30,8 +30,8 @@ verifies every receipt and owns every grant.
 | JVM | Java/Kotlin bytecode 21 | matches `capacitor-android` |
 | AGP / Gradle | 8.13.0 / 8.14.3 | the reference shell; unchanged |
 
-These are the newest Apple and Google releases at the time of the change
-(`gh release list -R hyodotdev/openiap`, 2026-10-26; bumped 2026-10-31, see
+These are the newest Apple and Google releases at the time of the latest
+bump (`gh release list -R hyodotdev/openiap`, 2026-10-31; see
 [Pin history](#pin-history)). No floating `main`,
 `latest`, or version range is used. Change a pin only with the checks under
 [Verification](#verification).
@@ -57,7 +57,7 @@ What the dependency adds to a consumer:
 | Date | Apple | Google | Upstream changes in the pinned sources, and their effect here |
 | --- | --- | --- | --- |
 | 2026-10-26 | `4.0.5` | `4.0.6` | first pins (the migration) |
-| 2026-10-31 | `4.0.7` | `4.0.8` | Apple `4.0.6` and Google `4.0.7` changed only versions in `packages/apple/Sources` and `packages/google/openiap/src`. Apple `4.0.7` ([#574](https://github.com/hyodotdev/openiap/pull/574), `5db82f74`) no longer finishes inactive auto-renewable subscription transactions on its own (difference 18), lets `getAvailablePurchases` publish its verified entries when `alsoPublishToEventListenerIOS` is set and one entry fails (it still throws), and maps StoreKit's new `invalidPresentationContext` error under Swift 6.4+ compilers. Google `4.0.8` ([#575](https://github.com/hyodotdev/openiap/pull/575), `30ef2786`) clears `OpenIapStore.currentPurchase` in `OpenIapStore.finishTransaction`; the plugin calls neither. The published dependencies of `openiap-google` and `openiap-core` are unchanged. No shim or workaround below became removable. |
+| 2026-10-31 | `4.0.7` | `4.0.8` | Apple `4.0.6` changed only the generated version strings in `packages/apple/Sources`, and Google `4.0.7` only `packages/google/package.json`. Apple `4.0.7` ([#574](https://github.com/hyodotdev/openiap/pull/574), `5db82f74`) no longer finishes inactive auto-renewable subscription transactions on its own (difference 18), lets `getAvailablePurchases` publish its verified entries when `alsoPublishToEventListenerIOS` is set and one entry fails (it still throws), and maps StoreKit's new `invalidPresentationContext` error under Swift 6.4+ compilers. Google `4.0.8` ([#575](https://github.com/hyodotdev/openiap/pull/575), `30ef2786`) clears `OpenIapStore.currentPurchase` in `OpenIapStore.finishTransaction`; the plugin calls neither. The published dependencies of `openiap-google` and `openiap-core` are unchanged. No shim or workaround below became removable. |
 
 ## Layers
 
