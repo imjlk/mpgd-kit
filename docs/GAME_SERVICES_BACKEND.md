@@ -1083,8 +1083,8 @@ the purchase verifier, one per environment.
 
 - With the optional `revocations` (an `AppStoreRevocationRecorder`), every
   `REFUND` and `REVOKE` of the customer's own one-time purchase is recorded
-  there before the ledger is read, granted or not, keyed by the grant's
-  verification id (`createAppStoreVerificationId`: original transaction id
+  there before the ledger is read, granted or not, keyed by the
+  environment and the grant's verification id (`createAppStoreVerificationId`: original transaction id
   for non-consumables, transaction id for consumables). The registry keeps
   the latest revocation per key: a purchase refunded, reversed, and revoked
   again refuses every JWS signed before the last revocation, and a

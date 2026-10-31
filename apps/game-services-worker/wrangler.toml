@@ -126,6 +126,8 @@ head_sampling_rate = 1
 # which an offline-only iOS verifier Worker binds. Recommended in server-api
 # mode too. See docs/CLOUDFLARE_WORKER_DEPLOY.md#app-store-revocation-registry-offline-only-purchases.
 # GAME_SERVICES_APP_STORE_REVOCATION_REGISTRY = "true"
+# Optional cron pruning: at least the verifier's maxSignedAgeMs + clockSkewMs.
+# GAME_SERVICES_APP_STORE_REVOCATION_RETENTION_MS = "7200000"
 #
 # [[services]]
 # binding = "GAME_SERVICES_APP_STORE_NOTIFICATION_VERIFIER"

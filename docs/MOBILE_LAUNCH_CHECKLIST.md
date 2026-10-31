@@ -201,7 +201,9 @@ production` prints what it lacks and fails on contradictions
       `GameServicesAppStoreRevocations` entrypoint, pass
       `createAppStoreRevocationLookupOverBinding` as `revocations`, and
       keep `clockSkewMs` (5 minutes by default) above the clock difference
-      to Apple
+      to Apple. Optionally set
+      `GAME_SERVICES_APP_STORE_REVOCATION_RETENTION_MS` (at least
+      `maxSignedAgeMs + clockSkewMs`) so the cron prunes old rows
       ([revocation registry](./CLOUDFLARE_WORKER_DEPLOY.md#app-store-revocation-registry-offline-only-purchases)).
 - [ ] Play Console → Users and permissions: give the publisher service
       account financial access ("View financial reports" in Google's API

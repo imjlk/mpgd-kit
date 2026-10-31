@@ -230,7 +230,8 @@ export interface AppStoreRevocationRecord {
 
 /**
  * Reads recorded revocations for the offline-only verifier. Answer the record
- * for `verificationId`, or `undefined` when none is recorded. Throw
+ * for `environment` and `verificationId`, or `undefined` when none is
+ * recorded: a record of the other environment never answers. Throw
  * `AppStoreDependencyUnavailableError` only for a transient storage outage
  * (the purchase stays `pending`); any other error propagates.
  */
@@ -246,8 +247,13 @@ export interface AppStoreRevocationLookup {
 }
 
 /**
- * Durably records a revocation, keeping per `verificationId` the record with
- * the latest `revokedAt`: a purchase can be refunded, reversed, and revoked
+ * Durably records a revocation, keeping per `environment` and
+ * `verificationId` the record with the latest `revokedAt` (a Production
+ * deployment that grants sandbox purchases records both environments, and
+ * Apple documents a transaction id as unique without scoping it to one
+ * environment, so the environment is part of the key;
+ * https://developer.apple.com/documentation/appstoreserverapi/transactionid):
+ * a purchase can be refunded, reversed, and revoked
  * again, and the lookup must refuse every JWS signed before the latest
  * revocation. A record whose `revokedAt` does not parse counts as the
  * latest. A record no later than the kept one (a redelivery, or an older
@@ -277,17 +283,20 @@ export interface AppStoreRevocationRegistry
  */
 export function createInMemoryAppStoreRevocationRegistry(): AppStoreRevocationRegistry {
   const records = new Map<string, AppStoreRevocationRecord>();
+  // An environment is one of two fixed words, so the separator cannot collide.
+  const keyOf = (environment: string, verificationId: string) => `${environment}:${verificationId}`;
   return {
     async findRevocation(input) {
-      return records.get(input.verificationId);
+      return records.get(keyOf(input.environment, input.verificationId));
     },
     async recordRevocation(input) {
       assertNonEmptyString(input.record.verificationId, 'record.verificationId');
-      const kept = records.get(input.record.verificationId);
+      const key = keyOf(input.record.environment, input.record.verificationId);
+      const kept = records.get(key);
       if (kept !== undefined && !isLaterRevocation(input.record, kept)) {
         return { alreadyRecorded: true };
       }
-      records.set(input.record.verificationId, { ...input.record });
+      records.set(key, { ...input.record });
       return { alreadyRecorded: false };
     },
   };
@@ -375,7 +384,7 @@ export async function answerAppStoreRevocationLookup(
  * (`AppStoreRevocationLookupBinding`), for an `offline-only` purchase
  * verifier that runs apart from the notification route recording the
  * revocations. It fails closed: an `unavailable` answer, a binding that
- * throws, an answer of another shape or for another grant identity, and an
+ * throws, an answer of another shape or for another grant identity or environment, and an
  * abort of the verification are all `AppStoreDependencyUnavailableError`, so
  * the purchase stays `pending` (`APP_STORE_REVOCATION_LOOKUP_UNAVAILABLE`)
  * instead of granting without the check.
@@ -420,6 +429,7 @@ export function createAppStoreRevocationLookupOverBinding(
           && typeof answer.record === 'object'
           && answer.record !== null
           && answer.record.verificationId === request.verificationId
+          && answer.record.environment === request.environment
           && typeof answer.record.revokedAt === 'string'
         ) {
           return answer.record;

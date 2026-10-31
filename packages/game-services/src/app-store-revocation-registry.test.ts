@@ -47,6 +47,13 @@ assertEqual(
 // lookup names the record's own environment and bundle.
 await runAppStoreRevocationRegistryConformance({ registry: environmentPartitionedRegistry() });
 
+// A registry keyed by the verification id alone mixes Sandbox and Production.
+await assertRejects(
+  () => runAppStoreRevocationRegistryConformance({ registry: idOnlyRegistry() }),
+  'environments are independent',
+  'a registry that ignores the environment fails conformance',
+);
+
 // A registry that remembers per instance fails the durability rule.
 await assertRejects(
   () =>
@@ -135,6 +142,10 @@ for (const [label, binding] of [
   [
     'a record for another grant',
     answering({ status: 'found', record: { ...record, verificationId: 'other' } }),
+  ],
+  [
+    'a record of the other environment',
+    answering({ status: 'found', record: { ...record, environment: 'Sandbox' } }),
   ],
 ] as const) {
   await assertRejectsWith(
@@ -240,6 +251,27 @@ function environmentPartitionedRegistry(): AppStoreRevocationRegistry {
     findRevocation: (input) => partition(input.environment, input.bundleId).findRevocation(input),
     recordRevocation: (input) =>
       partition(input.record.environment, input.record.bundleId).recordRevocation(input),
+  };
+}
+
+/** The in-memory rules, but one record per verification id whatever its environment. */
+function idOnlyRegistry(): AppStoreRevocationRegistry {
+  const order = createInMemoryAppStoreRevocationRegistry();
+  const records = new Map<string, AppStoreRevocationRecord>();
+  return {
+    async findRevocation(input) {
+      return records.get(input.verificationId);
+    },
+    async recordRevocation(input) {
+      const result = await order.recordRevocation({
+        ...input,
+        record: { ...input.record, environment: 'Production' },
+      });
+      if (!result.alreadyRecorded) {
+        records.set(input.record.verificationId, input.record);
+      }
+      return result;
+    },
   };
 }
 

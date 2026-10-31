@@ -9,7 +9,10 @@ import type {
 } from '@mpgd/game-services';
 import { WorkerEntrypoint } from 'cloudflare:workers';
 
-import { findWorkerAppStoreRevocation } from './appStoreRevocations.js';
+import {
+  findWorkerAppStoreRevocation,
+  pruneWorkerAppStoreRevocations,
+} from './appStoreRevocations.js';
 import {
   createWorkerAccountDeletionService,
   createWorkerFetchHandler,
@@ -85,14 +88,16 @@ export class GameServicesWorker extends WorkerEntrypoint<GameServicesWorkerEnv> 
    * notice pushes, due rows), and the store server upkeep (owed Play
    * acknowledges and consumes, the Play voided purchases sweep), and the
    * account deletion upkeep (pending erasures, the purge of purchase records
-   * kept past their retention period). Each keeps to its own subrequest
-   * budget; one failing never skips the others.
+   * kept past their retention period), and the optional App Store
+   * revocation retention. Each keeps to its own subrequest budget; one
+   * failing never skips the others.
    */
   override async scheduled(controller: ScheduledController): Promise<void> {
     const [notifications] = await Promise.allSettled([
       runScheduledNotifications(this.env, { cron: controller.cron }),
       runStoreServer(this.env, controller.cron),
       runAccountDeletion(this.env),
+      runAppStoreRevocationPrune(this.env),
     ]);
     // Both runs finish before the event ends; a notifications failure is
     // reported after the store server run, never instead of it.
@@ -142,6 +147,17 @@ async function runAccountDeletion(env: GameServicesWorkerEnv): Promise<void> {
   } catch (error) {
     console.error(
       'Account deletion cron failed:',
+      error instanceof Error ? `${error.name}: ${error.message}` : 'unknown error',
+    );
+  }
+}
+
+async function runAppStoreRevocationPrune(env: GameServicesWorkerEnv): Promise<void> {
+  try {
+    await pruneWorkerAppStoreRevocations(env);
+  } catch (error) {
+    console.error(
+      'App Store revocation pruning failed:',
       error instanceof Error ? `${error.name}: ${error.message}` : 'unknown error',
     );
   }

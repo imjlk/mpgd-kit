@@ -25,10 +25,20 @@ import {
 import {
   createD1AppStoreRevocationRegistry,
   findWorkerAppStoreRevocation,
+  pruneWorkerAppStoreRevocations,
+  resetAppStoreRevocationPruneClock,
   resolveWorkerAppStoreRevocationRegistry,
 } from './appStoreRevocations.js';
 import { createD1GameServicesStore } from './d1Store.js';
 import { createWorkerFetchHandler, type GameServicesWorkerEnv } from './handler.js';
+// Type-only: erased at runtime, so `cloudflare:workers` is never loaded here.
+import type { GameServicesAppStoreRevocations } from './index.js';
+
+// The entrypoint the iOS verifier Worker binds is what
+// createAppStoreRevocationLookupOverBinding consumes (checked by the compiler).
+type EntrypointIsLookupBinding = GameServicesAppStoreRevocations extends
+  AppStoreRevocationLookupBinding ? true : never;
+const entrypointIsLookupBinding: EntrypointIsLookupBinding = true;
 
 const miniflare = new Miniflare({
   modules: true,
@@ -39,7 +49,7 @@ const miniflare = new Miniflare({
 try {
   const db = await miniflare.getD1Database('DB') as unknown as D1Database;
   const migrations = (await readdir(new URL('../migrations/', import.meta.url))).sort();
-  assert.equal(migrations.at(-1), '0011_app_store_revocations.sql', 'WR1 owns migration 0011');
+  assert.ok(migrations.includes('0011_app_store_revocations.sql'));
   for (const migration of migrations) {
     await applyMigration(db, migration);
   }
@@ -48,9 +58,12 @@ try {
   const columns = (await db.prepare('PRAGMA table_info(app_store_revocations)')
     .all<{ name: string; pk: number }>()).results;
   assert.deepEqual(
-    columns.filter((column) => column.pk === 1).map((column) => column.name),
-    ['verification_id'],
-    'one row per grant verification id',
+    columns
+      .filter((column) => column.pk > 0)
+      .sort((a, b) => a.pk - b.pk)
+      .map((column) => column.name),
+    ['environment', 'verification_id'],
+    'one row per environment and grant verification id',
   );
   assert.equal(
     columns.some((column) => column.name === 'player_id'),
@@ -140,10 +153,11 @@ try {
   const deliver = async (
     notification: AppStoreServerNotification,
     workerEnv: GameServicesWorkerEnv = env,
+    path: string = appStoreNotificationPaths.Production,
   ) => {
     answer = notification;
     const response = await createWorkerFetchHandler(workerEnv)(
-      new Request(`https://game-services-worker.test${appStoreNotificationPaths.Production}`, {
+      new Request(`https://game-services-worker.test${path}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ signedPayload: 'header.payload.signature' }),
@@ -243,6 +257,46 @@ try {
     'a JWS signed between the reversal and the second refund is refused',
   );
 
+  // --- Sandbox and Production keep their own records ------------------------
+  // A production deployment with sandboxPurchases: { mode: 'grant' } mounts
+  // both URLs; the same ids in the sandbox are another purchase.
+  {
+    const productionBefore = await revocationRow(db);
+    const sandboxRefund: AppStoreServerNotification = {
+      ...refund,
+      environment: 'Sandbox',
+      notificationUUID: 'wr1-sandbox-refund',
+      signedDate: refundedAt + 90 * minute,
+      transaction: {
+        ...product,
+        environment: 'Sandbox',
+        signedDate: refundedAt + 90 * minute,
+        revocationDate: refundedAt + 90 * minute,
+      },
+    };
+    assert.equal(
+      (await deliver(sandboxRefund, env, appStoreNotificationPaths.Sandbox)).status,
+      200,
+    );
+    assert.deepEqual(
+      await revocationRow(db),
+      productionBefore,
+      'a later Sandbox refund leaves the Production record alone',
+    );
+    const sandboxRow = await db.prepare(
+      `SELECT revoked_at FROM app_store_revocations
+        WHERE environment = 'Sandbox' AND original_transaction_id = ?`,
+    ).bind(product.originalTransactionId).first<{ revoked_at: string }>();
+    assert.equal(sandboxRow?.revoked_at, new Date(refundedAt + 90 * minute).toISOString());
+    assert.equal(
+      (await createOfflineVerifier(createBindingTo({ ...env }), jws, {
+        now: refundedAt + 20 * minute,
+      }).verifyPurchase(purchaseInput('post-reversal.jws'))).status,
+      'rejected',
+      'Production still answers from its own record only',
+    );
+  }
+
   // --- Off by default; refused unless the route records ----------------------
   {
     const other = {
@@ -295,7 +349,7 @@ try {
       errors.push(args);
     };
     try {
-      for (const value of [true, 'TRUE', '1']) {
+      for (const value of [true, 'TRUE', '1', true, 'TRUE', '1']) {
         assert.equal(
           resolveWorkerAppStoreRevocationRegistry({
             ...env,
@@ -307,7 +361,42 @@ try {
     } finally {
       console.error = consoleError;
     }
-    assert.equal(errors.length, 3, 'a flag that is not the string "true" is reported, not ignored');
+    assert.equal(
+      errors.length,
+      3,
+      'a flag that is not the string "true" is reported once per value, not per request',
+    );
+
+    // The memory registry belongs to one configuration (its notification
+    // verifier binding and bundle id), never to the isolate.
+    const verifierA = { ...env.GAME_SERVICES_APP_STORE_NOTIFICATION_VERIFIER };
+    const verifierB = { ...env.GAME_SERVICES_APP_STORE_NOTIFICATION_VERIFIER };
+    const configA = { ...memoryEnv, GAME_SERVICES_APP_STORE_NOTIFICATION_VERIFIER: verifierA };
+    const signal = new AbortController().signal;
+    await resolveWorkerAppStoreRevocationRegistry(configA)?.recordRevocation({
+      record: revocationRecord('memory-scope', '2025-06-01T00:00:00.000Z'),
+      signal,
+    });
+    const lookup = { ...lookupRequest('wr1-memory-scope'), signal };
+    assert.equal(
+      (await resolveWorkerAppStoreRevocationRegistry({ ...configA })?.findRevocation(lookup))
+        ?.notificationUUID,
+      'memory-scope',
+      'a new env object with the same bindings keeps the records (a dev server request)',
+    );
+    for (const [label, other] of [
+      [
+        'another binding',
+        { ...memoryEnv, GAME_SERVICES_APP_STORE_NOTIFICATION_VERIFIER: verifierB },
+      ],
+      ['another bundle id', { ...configA, GAME_SERVICES_APP_STORE_BUNDLE_ID: 'com.example.other' }],
+    ] as const) {
+      assert.equal(
+        await resolveWorkerAppStoreRevocationRegistry(other)?.findRevocation(lookup),
+        undefined,
+        `${label} never sees another configuration's records`,
+      );
+    }
     assertDecision(
       await createOfflineVerifier(createBindingTo(serverApiEnv), jws, {
         now: refundedAt + 20 * minute,
@@ -349,6 +438,105 @@ try {
       'APP_STORE_REVOCATION_LOOKUP_UNAVAILABLE',
       'a registry read that fails keeps the purchase pending',
     );
+  }
+
+  // --- Retention: optional cron pruning --------------------------------------
+  {
+    const nowMs = Date.parse('2026-11-01T00:00:00.000Z');
+    const retentionMs = 24 * 60 * minute;
+    const cutoffMs = nowMs - retentionMs;
+    const count = async (where: string, ...values: number[]) =>
+      (await db.prepare(`SELECT COUNT(*) AS n FROM app_store_revocations WHERE ${where}`)
+        .bind(...values)
+        .first<{ n: number }>())?.n ?? 0;
+    const registry = createD1AppStoreRevocationRegistry(db);
+    const signal = new AbortController().signal;
+    await registry.recordRevocation({
+      record: revocationRecord('retained-recent', new Date(nowMs - minute).toISOString()),
+      signal,
+    });
+    await registry.recordRevocation({
+      record: revocationRecord('retained-unparseable', 'unparseable'),
+      signal,
+    });
+    const old = await count('revoked_at_ms < ?', cutoffMs);
+    const unparseable = await count('revoked_at_ms IS NULL');
+    const recent = await count('revoked_at_ms >= ?', cutoffMs);
+    assert.ok(old > 0 && unparseable > 0 && recent > 0, 'the database holds all three kinds');
+    const retained = {
+      ...env,
+      GAME_SERVICES_APP_STORE_REVOCATION_RETENTION_MS: String(retentionMs),
+    };
+    const { GAME_SERVICES_APP_STORE_REVOCATION_REGISTRY: _off, ...unflagged } = retained;
+
+    assert.equal(await pruneWorkerAppStoreRevocations(env, nowMs), 0, 'unset keeps every row');
+    assert.equal(
+      await pruneWorkerAppStoreRevocations(unflagged, nowMs),
+      0,
+      'nothing is pruned without the registry flag',
+    );
+    const errors: unknown[][] = [];
+    const consoleError = console.error;
+    console.error = (...args: unknown[]) => {
+      errors.push(args);
+    };
+    try {
+      for (const value of ['0', '-5', '1.5', 'one day', '9007199254740993', '0', 'one day']) {
+        assert.equal(
+          await pruneWorkerAppStoreRevocations(
+            { ...env, GAME_SERVICES_APP_STORE_REVOCATION_RETENTION_MS: value },
+            nowMs,
+          ),
+          0,
+          `an invalid retention (${value}) prunes nothing`,
+        );
+      }
+    } finally {
+      console.error = consoleError;
+    }
+    assert.equal(errors.length, 5, 'each invalid retention is reported once');
+    assert.equal(await count('1 = 1'), old + unparseable + recent);
+
+    resetAppStoreRevocationPruneClock();
+    assert.equal(await pruneWorkerAppStoreRevocations(retained, nowMs), old);
+    assert.equal(await count('revoked_at_ms < ?', cutoffMs), 0, 'rows past the retention are gone');
+    assert.equal(
+      await count('revoked_at_ms IS NULL'),
+      unparseable,
+      'unparseable rows are never pruned',
+    );
+    assert.equal(await count('revoked_at_ms >= ?', cutoffMs), recent, 'recent rows are kept');
+    await registry.recordRevocation({
+      record: revocationRecord('pruned-later', new Date(cutoffMs - minute).toISOString()),
+      signal,
+    });
+    assert.equal(
+      await pruneWorkerAppStoreRevocations(retained, nowMs + 10 * minute),
+      0,
+      'an isolate prunes at most once an hour',
+    );
+    assert.equal(await pruneWorkerAppStoreRevocations(retained, nowMs + 61 * minute), 1);
+  }
+
+  // --- The entrypoint delegates to the tested function ----------------------
+  {
+    const source = await readFile(new URL('./index.ts', import.meta.url), 'utf8');
+    const start = source.indexOf(
+      'export class GameServicesAppStoreRevocations extends WorkerEntrypoint<GameServicesWorkerEnv> {',
+    );
+    assert.ok(start >= 0, 'index.ts exports the GameServicesAppStoreRevocations entrypoint');
+    const body = source.slice(start, source.indexOf('\n}\n', start));
+    assert.match(
+      body,
+      /async findAppStoreRevocation\(input: AppStoreRevocationLookupRequest\) \{\s*return findWorkerAppStoreRevocation\(this\.env, input\);\s*\}/u,
+    );
+    assert.equal(
+      body.match(/^ {2}(?:async |override )?\w+\(/gmu)?.length,
+      1,
+      'findAppStoreRevocation is its only method: the binding reads, it never writes',
+    );
+    assert.equal(entrypointIsLookupBinding, true);
+    assert.match(source, /runAppStoreRevocationPrune\(this\.env\)/u, 'the cron runs the pruning');
   }
 
   console.log('app store revocation registry (D1) tests passed');
@@ -474,7 +662,8 @@ async function revocationRows(db: D1Database): Promise<number> {
 async function revocationRow(db: D1Database) {
   return db.prepare(
     `SELECT verification_id, revoked_at, revoked_at_ms, notification_type, notification_uuid, recorded_at
-       FROM app_store_revocations WHERE transaction_id = ? OR original_transaction_id = ?`,
+       FROM app_store_revocations
+      WHERE environment = 'Production' AND (transaction_id = ? OR original_transaction_id = ?)`,
   ).bind('2000000000000900', '2000000000000900').first<Record<string, unknown>>();
 }
 

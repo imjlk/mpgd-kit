@@ -793,9 +793,11 @@ Requirements:
 - `GAME_SERVICES_APP_STORE_REVOCATION_REGISTRY = "true"` on this Worker.
   The route then records every verified `REFUND` and `REVOKE` of the
   customer's own one-time purchase before it reads the ledger, whether or
-  not a grant exists. Per grant verification id it keeps the latest
-  revocation, so a redelivery or an older notification that arrives late
-  changes nothing. Apply 0011 before you set the flag. Until the table
+  not a grant exists. For each environment and grant verification id it
+  keeps the latest revocation, so a redelivery or an older notification
+  that arrives late changes nothing. A production deployment that grants
+  sandbox purchases records Production and Sandbox refunds separately, and a
+  lookup only ever answers from its own environment. Apply 0011 before you set the flag. Until the table
   exists, every refund is answered 503 and Apple redelivers it.
 - The iOS verifier Worker bound to this Worker's
   `GameServicesAppStoreRevocations` entrypoint. That entrypoint is
@@ -804,8 +806,8 @@ Requirements:
   that nothing fills is never served as "no refunds". On the memory store,
   the route records into one isolate's memory for local development, and
   the entrypoint still rejects. The flag must be the string `"true"`. Any
-  other value, such as an unquoted TOML `true`, is logged and records
-  nothing.
+  other value, such as an unquoted TOML `true`, is logged once per isolate
+  and records nothing.
 
 Turn the flag on in `server-api` mode too, as soon as the route runs on D1.
 Recording costs one D1 write per refund, and a later switch to
@@ -870,8 +872,23 @@ The two Workers bind each other. Deploy them in this order:
 
 Rows hold no player id. A row can be deleted once its `revoked_at_ms` is
 older than the verifier's `maxSignedAgeMs` plus `clockSkewMs`. By then, every
-JWS the row would refuse is stale anyway. For example, with a one-hour
-window:
+JWS the row would refuse is stale anyway.
+
+To have the cron delete such rows, set
+`GAME_SERVICES_APP_STORE_REVOCATION_RETENTION_MS`. The value is a positive
+integer number of milliseconds, written as a string. It must be at least the
+verifier's `maxSignedAgeMs` plus `clockSkewMs`, because this Worker does not
+know the verifier's window. With the variable unset, nothing is pruned. An
+invalid value is logged once and ignored. Each isolate prunes at most once an
+hour, in bounded batches. For a one-hour window with the default five-minute
+skew:
+
+```toml
+[vars]
+GAME_SERVICES_APP_STORE_REVOCATION_RETENTION_MS = "7200000" # 2 hours >= 1 h + 5 min
+```
+
+Alternatively, delete the rows by hand:
 
 ```sh
 pnpm --dir apps/game-services-worker exec wrangler d1 execute mpgd-game-services --remote \
@@ -879,8 +896,8 @@ pnpm --dir apps/game-services-worker exec wrangler d1 execute mpgd-game-services
 ```
 
 A row whose `revoked_at` did not parse (`revoked_at_ms` is NULL) refuses
-every JWS for that grant. Such a row is never replaced or pruned by this
-rule. Support removes it by hand.
+every JWS for that grant. Such a row is never replaced, and neither the
+retention nor the query above deletes it. Support removes it by hand.
 
 <!-- @link ../apps/game-services-worker/src/appStoreRevocations.ts#createD1AppStoreRevocationRegistry One conditional upsert keeps the latest revokedAt; a D1 failure is AppStoreDependencyUnavailableError. -->
 

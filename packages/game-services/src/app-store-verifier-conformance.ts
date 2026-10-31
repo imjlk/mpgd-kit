@@ -102,6 +102,7 @@ export const appStoreRevocationRegistryConformanceChecks = [
   'a later revocation replaces the earlier one',
   'an unparseable revokedAt replaces a parseable one and is never replaced',
   'grant identities are independent',
+  'environments are independent for the same verification id',
 ] as const;
 
 /** Checked only when `reopen` is given. */
@@ -174,11 +175,16 @@ export async function runAppStoreRevocationRegistryConformance(
   };
   const record = async (value: AppStoreRevocationRecord) =>
     (await writer.recordRevocation({ record: value, signal })).alreadyRecorded;
-  const expectKept = async (expected: AppStoreRevocationRecord | undefined, rule: string) => {
+  const expectKept = async (
+    expected: AppStoreRevocationRecord | undefined,
+    rule: string,
+    /** Where to look when it is not `expected`'s own key (an absent record). */
+    at?: Pick<AppStoreRevocationRecord, 'environment' | 'verificationId'>,
+  ) => {
     for (const [index, reader] of readers.entries()) {
       const kept = await reader.findRevocation({
-        verificationId: expected?.verificationId ?? recordFor('absent').verificationId,
-        environment: expected?.environment ?? 'Production',
+        verificationId: at?.verificationId ?? expected?.verificationId ?? recordFor('absent').verificationId,
+        environment: at?.environment ?? expected?.environment ?? 'Production',
         bundleId: expected?.bundleId ?? 'com.example.game',
         transactionId: expected?.transactionId ?? `conformance-${runId}-absent`,
         originalTransactionId: expected?.originalTransactionId ?? `conformance-${runId}-absent`,
@@ -199,6 +205,7 @@ export async function runAppStoreRevocationRegistryConformance(
     laterRule,
     unparseableRule,
     independentRule,
+    environmentRule,
   ] = appStoreRevocationRegistryConformanceChecks;
 
   await expectKept(undefined, absentRule);
@@ -316,6 +323,31 @@ export async function runAppStoreRevocationRegistryConformance(
   );
   await expectKept(sandbox, independentRule);
   await expectKept(first, independentRule);
+
+  // The same verification id string in both environments: two records. The
+  // Sandbox one is earlier, so a registry keyed by the id alone keeps the
+  // Production record and answers it for a Sandbox lookup.
+  const production = recordFor('environment', { revokedAt: '2026-10-20T12:00:00.000Z' });
+  const sandboxTwin = {
+    ...production,
+    environment: 'Sandbox' as const,
+    revokedAt: '2026-10-20T06:00:00.000Z',
+    notificationUUID: `${production.notificationUUID}-sandbox`,
+  };
+  const productionOnly = recordFor('production-only');
+  assertRevocationConformance(
+    !(await record(production)),
+    `${environmentRule}: Production answered true`,
+  );
+  await expectKept(undefined, environmentRule, { ...production, environment: 'Sandbox' });
+  assertRevocationConformance(
+    !(await record(sandboxTwin)),
+    `${environmentRule}: a Sandbox record answered alreadyRecorded for a Production one`,
+  );
+  await expectKept(sandboxTwin, environmentRule);
+  await expectKept(production, environmentRule);
+  assertRevocationConformance(!(await record(productionOnly)), `${environmentRule}: answered true`);
+  await expectKept(undefined, environmentRule, { ...productionOnly, environment: 'Sandbox' });
 
   return {
     checks: input.reopen === undefined
