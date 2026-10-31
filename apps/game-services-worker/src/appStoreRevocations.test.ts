@@ -11,7 +11,11 @@ import {
   type EvidenceVerificationDecision,
   type VerifyPurchaseEvidenceInput,
 } from '@mpgd/game-services';
-import { runAppStoreRevocationRegistryConformance } from '@mpgd/game-services/app-store-verifier-conformance';
+import {
+  appStoreRevocationRegistryConformanceChecks,
+  appStoreRevocationRegistryDurabilityCheck,
+  runAppStoreRevocationRegistryConformance,
+} from '@mpgd/game-services/app-store-verifier-conformance';
 import { Miniflare } from 'miniflare';
 
 import {
@@ -60,7 +64,11 @@ try {
     reopen: () => createD1AppStoreRevocationRegistry(db),
   });
   assert.equal(conformance.passed, true);
-  assert.equal(conformance.checks.length, 8, 'every rule, durability included');
+  assert.deepEqual(
+    conformance.checks,
+    [...appStoreRevocationRegistryConformanceChecks, appStoreRevocationRegistryDurabilityCheck],
+    'every rule, durability included',
+  );
 
   // Concurrent deliveries settle on the latest revocation whatever their order.
   {
@@ -271,6 +279,35 @@ try {
       ),
       /APP_STORE_REVOCATIONS_NOT_CONFIGURED/u,
     );
+    const memoryEnv = { ...env, MPGD_STORE: 'memory' } satisfies GameServicesWorkerEnv;
+    assert.ok(
+      resolveWorkerAppStoreRevocationRegistry(memoryEnv) !== undefined,
+      'the memory store still records for local development',
+    );
+    await assert.rejects(
+      findWorkerAppStoreRevocation(memoryEnv, lookupRequest('x')),
+      /APP_STORE_REVOCATIONS_NOT_CONFIGURED/u,
+      'a per-isolate registry is never served: another isolate would answer absent',
+    );
+    const errors: unknown[][] = [];
+    const consoleError = console.error;
+    console.error = (...args: unknown[]) => {
+      errors.push(args);
+    };
+    try {
+      for (const value of [true, 'TRUE', '1']) {
+        assert.equal(
+          resolveWorkerAppStoreRevocationRegistry({
+            ...env,
+            GAME_SERVICES_APP_STORE_REVOCATION_REGISTRY: value as unknown as 'true',
+          }),
+          undefined,
+        );
+      }
+    } finally {
+      console.error = consoleError;
+    }
+    assert.equal(errors.length, 3, 'a flag that is not the string "true" is reported, not ignored');
     assertDecision(
       await createOfflineVerifier(createBindingTo(serverApiEnv), jws, {
         now: refundedAt + 20 * minute,

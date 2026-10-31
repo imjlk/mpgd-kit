@@ -136,8 +136,10 @@ export interface AppStoreRevocationRegistryConformanceReport {
  * nothing, an unparseable `revokedAt` counts as the latest, and records are
  * read back field for field. `createInMemoryAppStoreRevocationRegistry`
  * passes it; a durable registry should pass it with `reopen` as well. It
- * writes records under fresh grant identities and deletes nothing; it throws
- * on the first rule that fails.
+ * writes records under fresh grant identities and deletes nothing, so run it
+ * on a test database: each run leaves a few rows, two of them with a
+ * `revokedAt` that does not parse (never replaced or pruned by age). It
+ * throws on the first rule that fails.
  */
 export async function runAppStoreRevocationRegistryConformance(
   input: RunAppStoreRevocationRegistryConformanceInput,
@@ -212,6 +214,12 @@ export async function runAppStoreRevocationRegistryConformance(
   await expectKept(first, firstRule);
 
   const redelivered = { ...first, notificationUUID: `${first.notificationUUID}-redelivered` };
+  // The same instant written another way is the same revocation.
+  const sameInstant = {
+    ...first,
+    revokedAt: '2026-10-20T10:02:03.456+09:00',
+    notificationUUID: `${first.notificationUUID}-same-instant`,
+  };
   assertRevocationConformance(
     await record(first),
     `${redeliveryRule}: the same record answered false`,
@@ -220,10 +228,17 @@ export async function runAppStoreRevocationRegistryConformance(
     await record(redelivered),
     `${redeliveryRule}: an equal revokedAt answered false`,
   );
+  assertRevocationConformance(
+    await record(sameInstant),
+    `${redeliveryRule}: the same instant in another offset answered false`,
+  );
   await expectKept(first, redeliveryRule);
 
   const later = recordFor('order', { revokedAt: '2026-10-20T02:00:00.000Z' });
-  await record(later);
+  assertRevocationConformance(
+    !(await record(later)),
+    `${olderRule}: the first record answered true`,
+  );
   const older = { ...later, revokedAt: '2026-10-20T01:00:00.000Z', notificationUUID: 'older' };
   assertRevocationConformance(await record(older), `${olderRule}: answered false`);
   await expectKept(later, olderRule);
@@ -261,7 +276,10 @@ export async function runAppStoreRevocationRegistryConformance(
   await expectKept(offsetLater, laterRule);
 
   const parseable = recordFor('unparseable', { revokedAt: '2026-10-20T00:00:00.000Z' });
-  await record(parseable);
+  assertRevocationConformance(
+    !(await record(parseable)),
+    `${unparseableRule}: the first record answered true`,
+  );
   const unparseable = { ...parseable, revokedAt: 'unparseable', notificationUUID: 'unparseable' };
   assertRevocationConformance(!(await record(unparseable)), `${unparseableRule}: answered true`);
   await expectKept(unparseable, unparseableRule);
@@ -272,6 +290,16 @@ export async function runAppStoreRevocationRegistryConformance(
     );
   }
   await expectKept(unparseable, unparseableRule);
+  const unparseableFirst = recordFor('unparseable-first', { revokedAt: 'unparseable' });
+  assertRevocationConformance(
+    !(await record(unparseableFirst)),
+    `${unparseableRule}: a first unparseable record answered true`,
+  );
+  assertRevocationConformance(
+    await record({ ...unparseableFirst, revokedAt: '2099-01-01T00:00:00.000Z', notificationUUID: 'later' }),
+    `${unparseableRule}: a parseable record replaced a first unparseable one`,
+  );
+  await expectKept(unparseableFirst, unparseableRule);
 
   const sandbox = recordFor('first', {
     environment: 'Sandbox',

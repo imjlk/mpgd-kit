@@ -23,8 +23,10 @@ export interface AppStoreRevocationsEnv {
   readonly DB?: D1Database;
   /**
    * `"true"` records every verified App Store refund and revocation (D1 table
-   * `app_store_revocations`, migration 0011; a process-local registry on the
-   * memory store) and serves them to the iOS verifier Worker. Required for an
+   * `app_store_revocations`, migration 0011) and serves them to the iOS
+   * verifier Worker. On the memory store the route records into a
+   * process-local registry for local development, and the entrypoint
+   * refuses: another isolate would answer `absent`. Required for an
    * `offline-only` purchase verifier; harmless and recommended in
    * `server-api` mode too, so a later switch starts with the history. Apply
    * 0011 first: with this set, a missing table answers every refund 503
@@ -43,7 +45,15 @@ export interface AppStoreRevocationsEnv {
 export function resolveWorkerAppStoreRevocationRegistry(
   env: AppStoreRevocationsEnv,
 ): AppStoreRevocationRegistry | undefined {
-  if (env.GAME_SERVICES_APP_STORE_REVOCATION_REGISTRY !== 'true') {
+  const flag: unknown = env.GAME_SERVICES_APP_STORE_REVOCATION_REGISTRY;
+  if (flag !== 'true') {
+    if (flag !== undefined) {
+      // A TOML boolean or a typo would silently leave refunds unrecorded.
+      console.error(
+        'App Store revocations are not recorded: GAME_SERVICES_APP_STORE_REVOCATION_REGISTRY '
+          + 'must be the string "true".',
+      );
+    }
     return undefined;
   }
   if (env.MPGD_STORE !== 'd1') {
@@ -58,9 +68,10 @@ export function resolveWorkerAppStoreRevocationRegistry(
 
 /**
  * One lookup for the `GameServicesAppStoreRevocations` entrypoint, as data
- * (errors lose their class across a service binding). Throws when this
- * Worker does not record revocations: the registry would then answer
- * `absent` for every refund, and the verifier would grant without the check.
+ * (errors lose their class across a service binding). Throws unless this
+ * Worker records revocations durably (the flag, the D1 store, and the
+ * notifications route): otherwise the lookup would answer `absent` for
+ * refunds it never saw, and the verifier would grant without the check.
  */
 export async function findWorkerAppStoreRevocation(
   env: AppStoreRevocationsEnv,
@@ -69,12 +80,15 @@ export async function findWorkerAppStoreRevocation(
   const registry = resolveWorkerAppStoreRevocationRegistry(env);
   if (
     registry === undefined
+    // The memory registry is one isolate's: a lookup served by another
+    // isolate would miss every refund this one recorded.
+    || env.MPGD_STORE !== 'd1'
     || env.GAME_SERVICES_APP_STORE_NOTIFICATION_VERIFIER === undefined
     || (env.GAME_SERVICES_APP_STORE_BUNDLE_ID?.trim() ?? '') === ''
   ) {
     throw new Error(
       'APP_STORE_REVOCATIONS_NOT_CONFIGURED: set GAME_SERVICES_APP_STORE_REVOCATION_REGISTRY = "true" '
-        + 'with the App Store notifications route (GAME_SERVICES_APP_STORE_NOTIFICATION_VERIFIER and '
+        + 'with MPGD_STORE = "d1" and the App Store notifications route (GAME_SERVICES_APP_STORE_NOTIFICATION_VERIFIER and '
         + 'GAME_SERVICES_APP_STORE_BUNDLE_ID).',
     );
   }

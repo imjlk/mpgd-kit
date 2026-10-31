@@ -66,7 +66,8 @@ await assertRejects(
 // Comparing revokedAt as text fails.
 await assertRejects(
   () => runAppStoreRevocationRegistryConformance({ registry: textOrderRegistry() }),
-  'sorts later as text',
+  // Fails at the first comparison that needs instants: an equal instant in another offset.
+  'the same instant in another offset',
   'a registry that orders revokedAt as text fails conformance',
 );
 

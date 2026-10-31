@@ -799,9 +799,13 @@ Requirements:
   exists, every refund is answered 503 and Apple redelivers it.
 - The iOS verifier Worker bound to this Worker's
   `GameServicesAppStoreRevocations` entrypoint. That entrypoint is
-  read-only and exposes nothing else. It rejects calls unless the flag and
-  the notifications route are both configured, so a registry that nothing
-  fills is never served as "no refunds".
+  read-only and exposes nothing else. It rejects calls unless the flag, the
+  D1 store, and the notifications route are all configured, so a registry
+  that nothing fills is never served as "no refunds". On the memory store,
+  the route records into one isolate's memory for local development, and
+  the entrypoint still rejects. The flag must be the string `"true"`. Any
+  other value, such as an unquoted TOML `true`, is logged and records
+  nothing.
 
 Turn the flag on in `server-api` mode too, as soon as the route runs on D1.
 Recording costs one D1 write per refund, and a later switch to
