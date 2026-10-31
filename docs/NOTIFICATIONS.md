@@ -165,7 +165,9 @@ Rules the starter's settings screen follows, and your own screen must too:
 > `requested` topics only.
 > The runtime compares its provider with the Worker's registry entry for the
 > target (`GET /providers`), and runs without the check when the Worker
-> cannot be reached or lists no entry for the target. The Reddit runtime
+> cannot be reached or lists no entry for the target. An entry the game
+> cannot read is left out of the list, and a target whose entry was left out
+> logs that once per start before it runs without the check. The Reddit runtime
 > runs without it: its provider and the Devvit server's service come from
 > the same adapter and deployment. The runtime keeps its last registration, push
 > address included, in the platform storage, like other game data. A game

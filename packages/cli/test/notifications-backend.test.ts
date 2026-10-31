@@ -381,6 +381,40 @@ try {
     await backend.runtime.getPermission({ topics: ['daily-ready'] });
   }
 
+  // An entry the game cannot read is left out: the others still load, and the
+  // target whose entry was left out reports it and runs without the comparison.
+  {
+    const reported: unknown[] = [];
+    console.error = (...args: unknown[]) => reported.push(args);
+    const { fetch } = worker(() => ({
+      protocolVersion: '2.0.0-draft.1',
+      providers: [
+        { ...fcmEntry, provider: 'ait-functional', purposes: 'service' },
+        { ...fcmEntry, addressing: 'platform-user' },
+      ],
+      targets: { android: 'fcm', ait: 'ait-functional' },
+    }));
+    const android = createStarterWorkerNotificationBackend(gateway('android'), input({ fetch }));
+    const ait = createStarterWorkerNotificationBackend(gateway('ait'), input({ fetch }));
+    assert.ok(android !== undefined && ait !== undefined);
+    await settle();
+    await settle();
+    // Android's readable entry disagrees with its provider: the check ran.
+    await assert.rejects(
+      android.runtime.getPermission({ topics: ['daily-ready'] }),
+      (error: unknown) => error instanceof NotificationError && error.code === 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
+    );
+    // AIT's entry was left out: reported once, and the runtime runs unchecked.
+    await ait.runtime.getPermission({ topics: ['daily-ready'] });
+    // (This fake Worker answers every route with the registry, so the consent read fails too.)
+    const leftOut = reported.filter((entry) =>
+      /names provider/u.test(String((entry as unknown[])[1])),
+    );
+    assert.equal(leftOut.length, 1);
+    assert.match(String((leftOut[0] as unknown[])[1]), /names provider ait-functional for ait/u);
+    console.error = () => undefined;
+  }
+
   // A Worker it cannot reach: the runtime runs without the comparison, and the failure is logged.
   {
     const reported: unknown[] = [];
