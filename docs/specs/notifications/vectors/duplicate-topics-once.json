@@ -1,0 +1,144 @@
+{
+  "vector": "duplicate-topics-once",
+  "protocol": "2.0.0-draft.1",
+  "summary": "A topic listed twice in one call is asked and recorded once: one prompt, one agreement record, and one topic preference.",
+  "appliesTo": [
+    {
+      "path": "permission.scope",
+      "equals": "topic"
+    },
+    {
+      "path": "permission.readable",
+      "equals": false
+    },
+    {
+      "path": "permission.allowance",
+      "equals": "persistent"
+    }
+  ],
+  "profile": {
+    "provider": "fixture.host-template",
+    "capabilities": {
+      "availability": "available",
+      "permission": {
+        "scope": "topic",
+        "prompt": "host",
+        "readable": false,
+        "serverReadable": false,
+        "allowance": "persistent",
+        "userGesture": true,
+        "settings": false
+      },
+      "remote": {
+        "supported": true,
+        "purposes": [
+          "service",
+          "requested"
+        ],
+        "addressing": "platform-user",
+        "content": "host-template"
+      },
+      "local": {
+        "supported": false
+      },
+      "open": "landing-url"
+    }
+  },
+  "catalog": [
+    {
+      "id": "energy-full",
+      "purpose": "requested",
+      "channels": [
+        "local",
+        "remote"
+      ],
+      "route": "/?entry=continue",
+      "copy": {
+        "ko": {
+          "title": "에너지 충전 완료",
+          "body": "에너지가 가득 찼어요."
+        },
+        "en": {
+          "title": "Energy full",
+          "body": "Your energy is full."
+        }
+      },
+      "mapping": {
+        "templateSetCode": "fixture-energy-full",
+        "agreement": "required"
+      }
+    }
+  ],
+  "context": {
+    "player": "p-1",
+    "now": "2026-10-12T03:00:00Z",
+    "timeZone": "Asia/Seoul"
+  },
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "backend",
+      "action": "authenticate",
+      "player": "p-1"
+    },
+    {
+      "actor": "game",
+      "action": "getPermission",
+      "input": {
+        "topics": [
+          "energy-full",
+          "energy-full"
+        ]
+      },
+      "returns": {
+        "topics": {
+          "energy-full": "unknown"
+        }
+      }
+    },
+    {
+      "actor": "host",
+      "action": "queuePrompt",
+      "result": "granted"
+    },
+    {
+      "actor": "game",
+      "action": "requestPermission",
+      "input": {
+        "topics": [
+          "energy-full",
+          "energy-full"
+        ],
+        "gesture": true
+      },
+      "returns": {
+        "outcomes": {
+          "energy-full": "granted"
+        }
+      }
+    }
+  ],
+  "expect": {
+    "prompts": 1,
+    "consent": [
+      {
+        "kind": "host-agreement",
+        "topic": "energy-full",
+        "state": "granted",
+        "source": "client-report",
+        "evidence": {
+          "schema": "fixture.host-agreement.v1"
+        }
+      },
+      {
+        "kind": "topic-preference",
+        "topic": "energy-full",
+        "state": "granted",
+        "source": "player"
+      }
+    ]
+  }
+}

@@ -1,0 +1,225 @@
+{
+  "vector": "endpoint-unbind-until-register",
+  "protocol": "2.0.0-draft.1",
+  "summary": "unregister() cancels the device's pending local reminders and leaves the installation unbound, even across a restart and a read, until register() binds it again.",
+  "appliesTo": [
+    {
+      "path": "remote.addressing",
+      "equals": "device"
+    },
+    {
+      "path": "local.supported",
+      "equals": true
+    }
+  ],
+  "profile": {
+    "provider": "fixture.os-fcm",
+    "capabilities": {
+      "availability": "available",
+      "permission": {
+        "scope": "app",
+        "prompt": "os",
+        "readable": true,
+        "serverReadable": false,
+        "allowance": "persistent",
+        "userGesture": false,
+        "promptLimit": 2,
+        "settings": true
+      },
+      "remote": {
+        "supported": true,
+        "purposes": [
+          "service",
+          "requested",
+          "advertising"
+        ],
+        "addressing": "device",
+        "content": "free-form"
+      },
+      "local": {
+        "supported": true,
+        "maxPending": 64
+      },
+      "open": "payload"
+    }
+  },
+  "catalog": [
+    {
+      "id": "energy-full",
+      "purpose": "requested",
+      "channels": [
+        "local",
+        "remote"
+      ],
+      "route": "/?entry=continue",
+      "copy": {
+        "ko": {
+          "title": "에너지 충전 완료",
+          "body": "에너지가 가득 찼어요."
+        },
+        "en": {
+          "title": "Energy full",
+          "body": "Your energy is full."
+        }
+      },
+      "mapping": {
+        "channelId": "reminders"
+      }
+    }
+  ],
+  "context": {
+    "player": "p-1",
+    "now": "2026-10-12T03:00:00Z",
+    "timeZone": "Asia/Seoul"
+  },
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "backend",
+      "action": "authenticate",
+      "player": "p-1"
+    },
+    {
+      "actor": "host",
+      "action": "issueEndpoint",
+      "endpoint": {
+        "kind": "fcm-token",
+        "value": "tok-1"
+      }
+    },
+    {
+      "actor": "host",
+      "action": "queuePrompt",
+      "result": "granted"
+    },
+    {
+      "actor": "game",
+      "action": "requestPermission",
+      "input": {
+        "topics": [
+          "energy-full"
+        ],
+        "gesture": true
+      }
+    },
+    {
+      "actor": "game",
+      "action": "setTopicPreference",
+      "input": {
+        "topic": "energy-full",
+        "enabled": true
+      }
+    },
+    {
+      "actor": "game",
+      "action": "setReminder",
+      "input": {
+        "key": "energy",
+        "topic": "energy-full",
+        "fireAt": "2026-10-12T06:00:00Z"
+      },
+      "returns": {
+        "route": "local",
+        "status": "scheduled"
+      }
+    },
+    {
+      "actor": "game",
+      "action": "unregister"
+    },
+    {
+      "actor": "runtime",
+      "action": "restart"
+    },
+    {
+      "actor": "game",
+      "action": "getPermission",
+      "input": {
+        "topics": [
+          "energy-full"
+        ]
+      },
+      "returns": {
+        "topics": {
+          "energy-full": "granted"
+        }
+      }
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "energy-full",
+        "idempotencyKey": "u-1"
+      },
+      "returns": {
+        "status": "unavailable",
+        "reason": "no-endpoint"
+      }
+    },
+    {
+      "actor": "game",
+      "action": "register"
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "energy-full",
+        "idempotencyKey": "u-2"
+      },
+      "returns": {
+        "status": "delivered"
+      }
+    }
+  ],
+  "expect": {
+    "local": {
+      "operations": [
+        {
+          "op": "schedule",
+          "key": "energy",
+          "topic": "energy-full",
+          "fireAt": "2026-10-12T06:00:00Z",
+          "exact": false
+        },
+        {
+          "op": "cancel",
+          "key": "energy"
+        }
+      ],
+      "pending": []
+    },
+    "endpoints": [
+      {
+        "provider": "fixture.os-fcm",
+        "kind": "fcm-token",
+        "value": "tok-1",
+        "installationId": "installation-1",
+        "permission": "granted",
+        "player": "p-1",
+        "status": "valid"
+      }
+    ],
+    "deliveries": [
+      {
+        "idempotencyKey": "u-1",
+        "status": "unavailable",
+        "reason": "no-endpoint"
+      },
+      {
+        "idempotencyKey": "u-2",
+        "status": "delivered"
+      }
+    ],
+    "providerCalls": [
+      {
+        "topic": "energy-full",
+        "address": "tok-1"
+      }
+    ]
+  }
+}

@@ -303,7 +303,9 @@ invitation to buy.
    - **Targets.** A target that does not map the topic never delivers it.
      Apps in Toss needs the console template's code and `agreement`
      (`none` only for a `service` template without an agreement statement);
-     Devvit needs its pre-approved `title` (60) and `body` (100 characters).
+     Devvit needs its pre-approved `title` (60) and `body` (100 characters;
+     Devvit does not say which unit it counts, so the kit counts Unicode code
+     points of the filled text and refuses a longer one before sending).
    - **Copy** must include the catalog's `defaultLocale`; `{{name}}`
      placeholders are filled from the reminder's or send's template data.
      A server reminder whose data cannot fill every locale copy, or the

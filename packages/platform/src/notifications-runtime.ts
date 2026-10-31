@@ -429,6 +429,14 @@ interface PendingRecord {
   readonly player: string | undefined;
 }
 
+/** One `listConsent` answer, with the session it was read in and the runtime's write count before it. */
+interface ConsentRead {
+  readonly player: string;
+  readonly session: string;
+  readonly writes: number;
+  readonly listed: readonly NotificationConsentRecord[];
+}
+
 /** A decided state the host reported for the app (no topic) or one topic. */
 interface Observation {
   readonly topic?: string;
@@ -670,6 +678,8 @@ export function createNotificationRuntime(
     }
   };
   const waitingRecords: PendingRecord[] = [];
+  /** `recordConsent` calls this runtime made, answered or not: a read from before one is not reused. */
+  let consentWrites = 0;
   /** One promise chain per queue: records, registrations, and local reminder changes. */
   const queues: Record<RuntimeQueue, Promise<unknown>> = {
     record: Promise.resolve(),
@@ -730,21 +740,53 @@ export function createNotificationRuntime(
 
   // Consent records.
 
-  /** The session player's records, with that player's records still waiting; `undefined` without a session. */
-  const readRecords = async (): Promise<NotificationConsentRecord[] | undefined> => {
+  /**
+   * `read` while it still holds the backend's records for `session`: read in
+   * that session, and before no record this runtime wrote since. A read
+   * reuses its own listing for the local sweep that follows it, instead of
+   * asking the backend again. The sweep only cancels, and a withdrawal from
+   * another device that this listing misses is caught by the next sweep;
+   * writes never reuse a listing (see `writeRecords`).
+   */
+  const reusableRead = (
+    read: ConsentRead | undefined,
+    session: NotificationRuntimeSession,
+  ): ConsentRead | undefined =>
+    read !== undefined
+    && read.player === session.player
+    && read.session === session.id
+    && read.writes === consentWrites
+      ? read
+      : undefined;
+  /** The session player's records as the backend lists them, or `reuse`; `undefined` without a session. */
+  const readConsent = async (reuse?: ConsentRead): Promise<ConsentRead | undefined> => {
     const session = backend.session();
     // Nothing is read from a backend whose registry entry the provider disagrees with.
     if (session === undefined || configurationIssue !== undefined) {
       return undefined;
     }
-    const records = await backend.listConsent();
-    return [
-      ...records,
-      ...waitingRecords
-        .filter((pending) => pending.player === undefined || pending.player === session.player)
-        .map((pending) => pending.record),
-    ];
+    const reused = reusableRead(reuse, session);
+    if (reused !== undefined) {
+      return reused;
+    }
+    // Counted before the call: a write that ends during it makes the read stale.
+    const writes = consentWrites;
+    const listed = await backend.listConsent();
+    return { player: session.player, session: session.id, writes, listed };
   };
+  /** The records of a read, with that player's records still waiting. */
+  const withWaiting = (read: ConsentRead | undefined): NotificationConsentRecord[] | undefined =>
+    read === undefined
+      ? undefined
+      : [
+          ...read.listed,
+          ...waitingRecords
+            .filter((pending) => pending.player === undefined || pending.player === read.player)
+            .map((pending) => pending.record),
+        ];
+  /** The session player's records, with that player's records still waiting; `undefined` without a session. */
+  const readRecords = async (reuse?: ConsentRead): Promise<NotificationConsentRecord[] | undefined> =>
+    withWaiting(await readConsent(reuse));
   const addWaiting = (next: PendingRecord): void => {
     if (next.player === undefined && next.mode !== 'each') {
       // Before authentication only the latest per kind and scope is kept.
@@ -766,6 +808,10 @@ export function createNotificationRuntime(
   /**
    * Inside the record queue: writes the session player's waiting records and
    * then `pending`, in order. What cannot be written waits for the next write.
+   * It lists the records afresh, never from a caller's earlier read: a
+   * `changed` record is skipped when the listing already holds its state, so
+   * a listing from before the queue wait could miss another device's record
+   * and skip one that must be written.
    */
   const writeRecords = async (pending: readonly PendingRecord[]): Promise<void> => {
     for (const next of pending) {
@@ -805,7 +851,12 @@ export function createNotificationRuntime(
         if (next !== undefined) {
           const latest = latestNotificationConsent(records, next.record.kind, next.record.topic);
           if (next.mode !== 'changed' || latest?.state !== next.record.state) {
-            await backend.recordConsent(next.record);
+            try {
+              await backend.recordConsent(next.record);
+            } finally {
+              // Even a failed write may have reached the backend.
+              consentWrites += 1;
+            }
             records.push(next.record);
           }
         }
@@ -1243,11 +1294,46 @@ export function createNotificationRuntime(
       return;
     }
     const keys = (await listLocalEntries()).filter(refused).map((entry) => entry.key);
-    if (keys.length > 0) {
+    if (keys.length === 0) {
+      return;
+    }
+    try {
       await cancelLocal.call(provider, { keys });
-      for (const key of keys) {
-        scheduledLocal.delete(key);
+    } catch (error) {
+      if (keys.length === 1) {
+        throw error;
       }
+      // One key the host cannot cancel must not keep the rest of the batch
+      // pending, so each key is tried alone. A first single-key call that
+      // fails too means the host is failing every call: the rest are not
+      // tried, and that failure is thrown. Once a single-key call succeeds,
+      // a later key that fails is that key's own: the others are still
+      // tried, and the first such failure is thrown.
+      let failed: { readonly error: unknown } | undefined;
+      let succeeded = false;
+      for (const key of keys) {
+        try {
+          await cancelLocal.call(provider, { keys: [key] });
+          scheduledLocal.delete(key);
+          succeeded = true;
+        } catch (keyError) {
+          if (!succeeded) {
+            throw keyError;
+          }
+          failed ??= { error: keyError };
+        }
+      }
+      if (failed !== undefined) {
+        throw failed.error;
+      }
+      // Every key cancelled alone: the sweep succeeded, and the batch
+      // failure is reported, not thrown, so a host whose batch cancel is
+      // broken still shows.
+      fail(error);
+      return;
+    }
+    for (const key of keys) {
+      scheduledLocal.delete(key);
     }
   };
   /**
@@ -1291,7 +1377,7 @@ export function createNotificationRuntime(
    * runs even when the first fails, and the first one's error is thrown at
    * the end (with the second one's, if both fail).
    */
-  const reconcileLocal = (): Promise<void> =>
+  const reconcileLocal = (reuse?: ConsentRead): Promise<void> =>
     enqueue('local', async () => {
       const capabilities = await provider.getCapabilities();
       if (!capabilities.local.supported || provider.cancelLocal === undefined) {
@@ -1310,7 +1396,7 @@ export function createNotificationRuntime(
         offRoute = { error };
       }
       try {
-        await cancelRefusedLocal(capabilities, localTopicOf);
+        await cancelRefusedLocal(capabilities, localTopicOf, reuse);
       } catch (error) {
         if (offRoute === undefined) {
           throw error;
@@ -1327,34 +1413,57 @@ export function createNotificationRuntime(
   /**
    * Inside the local queue: the second sweep. Reminders whose topic left the
    * local route belong to the first sweep and are skipped, so a reminder the
-   * host cannot cancel is not tried twice.
+   * host cannot cancel is not tried twice. When the backend cannot be read,
+   * the reminders whose permission the host itself reports as revoked are
+   * still cancelled, and the read's error is thrown after.
    */
   const cancelRefusedLocal = async (
     capabilities: NotificationCapabilities,
     localTopicOf: (entry: LocalEntry) => NotificationTopicDeclaration | undefined,
+    reuse?: ConsentRead,
   ): Promise<void> => {
     const pending = (await listLocalEntries()).filter((entry) => localTopicOf(entry) !== undefined);
     if (pending.length === 0) {
       return;
     }
-    const records = await readRecords();
+    let records: NotificationConsentRecord[] | undefined;
+    let readFailure: { readonly error: unknown } | undefined;
+    try {
+      records = await readRecords(reuse);
+    } catch (error) {
+      readFailure = { error };
+    }
     const topics = [...new Set(pending.map((entry) => entry.topic))];
-    const states = resolveStates(
-      capabilities,
-      await provider.getPermission({ topics }),
-      topics,
-      records,
-    );
-    await cancelLocalNow((entry) => {
-      const topic = localTopicOf(entry);
-      if (topic === undefined) {
-        return false;
+    try {
+      const states = resolveStates(
+        capabilities,
+        await provider.getPermission({ topics }),
+        topics,
+        records,
+      );
+      await cancelLocalNow((entry) => {
+        const topic = localTopicOf(entry);
+        if (topic === undefined) {
+          return false;
+        }
+        if (revokesLocalReminders(stateIn(states, entry.topic))) {
+          return true;
+        }
+        return records !== undefined && preferenceRefuses(topic, records, clock.now());
+      });
+    } catch (error) {
+      if (readFailure === undefined) {
+        throw error;
       }
-      if (revokesLocalReminders(stateIn(states, entry.topic))) {
-        return true;
-      }
-      return records !== undefined && preferenceRefuses(topic, records, clock.now());
-    });
+      throw new AggregateError(
+        [readFailure.error, error],
+        'The records could not be read, and the local reminders could not be cancelled. First: '
+          + describeError(readFailure.error),
+      );
+    }
+    if (readFailure !== undefined) {
+      throw readFailure.error;
+    }
   };
   /** The zone the device registered, else the deployment's. */
   const localZone = (registered: NotificationEndpointRegistration | undefined): string => {
@@ -1654,9 +1763,12 @@ export function createNotificationRuntime(
           sources: Object.fromEntries(request.topics.map((topic) => [topic, 'host' as const])),
         };
       }
+      // One backend read serves the records and the local sweep; the write lists afresh.
+      let read: ConsentRead | undefined;
       let records: NotificationConsentRecord[] | undefined;
       try {
-        records = await readRecords();
+        read = await readConsent();
+        records = withWaiting(read);
       } catch (error) {
         // A read still answers when the backend cannot.
         fail(error);
@@ -1671,7 +1783,7 @@ export function createNotificationRuntime(
       await settle(syncRegistration(capabilities, states.app));
       await settle(cancelRevokedLocal(capabilities, states, request.topics));
       if (records !== undefined) {
-        await settle(reconcileLocal());
+        await settle(reconcileLocal(read));
       }
       await settle(refreshRegistration(false));
       return {

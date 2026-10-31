@@ -589,6 +589,247 @@ describe('createNotificationRuntime storage', () => {
     await expect(runtime.runUntilIdle()).rejects.toBeDefined();
   });
 
+  /** A signed-in player with the topic on and one local reminder pending, over a counting backend. */
+  async function withLocalReminder(
+    overrides: (backend: NotificationRuntimeBackend) => Partial<NotificationRuntimeBackend> = () => ({}),
+  ) {
+    const { host, backend, create } = setup();
+    const calls: string[] = [];
+    const counted = clientOf(backend, {
+      listConsent: async () => {
+        calls.push('listConsent');
+        return backend.listConsent();
+      },
+      recordConsent: async (record) => {
+        calls.push('recordConsent');
+        return backend.recordConsent(record);
+      },
+      ...overrides(backend),
+    });
+    const runtime = create(counted);
+    await runtime.start();
+    backend.authenticate('p-1');
+    host.queuePrompt('granted');
+    await runtime.requestPermission({ topics: ['energy-full'], gesture: true });
+    await runtime.setTopicPreference({ topic: 'energy-full', enabled: true });
+    expect(await runtime.reminders.set({ key: 'energy', topic: 'energy-full', fireAt: '2026-10-12T05:00:00Z' }))
+      .toEqual({ route: 'local', status: 'scheduled' });
+    await runtime.runUntilIdle();
+    calls.length = 0;
+    return { host, backend, runtime, calls };
+  }
+
+  it('reads the records once for a read and its local sweep', async () => {
+    const { host, backend, runtime, calls } = await withLocalReminder();
+    // Another device turns the topic off: only the sweep after a read sees it.
+    await backend.recordConsent({
+      kind: 'topic-preference',
+      topic: 'energy-full',
+      state: 'withdrawn',
+      source: 'player',
+      at: '2026-10-12T03:00:01Z',
+    });
+    await runtime.getPermission({ topics: ['energy-full'] });
+    await runtime.runUntilIdle();
+    expect(host.localPending).toEqual([]);
+    expect(calls).toEqual(['listConsent']);
+  });
+
+  it("lists the records afresh before a write, so another device's grant does not hide the host's denial", async () => {
+    const profile = {
+      ...osProfile,
+      capabilities: {
+        ...osProfile.capabilities,
+        remote: { ...osProfile.capabilities.remote, addressing: 'platform-user' as const },
+      },
+    };
+    const clock = createNotificationConformanceClock(now);
+    const host = createNotificationConformanceHost({ profile, catalog: [energy], timeZone: 'Asia/Seoul' });
+    const entry = notificationConformanceRegistryEntry({ provider: profile.provider, capabilities: profile.capabilities });
+    const backend = createNotificationConformanceBackend({
+      entry,
+      catalog: [energy],
+      clock,
+      defaultLocale: 'ko',
+      defaultPlayer: 'p-1',
+    });
+    let grantAfterNextList = false;
+    const runtime = createNotificationRuntime({
+      provider: host.provider,
+      backend: clientOf(backend, {
+        listConsent: async () => {
+          const listed = await backend.listConsent();
+          if (grantAfterNextList) {
+            // Another device records a grant right after this call's read.
+            grantAfterNextList = false;
+            clock.advance(1);
+            await backend.recordConsent({
+              kind: 'delivery-permission',
+              state: 'granted',
+              source: 'client-report',
+              at: clock.now(),
+            });
+          }
+          return listed;
+        },
+      }),
+      catalog: [energy],
+      clock,
+      defaultLocale: 'ko',
+      ...(entry === undefined ? {} : { registryEntry: entry }),
+    });
+    await runtime.start();
+    backend.authenticate('p-1');
+    host.setPermission('denied');
+    await runtime.getPermission({ topics: ['energy-full'] });
+    await runtime.runUntilIdle();
+    const permissionStates = async () => (await backend.listConsent())
+      .filter((record) => record.kind === 'delivery-permission')
+      .map((record) => record.state);
+    expect(await permissionStates()).toEqual(['denied']);
+    grantAfterNextList = true;
+    clock.advance(1);
+    await runtime.getPermission({ topics: ['energy-full'] });
+    await runtime.runUntilIdle();
+    // The host still reads denied after the other device's grant: the denial is written again.
+    expect(await permissionStates()).toEqual(['denied', 'granted', 'denied']);
+  });
+
+  it('reads the records again after the runtime wrote one since its read', async () => {
+    const { runtime, calls } = await withLocalReminder();
+    // The preference write between the two reads makes the first one stale.
+    await runtime.setTopicPreference({ topic: 'energy-full', enabled: false });
+    await runtime.getPermission({ topics: ['energy-full'] });
+    await runtime.runUntilIdle();
+    expect(calls).toEqual(['listConsent', 'recordConsent', 'listConsent']);
+  });
+
+  /** A runtime with three pending local reminders of the topic, over a provider whose cancelLocal `cancel` decides. */
+  async function withThreeReminders(
+    cancel: (keys: readonly string[], cancelLocal: (keys: readonly string[]) => Promise<void>) => Promise<void>,
+  ) {
+    const { host, backend } = setup();
+    const errors: unknown[] = [];
+    const batches: (readonly string[])[] = [];
+    const cancelLocal = host.provider.cancelLocal;
+    const provider = {
+      ...host.provider,
+      cancelLocal: async (request: { readonly keys: readonly string[] }) => {
+        batches.push([...request.keys]);
+        await cancel(request.keys, async (keys) => {
+          await cancelLocal?.call(host.provider, { keys });
+        });
+      },
+    };
+    const runtime = createNotificationRuntime({
+      provider,
+      backend,
+      catalog: [energy],
+      defaultLocale: 'ko',
+      onError: (error) => errors.push(error),
+    });
+    await runtime.start();
+    backend.authenticate('p-1');
+    host.queuePrompt('granted');
+    await runtime.requestPermission({ topics: ['energy-full'], gesture: true });
+    await runtime.setTopicPreference({ topic: 'energy-full', enabled: true });
+    // Pending in this order: early, stuck, late.
+    for (const [key, fireAt] of [['early', '05:00'], ['stuck', '06:00'], ['late', '07:00']] as const) {
+      await runtime.reminders.set({ key, topic: 'energy-full', fireAt: `2026-10-12T${fireAt}:00Z` });
+    }
+    await runtime.runUntilIdle();
+    batches.length = 0;
+    return { host, runtime, batches, errors };
+  }
+
+  it('cancels each local reminder alone when the host fails a batch, and throws for the one it cannot cancel', async () => {
+    const stuck = new Error('the host cannot cancel this one');
+    const { host, runtime, batches } = await withThreeReminders(async (keys, cancel) => {
+      if (keys.includes('stuck')) {
+        throw stuck;
+      }
+      await cancel(keys);
+    });
+    await expect(runtime.setTopicPreference({ topic: 'energy-full', enabled: false })).rejects.toBe(stuck);
+    expect(host.localPending.map((entry) => entry.key)).toEqual(['stuck']);
+    // One batch of three, then each key alone: a key after the stuck one is still tried.
+    expect(batches).toEqual([['early', 'stuck', 'late'], ['early'], ['stuck'], ['late']]);
+  });
+
+  it('reports a failed batch whose keys then cancel alone, and the sweep succeeds', async () => {
+    const flaky = new Error('the batch cancel failed once');
+    let failures = 1;
+    const { host, runtime, batches, errors } = await withThreeReminders(async (keys, cancel) => {
+      if (failures > 0) {
+        failures -= 1;
+        throw flaky;
+      }
+      await cancel(keys);
+    });
+    await runtime.setTopicPreference({ topic: 'energy-full', enabled: false });
+    expect(host.localPending).toEqual([]);
+    expect(batches).toEqual([['early', 'stuck', 'late'], ['early'], ['stuck'], ['late']]);
+    expect(errors).toEqual([flaky]);
+    await expect(runtime.runUntilIdle()).rejects.toBe(flaky);
+  });
+
+  it('stops after one single-key retry when the host fails every cancel', async () => {
+    const down = new Error('the host fails every call');
+    const { host, runtime, batches } = await withThreeReminders(async () => {
+      throw down;
+    });
+    await expect(runtime.setTopicPreference({ topic: 'energy-full', enabled: false })).rejects.toBe(down);
+    // One batch call and one single-key call, not one per key.
+    expect(batches).toEqual([['early', 'stuck', 'late'], ['early']]);
+    expect(host.localPending.map((entry) => entry.key)).toEqual(['early', 'stuck', 'late']);
+  });
+
+  it('still cancels local reminders the host reports revoked when the records cannot be read', async () => {
+    const down = new Error('backend down');
+    let failing = false;
+    const { host, backend, runtime } = await withLocalReminder((inner) => ({
+      listConsent: async () => {
+        if (failing) {
+          throw down;
+        }
+        return inner.listConsent();
+      },
+    }));
+    // Permission turned off in system settings raises no event; the next sign-in reconciles.
+    host.setPermission('denied');
+    failing = true;
+    backend.authenticate('p-1');
+    await expect(runtime.runUntilIdle()).rejects.toBe(down);
+    expect(host.localPending).toEqual([]);
+  });
+
+  it('throws both failures when neither the records can be read nor the reminders cancelled', async () => {
+    const down = new Error('backend down');
+    const stuck = new Error('the host cannot cancel');
+    let failing = false;
+    const { host, backend, runtime } = await withLocalReminder((inner) => ({
+      listConsent: async () => {
+        if (failing) {
+          throw down;
+        }
+        return inner.listConsent();
+      },
+    }));
+    const cancelLocal = host.provider.cancelLocal;
+    (host.provider as { cancelLocal?: typeof cancelLocal }).cancelLocal = async (request) => {
+      if (failing) {
+        throw stuck;
+      }
+      await cancelLocal?.call(host.provider, request);
+    };
+    host.setPermission('denied');
+    failing = true;
+    backend.authenticate('p-1');
+    const thrown: unknown = await runtime.runUntilIdle().then(() => undefined, (error: unknown) => error);
+    expect(thrown).toBeInstanceOf(AggregateError);
+    expect((thrown as AggregateError).errors).toEqual([down, stuck]);
+  });
+
   it('reads a value that is not a runtime state as an empty one', () => {
     expect(notificationRuntimeStateOf(undefined)).toEqual({});
     expect(notificationRuntimeStateOf('x')).toEqual({});
