@@ -8,6 +8,7 @@ import {
 } from '@mpgd/game-services/notifications';
 
 import { devvitUserIdPattern } from '../notifications-contract.js';
+import { isThrownInstance } from '../thrown-values.js';
 import {
   devvitNotificationSessionFromContext,
   type DevvitNotificationSessionContext,
@@ -142,8 +143,8 @@ function warnBackendFailure(error: unknown, context: { readonly method: string }
   // service refuses is the caller's: neither is a server failure, and a
   // webview could otherwise fill the log with them.
   if (
-    error instanceof NotificationConsentRateLimitError
-    || (error instanceof NotificationError && error.code === 'NOTIFICATIONS_INVALID_INPUT')
+    isThrownInstance(error, NotificationConsentRateLimitError)
+    || (isThrownInstance(error, NotificationError) && error.code === 'NOTIFICATIONS_INVALID_INPUT')
   ) {
     return;
   }

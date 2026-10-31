@@ -671,6 +671,23 @@ describe('createNotificationRuntime storage', () => {
     expect(kept.registration).not.toBe(registration);
   });
 
+  it('reads a stored value whose fields cannot be read as an empty state', async () => {
+    const hostile = (): never => {
+      throw new Error('hostile read');
+    };
+    const revocable = Proxy.revocable({}, {});
+    revocable.revoke();
+    for (const stored of [new Proxy({}, { get: hostile, getPrototypeOf: hostile }), revocable.proxy]) {
+      const { host, backend, create } = setup({ load: () => stored, save: () => undefined });
+      backend.authenticate('p-1');
+      host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+      const runtime = create();
+      await runtime.start();
+      await runtime.runUntilIdle();
+      expect(backend.endpoints.map((endpoint) => endpoint.value)).toEqual(['tok-1']);
+    }
+  });
+
   it('starts over a stored state with an unreadable entry and registers again', async () => {
     const stored = {
       get registration(): unknown {
@@ -1321,6 +1338,44 @@ describe('createNotificationRuntime review fixes', () => {
     clock.advance(30);
     await runtime.getPermission({ topics: ['energy-full'] });
     await runtime.runUntilIdle();
+    expect(backend.endpoints.map((endpoint) => endpoint.value)).toEqual(['tok-1']);
+  });
+
+  it('backs reads off a first registration that failed on endpoint-changed', async () => {
+    const { clock, host, backend } = setup();
+    const attempts: string[] = [];
+    let failing = true;
+    const runtime = createNotificationRuntime({
+      provider: host.provider,
+      backend: clientOf(backend, {
+        registerEndpoint: async (registration) => {
+          attempts.push(clock.now());
+          if (failing) {
+            throw new NotificationError('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', { message: '503' });
+          }
+          await backend.registerEndpoint(registration);
+        },
+      }),
+      catalog: [energy],
+      clock,
+      defaultLocale: 'ko',
+      onError: () => undefined,
+    });
+    backend.authenticate('p-1');
+    await runtime.start();
+    await runtime.runUntilIdle().catch(() => undefined);
+    // The address arrives late, as an FCM token often does, and its registration fails.
+    host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    await runtime.runUntilIdle().catch(() => undefined);
+    expect(attempts).toHaveLength(1);
+    await runtime.getPermission({ topics: ['energy-full'] });
+    await runtime.runUntilIdle().catch(() => undefined);
+    expect(attempts).toHaveLength(1);
+    failing = false;
+    clock.advance(30);
+    await runtime.getPermission({ topics: ['energy-full'] });
+    await runtime.runUntilIdle();
+    expect(attempts).toHaveLength(2);
     expect(backend.endpoints.map((endpoint) => endpoint.value)).toEqual(['tok-1']);
   });
 

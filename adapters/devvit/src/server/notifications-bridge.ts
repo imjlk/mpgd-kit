@@ -14,6 +14,7 @@ import {
   devvitNotificationProviderId,
   devvitUserIdPattern,
 } from '../notifications-contract.js';
+import { isThrownInstance } from '../thrown-values.js';
 
 /**
  * The game-rendered consent of the Devvit profile (notifications v2 RFC,
@@ -267,7 +268,7 @@ export function createDevvitNotificationsV2BridgeHandler(
     // An unexpected failure's text stays on the server.
     unexpectedFailureMessage: (method) => `${method} failed on the Devvit server.`,
     onError: input.onError ?? ((error, context) => {
-      if (error instanceof NotificationError && error.code === 'NOTIFICATIONS_UNSUPPORTED') {
+      if (isThrownInstance(error, NotificationError) && error.code === 'NOTIFICATIONS_UNSUPPORTED') {
         return;
       }
       console.warn(`devvit notifications ${context.method} failed`, error);

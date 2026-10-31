@@ -394,10 +394,16 @@ function fieldOf(value: Readonly<Record<string, unknown>>, key: string): unknown
   }
 }
 
+/** Whether `value` is a thenable; `false` when reading its `then` throws (a getter, a `Proxy` trap). */
 function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
-  return (typeof value === 'object' || typeof value === 'function')
-    && value !== null
-    && typeof (value as { readonly then?: unknown }).then === 'function';
+  if ((typeof value !== 'object' && typeof value !== 'function') || value === null) {
+    return false;
+  }
+  try {
+    return typeof (value as { readonly then?: unknown }).then === 'function';
+  } catch {
+    return false;
+  }
 }
 
 /** A mutable copy of the runtime state, which the runtime saves after each change. */
@@ -623,7 +629,26 @@ export function createNotificationRuntime(
    * After registrations that failed in a row: how many, and the time (epoch
    * ms) before which a read does not retry. Cleared by one the backend acknowledges.
    */
-  let registrationRetry: { readonly failures: number; readonly notBefore: number } | undefined;
+  let registrationRetry:
+    | { readonly failures: number; readonly notBefore: number; readonly session: string | undefined }
+    | undefined;
+  /** The clock in epoch ms; `NaN` when it cannot be read, which holds nothing back. */
+  const nowMs = (): number => {
+    try {
+      return Date.parse(clock.now());
+    } catch {
+      return Number.NaN;
+    }
+  };
+  /** The session a backoff belongs to: another session's failures hold nothing back. */
+  const retrySessionKey = (): string | undefined => {
+    try {
+      const session = backend.session();
+      return session === undefined ? undefined : JSON.stringify([session.player, session.id]);
+    } catch {
+      return undefined;
+    }
+  };
   const background = new Set<Promise<void>>();
   /** The first background failure since the last `runUntilIdle`, and how many there were. */
   let failure: { readonly error: unknown; count: number } | undefined;
@@ -1018,19 +1043,21 @@ export function createNotificationRuntime(
     persisted.registration = acknowledged;
     registrationRetry = undefined;
   };
-  /** Holds reads back from retrying a registration that failed: 30 s, doubling per failure, at most an hour. */
+  /**
+   * Holds reads back from retrying a registration that failed: 30 s, doubling
+   * per failure in a row for the same session, at most an hour.
+   */
   const noteRegistrationFailure = (): void => {
-    const failures = (registrationRetry?.failures ?? 0) + 1;
-    let now: number;
-    try {
-      now = Date.parse(clock.now());
-    } catch {
-      now = Number.NaN;
-    }
+    const session = retrySessionKey();
+    const previous = registrationRetry !== undefined && registrationRetry.session === session
+      ? registrationRetry.failures
+      : 0;
+    const failures = previous + 1;
     // A clock that cannot be read holds nothing back (`NaN` is never later).
     registrationRetry = {
       failures,
-      notBefore: now + Math.min(registrationRetryBaseMs * 2 ** Math.min(failures - 1, 16), registrationRetryMaxMs),
+      notBefore: nowMs() + Math.min(registrationRetryBaseMs * 2 ** Math.min(failures - 1, 16), registrationRetryMaxMs),
+      session,
     };
   };
   /** `work`, noting a failure for the read backoff before it is rethrown. */
@@ -1133,14 +1160,20 @@ export function createNotificationRuntime(
    * since the failure has passed (`registrationRetryBaseMs`, doubling per
    * failure in a row, at most `registrationRetryMaxMs`), so a game that reads
    * often does not send a registration on every read to a backend that keeps
-   * refusing it. Start does not wait.
+   * refusing it. Start does not wait, and the backoff belongs to the session
+   * it was noted for: a read for another session does not wait for it.
    */
   const refreshRegistration = async (atStart: boolean): Promise<void> => {
     const session = backend.session();
     if (session === undefined) {
       return;
     }
-    if (!atStart && registrationRetry !== undefined && Date.parse(clock.now()) < registrationRetry.notBefore) {
+    if (
+      !atStart
+      && registrationRetry !== undefined
+      && registrationRetry.session === retrySessionKey()
+      && nowMs() < registrationRetry.notBefore
+    ) {
       return;
     }
     const persisted = kept ?? await loadState();
@@ -1451,7 +1484,7 @@ export function createNotificationRuntime(
     // The runtime's own handling first, so a game listener cannot skip it.
     if (event.type === 'endpoint-changed') {
       const { registration } = event;
-      track(enqueue('register', async () => {
+      track(enqueue('register', withRegistrationBackoff(async () => {
         const { remote } = await provider.getCapabilities();
         const platformUser = registration.address.kind === 'platform-user';
         if (
@@ -1463,7 +1496,7 @@ export function createNotificationRuntime(
           // platform user's changed locale or zone reaches the backend too.
           await sendRegistration(registration, false);
         }
-      }));
+      })));
     }
     if (event.type === 'permission-changed') {
       // The change belongs to the player authenticated now.
