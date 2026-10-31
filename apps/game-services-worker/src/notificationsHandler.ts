@@ -9,7 +9,10 @@ import {
   maxClientNotificationConsentRecordsPerDay,
   NotificationConsentRateLimitError,
   parseFcmServiceAccount,
+  resolveCatalogNotificationCopy,
   type CreateNotificationServiceInput,
+  type NotificationCopyResolver,
+  type NotificationCopyResolverInput,
   type NotificationDispatchJob,
   type NotificationProviderRegistration,
   type NotificationService,
@@ -74,6 +77,22 @@ export interface GameServicesNotificationsIdentityBinding {
   }): Promise<string | null | undefined>;
 }
 
+/**
+ * A project's localized copy for remote sends (RFC "Remote copy"): the
+ * title and body templates of one topic for one recipient's locale, or
+ * `null`/`undefined` when the project has none, and then the catalog's
+ * `copy` answers (`resolveCatalogNotificationCopy`). Asked only where the
+ * content comes from copy, never for a mapping's own text or a host
+ * template; the answer is filled and labelled as catalog copy is.
+ */
+export interface GameServicesNotificationsCopyBinding {
+  resolveNotificationCopy(input: NotificationCopyResolverInput): Promise<
+    | { readonly title: string; readonly body: string }
+    | null
+    | undefined
+  >;
+}
+
 export interface GameServicesNotificationsEnv {
   readonly DB?: D1Database;
   readonly MPGD_STORE?: 'memory' | 'd1';
@@ -113,6 +132,11 @@ export interface GameServicesNotificationsEnv {
    */
   readonly MPGD_ALLOW_INSECURE_DEVELOPMENT_NOTIFICATION_SESSIONS?: 'true';
   readonly GAME_SERVICES_NOTIFICATIONS_IDENTITY?: GameServicesNotificationsIdentityBinding;
+  /**
+   * The project's copy resolver (a service binding); without it, sends use
+   * the catalog's `copy`. Each call counts toward a cron run's subrequests.
+   */
+  readonly GAME_SERVICES_NOTIFICATIONS_COPY?: GameServicesNotificationsCopyBinding;
   /** The dispatch queue's producer; without it fan-out runs inline. */
   readonly NOTIFICATIONS_QUEUE?: Queue<NotificationDispatchJob>;
   /**
@@ -535,6 +559,7 @@ function buildWorkerNotifications(env: GameServicesNotificationsEnv): WorkerNoti
     { registry, ...(deployment === undefined ? {} : { deployment }) },
   );
   const identity = env.GAME_SERVICES_NOTIFICATIONS_IDENTITY;
+  const copy = env.GAME_SERVICES_NOTIFICATIONS_COPY;
   const queue = env.NOTIFICATIONS_QUEUE;
   const service = createNotificationService({
     store: refuseDeletedNotificationWrites(env, notificationStoreOf(env)),
@@ -549,6 +574,7 @@ function buildWorkerNotifications(env: GameServicesNotificationsEnv): WorkerNoti
             return (await identity.resolveNotificationRecipient({ provider, playerId: player })) ?? undefined;
           },
         }),
+    ...(copy === undefined ? {} : { resolveCopy: workerNotificationCopyResolver(copy) }),
     ...(queue === undefined
       ? {}
       : {
@@ -574,6 +600,20 @@ function buildWorkerNotifications(env: GameServicesNotificationsEnv): WorkerNoti
     },
   });
   return { status: 'ready', service };
+}
+
+/**
+ * The copy binding as the service's resolver: the project's answer, else
+ * the catalog's copy for the locale. A call counts toward a cron run's
+ * subrequests.
+ */
+export function workerNotificationCopyResolver(
+  binding: GameServicesNotificationsCopyBinding,
+): NotificationCopyResolver {
+  return async (input) => {
+    takeCronOperation();
+    return (await binding.resolveNotificationCopy(input)) ?? resolveCatalogNotificationCopy(input);
+  };
 }
 
 /**

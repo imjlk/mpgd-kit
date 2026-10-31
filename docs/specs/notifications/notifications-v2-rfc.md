@@ -719,7 +719,9 @@ products and ad placements.
   - **Source.** Content comes from the target mapping when the provider's
     mapping carries its own copy (Devvit's pre-approved `title` and `body`),
     from the host template when `remote.content` is `host-template`, and
-    otherwise from `copy[locale]`.
+    otherwise from `copy[locale]`. On the server that last case goes through
+    the backend's copy resolver, which reads this `copy` by default and which
+    a project can replace (see [open question 4](#open-questions)).
   - **Locale.** The locale is the delivery's `locale`, else the recipient's
     registered locale, else `defaultLocale`. A locale the copy lacks falls back
     to its language (`en` for `en-US`), then to `defaultLocale`, which every
@@ -1443,6 +1445,14 @@ client's declaration. The steps run in order and the first failure decides:
 
    Providers render exactly this content. Host-template providers cannot carry
    advertising, so step 1 already refused them.
+9. **Copy.** Where the content comes from copy (neither the mapping's own
+   `title` and `body` nor a host template), a backend may pass the copy its
+   resolver chose for the recipient's locale as `resolvedCopy` (see
+   [open question 4](#open-questions)). The gate renders it as it renders
+   catalog copy, placeholders and step 8 included; a resolver that had none
+   is `unavailable: copy-missing`, and the send is not made with empty or
+   placeholder text. Without `resolvedCopy` the gate looks up the topic's
+   `copy` itself, and missing copy stays a caller error.
 
 Statuses are `delivered`, `suppressed`, `deferred`, `unavailable`, and
 `in-flight`.
@@ -2713,6 +2723,7 @@ publishable package carries a Sampo changeset.
 | D1 | `sessionFamilyId` and `createGuestServerSession` in `@mpgd/game-services`, the Worker's local development notification sessions, and the starter's guest and development sessions | No stable session id from a guest session; no session without an identity service |
 | DV1 | The `notifications.backend.*` bridge methods, `createDevvitNotificationsBackendBridgeHandler` in `@mpgd/adapter-devvit/server`, the webview's `createDevvitNotificationsBackend`, and the starter's runtime on Reddit | No notifications runtime on Reddit |
 | AR1 | Android advertising pushes the shell renders with the opt-out action: `rendersAdvertising`, `shellRendersAdvertising`, and the gate's `endpointShowsActions` in `@mpgd/platform`; the catalog switch; the FCM data message in `@mpgd/game-services`; the renderer and its messaging service in `@mpgd/capacitor-game-services`; the provider's renderer read in `@mpgd/adapter-capacitor`; the CLI's manifest wiring and the starter's Android mapping | No Android advertising |
+| LC1 | Server-side localized copy: the gate's `resolvedCopy`, `copy-missing`, and `notificationContentSource` in `@mpgd/platform`; the `NotificationCopyResolver` port and its catalog default in `@mpgd/game-services`; the Worker's copy binding | Open question 4 |
 
 **What S1 landed.**
 
@@ -2990,6 +3001,27 @@ left open: Android advertising pushes with the opt-out action.
   open again: the messaging plugin does so for every FCM tap, so the
   renderer's opens share the behaviour.
 
+**What LC1 landed.** LC1 answers open question 4: the server asks a copy
+resolver for a send's title and body.
+
+- `@mpgd/platform/notifications`: the gate input `resolvedCopy`
+  (`NotificationResolvedCopy`), gate step 9 and its `unavailable:
+  copy-missing`, `notificationContentSource`, and
+  `notificationNoticeTextIssues`; the vector schema lists the new reason.
+- `@mpgd/game-services/notifications`: `NotificationCopyResolver`,
+  `resolveCatalogNotificationCopy` (the default), `resolveNotificationCopy`,
+  `resolveNotificationCopyByLocale`, and `createNotificationService`'s
+  `resolveCopy`. The Devvit service passes the option through; its sends use
+  the mapping's own text and never ask the resolver.
+- The game-services Worker: the optional `GAME_SERVICES_NOTIFICATIONS_COPY`
+  service binding, the catalog's copy where it has none.
+- The CLI starter already ships `ko` and `en` copy for every topic and each
+  notice variant, which the default resolver serves; it needs no change.
+- No migration: the locale is the registration's, which the endpoint and
+  platform-user registration rows already keep.
+- Left to follow-ups: bulk sends (open question 5) take the copy resolved
+  per locale group as input rather than look it up themselves.
+
 All of N1–C1 is the first release wave. Releases follow N3, S2, and C1. The
 v1 adapter and the deprecated delivery aliases go away in the major release
 that also removes commerce v1.
@@ -3082,8 +3114,72 @@ that also removes commerce v1.
    and a second store for the ledger the gate reads in one place. Revisit
    when a game needs reminders at second precision or a backlog outgrows
    what one run's budget gets through each minute.
-4. **Remote copy on the server.** Whether the Worker reads localized copy from
-   the catalog file or from a project-provided resolver.
+4. **Remote copy on the server.** Resolved in LC1: both. The server asks a
+   copy resolver, whose default reads the catalog's `copy`; a project
+   replaces it with its own.
+   - **The port.** `NotificationCopyResolver` in
+     `@mpgd/game-services/notifications` answers
+     `{ title, body } | undefined` for `{ topic, provider, locale?,
+     defaultLocale, templateData?, notice? }`. The answer is a template: the
+     gate fills its `{{name}}` placeholders from the send's template data,
+     as it fills catalog copy. `createNotificationService({ resolveCopy })`
+     takes it, and its default is `resolveCatalogNotificationCopy`.
+   - **Fallback.** The default resolver reads the topic's `copy` for the
+     send's locale, else the recipient's registered locale (the
+     registration's `locale`, kept with the endpoint or the platform-user
+     registration). It tries that exact locale, then its language (`en` for
+     `en-US`), then the catalog's `defaultLocale`, ignoring case
+     (`findNotificationCopy`). A project resolver replaces the whole lookup;
+     one that covers some topics or locales calls the default for the rest.
+   - **Where it is asked.** Only where the content comes from copy
+     (`notificationContentSource` is `catalog`), for direct sends,
+     server reminders, and consent notices alike. A mapping's own text
+     (Devvit) and a host template (Apps in Toss, whose console owns the
+     copy) never reach it; for Apps in Toss the only per-send input stays
+     the template context the server already holds, so nothing free-form is
+     added where the partner API takes none. A consent notice asks with
+     `notice.variant`, and its `topic.copy` is that variant's
+     `notices.copy`.
+   - **What it may answer.** A title and a body that are strings and not
+     blank; for a notice, also the notice text rules
+     (`notificationNoticeTextIssues`). Anything else is no copy and is
+     reported to `onError` as `copy.resolve`. No copy skips the recipient as
+     `unavailable: copy-missing` ([gate step 9](#policy-gate)), never a send
+     with empty or placeholder text. A resolver that throws is a host that
+     cannot answer: the attempt fails with
+     `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` and the row is retried.
+   - **Server-side only.** A send and a reminder carry no title or body; the
+     backend refuses either field. The text comes from the resolver or the
+     catalog on the server, and the client supplies at most the values of
+     placeholders the game's own copy declares. The gate renders the
+     answer, so under `kr` advertising keeps the `(광고)` label, the sender
+     line, the opt-out line, and the opt-out action whatever the resolver
+     answers.
+   - **One call per locale group.** `resolveNotificationCopyByLocale` asks
+     once per distinct locale and returns each answer keyed by locale, for a
+     bulk send that groups its recipients by locale. A single send asks only
+     for a recipient the gate would otherwise allow (the gate decides first
+     with a stand-in text that never reaches a provider), once per target
+     and locale at its first check, and again immediately before each
+     provider call, so a refused recipient costs no call and a changed
+     answer is the one sent.
+   - **The Worker.** It reads the catalog from `MPGD_NOTIFICATIONS_CATALOG`
+     as before, and an optional `GAME_SERVICES_NOTIFICATIONS_COPY` service
+     binding (`resolveNotificationCopy`) answers first; where it answers
+     `null` or nothing, the catalog's copy does. Each call counts toward a
+     cron run's subrequests.
+   - **Why a resolver and not only the catalog.** The catalog is bundled
+     into the Worker's configuration and the Devvit build, so a new language
+     or a copy fix there needs a redeploy, and a project with a translation
+     store would otherwise copy it into the catalog. A resolver lets the
+     catalog stay the validated default while a project serves its own
+     strings, and the gate's rendering keeps the policy rules in one place.
+
+<!--
+@link ../../../packages/game-services/src/notifications/copy.ts#resolveNotificationCopy Checks a resolver's answer, notices by the notice text rules.
+@link ../../../packages/game-services/src/notifications/service.ts#createNotificationService Asks the copy resolver only where the content comes from copy.
+@link ../../../apps/game-services-worker/src/notificationsHandler.ts#workerNotificationCopyResolver The binding answers first, the catalog's copy otherwise.
+-->
 5. **Bulk sends.** The first wave sends one recipient per call. Bulk paths
    are a follow-up: the Apps in Toss bulk API for 50 or more recipients, and
    Devvit `enqueue` with up to 1,000 recipients, with opt-in read from

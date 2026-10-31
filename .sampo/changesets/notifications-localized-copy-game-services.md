@@ -1,0 +1,5 @@
+---
+npm/@mpgd/game-services: minor (Added)
+---
+
+Server-side localized copy for notifications (RFC open question 4). `createNotificationService` takes `resolveCopy`, a `NotificationCopyResolver` that answers a send's `{ title, body }` templates for `{ topic, provider, locale, defaultLocale, templateData, notice }`; it is asked only where the content comes from copy, for direct sends, server reminders, and consent notices. The default, `resolveCatalogNotificationCopy`, reads the catalog's `copy` for the send's or the recipient's locale, then its language, then `defaultLocale`, which is what sends did before. An answer that is missing or blank, or a notice text that breaks the notice rules, skips the recipient as `unavailable: copy-missing` and is reported to `onError` as `copy.resolve`; a resolver that throws makes the attempt retryable. A send whose catalog copy is missing now answers `unavailable: copy-missing` instead of throwing `NOTIFICATIONS_INVALID_INPUT`. `resolveNotificationCopy` checks one answer, and `resolveNotificationCopyByLocale` asks once per distinct locale for a send that groups recipients by locale.

@@ -321,6 +321,40 @@ invitation to buy.
    through `runtime.reminders.set({ key, topic, fireAt })`; the runtime picks
    a local or a server reminder from the target's capabilities.
 
+## Localized copy on the server {#server-copy}
+
+A push the server sends (a direct send, a server reminder, or a consent
+notice) takes its title and body from a copy resolver, per recipient:
+
+- **Default.** The catalog's `copy` for the send's locale, else the locale
+  the player's device or platform registration reported, falling back to the
+  language (`en` for `en-US`) and then to `defaultLocale`. The starter's
+  topics ship `ko` and `en`.
+- **Your own strings.** Pass `resolveCopy` to `createNotificationService`
+  (the Devvit service takes it too), or bind a Worker entrypoint with
+  `resolveNotificationCopy` as `GAME_SERVICES_NOTIFICATIONS_COPY`. It
+  answers `{ title, body }` templates for `{ topic, provider, locale,
+  defaultLocale, templateData, notice }`, or nothing. In the Worker, nothing
+  means the catalog's copy; in your own `resolveCopy`, call
+  `resolveCatalogNotificationCopy(input)` for the cases you do not cover.
+  `{{name}}` placeholders are filled from the send's template data afterwards,
+  so do not paste template data into the text yourself: a reminder's data
+  comes from the player's device.
+- **No copy, no push.** When nothing answers, or the answer is blank, the
+  recipient is skipped as `unavailable: copy-missing`; nothing is sent with
+  empty text. A resolver that throws makes the send retry.
+- **Rules still apply.** Under the Korean rules an advertising push gets the
+  `(광고)` label, the sender line, the opt-out line, and the opt-out action
+  whatever the resolver answers. A consent notice's text must keep the
+  `notices.copy` rules (only `{{consentDate}}`, which it must use), or it is
+  not sent.
+- **Not affected.** Apps in Toss sends the console template, and Devvit sends
+  the mapping's pre-approved title and body; neither asks the resolver.
+  Local notifications use the catalog copy on the device.
+
+<!-- @link ../packages/game-services/src/notifications/copy.ts#resolveCatalogNotificationCopy -->
+<!-- @evidence /docs/specs/notifications/notifications-v2-rfc.md#open-questions -->
+
 ## Validation scope
 
 The starter's settings model, the CLI wiring, and the catalog are covered by

@@ -34,9 +34,16 @@ import {
   type NotificationNotice,
   type NotificationNoticeIdentity,
   type NotificationPermissionState,
+  type NotificationResolvedCopy,
   type NotificationTemplateData,
   type NotificationTopicDeclaration,
 } from '@mpgd/platform/notifications';
+
+import {
+  resolveCatalogNotificationCopy,
+  resolveNotificationCopy,
+  type NotificationCopyResolver,
+} from './copy.js';
 
 import {
   fcmInstallationIdRefusal,
@@ -230,6 +237,17 @@ export interface CreateNotificationServiceInput {
     readonly provider: string;
     readonly player: string;
   }) => string | undefined | Promise<string | undefined>;
+  /**
+   * Chooses a send's title and body per recipient locale where the content
+   * comes from copy (not a mapping's own text or a host template): reminders,
+   * consent notices, and direct sends alike. It replaces the default,
+   * `resolveCatalogNotificationCopy` (the catalog's `copy`, falling back to
+   * the language and then `defaultLocale`); a resolver that wants that
+   * fallback calls it. No copy skips the recipient as `unavailable:
+   * copy-missing`, and a resolver that throws is retried as a host that
+   * cannot answer is.
+   */
+  readonly resolveCopy?: NotificationCopyResolver;
   /**
    * Runs dispatch jobs later, so a fan-out never exceeds one invocation's
    * subrequest limit. Without it every job runs inline before `deliver`
@@ -450,6 +468,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
   const ambiguousLeaseMs = (attempts: number): number =>
     Math.min(leaseMs * 2 ** Math.min(attempts, 16), Math.max(leaseMs, maxAmbiguousLeaseMs));
   const random = input.random ?? Math.random;
+  const resolveCopy = input.resolveCopy ?? resolveCatalogNotificationCopy;
   const noticeTopic = catalog.notices?.topic;
   if (catalog.notices !== undefined) {
     const issues = notificationNoticeCopyIssues(catalog.notices.copy, catalog.defaultLocale);
@@ -521,6 +540,58 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       }
     }
     return undefined;
+  };
+  /**
+   * The copy the resolver answers for a recipient's send. It is asked only
+   * once the gate, deciding with `copyStandIn`, allowed the recipient with
+   * content from copy (`notificationContentSource` is `catalog`), so the
+   * stand-in never reaches a provider. `cache` keeps one answer per target
+   * and locale for one send. A resolver failure is a host that cannot
+   * answer now; an answer that cannot be sent is reported and is no copy.
+   */
+  const copyFor = async (
+    recipient: Recipient,
+    request: NotificationStoredSendRequest,
+    origin: NotificationSendOrigin,
+    cache: Map<string, Promise<NotificationResolvedCopy>>,
+  ): Promise<NotificationResolvedCopy> => {
+    const topic = topicFor(recipient.provider, recipient.target, request.topic, origin);
+    if (topic === undefined) {
+      return {};
+    }
+    const provider = recipient.provider.entry.provider;
+    const locale = request.locale ?? recipient.locale;
+    const key = JSON.stringify([provider, recipient.target ?? null, locale ?? null]);
+    let resolved = cache.get(key);
+    if (resolved === undefined) {
+      resolved = (async () => {
+        let resolution: Awaited<ReturnType<typeof resolveNotificationCopy>>;
+        try {
+          resolution = await resolveNotificationCopy(resolveCopy, {
+            topic,
+            provider,
+            ...(locale === undefined ? {} : { locale }),
+            defaultLocale: catalog.defaultLocale,
+            ...(request.templateData === undefined ? {} : { templateData: request.templateData }),
+            ...(origin.kind === 'notice' ? { notice: { variant: origin.variant } } : {}),
+          });
+        } catch (error) {
+          throw new NotificationError('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', {
+            message: `The copy resolver could not answer for topic ${topic.id}.`,
+            cause: error,
+          });
+        }
+        if (resolution.issue !== undefined) {
+          report(new TypeError(`Topic ${topic.id}: ${resolution.issue}.`), 'copy.resolve', {
+            sendKey: request.idempotencyKey,
+            provider,
+          });
+        }
+        return resolution.copy === undefined ? {} : { copy: resolution.copy };
+      })();
+      cache.set(key, resolved);
+    }
+    return resolved;
   };
   const refuseNoticeTopic = (topic: string): void => {
     if (noticeTopic !== undefined && topic === noticeTopic) {
@@ -799,6 +870,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     history: readonly NotificationDeliveryHistoryEntry[],
     serverPermission: NotificationPermissionState | undefined,
     at: number,
+    resolvedCopy?: NotificationResolvedCopy,
   ): { readonly decision: NotificationDeliveryDecision; readonly topic: NotificationTopicDeclaration | undefined } => {
     const topic = topicFor(recipient.provider, recipient.target, request.topic, origin);
     const locale = request.locale ?? recipient.locale;
@@ -821,6 +893,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
           ...(locale === undefined ? {} : { locale }),
           defaultLocale: catalog.defaultLocale,
           ...(request.templateData === undefined ? {} : { templateData: request.templateData }),
+          ...(resolvedCopy === undefined ? {} : { resolvedCopy }),
         }),
       };
     } catch (error) {
@@ -962,6 +1035,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     }>();
     const rows: NotificationSendRow[] = [];
     const refusals: NotificationDeliveryRefusal[] = [];
+    const copies = new Map<string, Promise<NotificationResolvedCopy>>();
     let checked = 0;
     let hostFailure: unknown;
     for (const recipient of recipients) {
@@ -972,17 +1046,34 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         perProvider.set(id, inputs);
       }
       const held = inputs;
-      const evaluate = (permission: NotificationPermissionState | undefined) =>
-        decide(request, origin, recipient, consent, held.history, permission, at);
       // One read per provider and send, made only once a recipient needs it.
       // A host that cannot answer is skipped; the send fails only when no
-      // provider could be checked and none passed.
+      // provider could be checked and none passed. The copy resolver is
+      // asked only for a recipient the gate would allow, once per target and
+      // locale, and its failure counts as a host's.
       let decision: NotificationDeliveryDecision;
       try {
-        const early = earlyRefusal(recipient.provider, evaluate);
-        decision = early === undefined
-          ? evaluate(await (held.permission ??= readServerPermission(recipient.provider, request))).decision
-          : early.decision;
+        const evaluate = (
+          permission: NotificationPermissionState | undefined,
+          resolvedCopy: NotificationResolvedCopy = copyStandIn,
+        ) => decide(
+          request,
+          origin,
+          recipient,
+          consent,
+          held.history,
+          permission,
+          at,
+          resolvedCopy,
+        );
+        const early = earlyRefusal(recipient.provider, (standIn) => evaluate(standIn));
+        const permission = early === undefined
+          ? await (held.permission ??= readServerPermission(recipient.provider, request))
+          : undefined;
+        decision = early?.decision ?? evaluate(permission).decision;
+        if (decision.status === 'allowed' && decision.content.source === 'catalog') {
+          decision = evaluate(permission, await copyFor(recipient, request, origin, copies)).decision;
+        }
         checked += 1;
       } catch (error) {
         if (error instanceof NotificationError && error.code === 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE') {
@@ -1203,24 +1294,38 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       recipient = await recipientOfRow(registered, send.request, row, claimed.at);
       const consent = await store.listConsent(send.request.player);
       const early = earlyRefusal(registered, (standIn) =>
-        decide(send.request, send.origin, recipient, consent, [], standIn, nowMs()),
+        decide(send.request, send.origin, recipient, consent, [], standIn, nowMs(), copyStandIn),
       );
       const serverPermission = early === undefined
         ? await readServerPermission(registered, send.request)
         : undefined;
       at = nowMs();
-      evaluated = early ?? decide(
-        send.request,
-        send.origin,
-        recipient,
-        consent,
-        historyOn(
-          await loadHistory(send.request.player, sendKey, at, { key: sendKey, claimedAt: claimed.at }),
-          row.provider,
-        ),
-        serverPermission,
-        at,
-      );
+      const history = early === undefined
+        ? historyOn(
+            await loadHistory(send.request.player, sendKey, at, { key: sendKey, claimedAt: claimed.at }),
+            row.provider,
+          )
+        : [];
+      const evaluate = (resolvedCopy: NotificationResolvedCopy) =>
+        decide(
+          send.request,
+          send.origin,
+          recipient,
+          consent,
+          history,
+          serverPermission,
+          at,
+          resolvedCopy,
+        );
+      evaluated = early ?? evaluate(copyStandIn);
+      // The copy resolver is asked only once the gate would allow the call.
+      if (
+        early === undefined
+        && evaluated.decision.status === 'allowed'
+        && evaluated.decision.content.source === 'catalog'
+      ) {
+        evaluated = evaluate(await copyFor(recipient, send.request, send.origin, new Map()));
+      }
     } catch (error) {
       if (error instanceof NotificationSendInputError) {
         // A send that cannot be made as asked fails once, not on every replay.
@@ -3436,6 +3541,15 @@ function backedOff(row: NotificationSendRow, at: number): NotificationSendRow {
 const earlyGateReasons: ReadonlySet<NotificationDeliveryRefusal['reason']> = new Set<
   NotificationDeliveryRefusal['reason']
 >(['topic-unknown', 'channel-unsupported', 'purpose-unsupported', 'no-endpoint', 'link-missing']);
+
+/**
+ * The copy the gate renders while it decides whether a recipient is allowed
+ * at all; the resolver's answer replaces it before anything is sent, so the
+ * copy resolver is asked only for recipients the gate would allow.
+ */
+const copyStandIn: NotificationResolvedCopy = Object.freeze({
+  copy: Object.freeze({ title: 'copy', body: 'copy' }),
+});
 
 /** Writes that must not fail a settled delivery are tried this often. */
 const maxSideWriteAttempts = 3;

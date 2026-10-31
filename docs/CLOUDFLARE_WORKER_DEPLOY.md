@@ -649,6 +649,12 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
 - **Platform-user providers** resolve recipients through an optional
   `GAME_SERVICES_NOTIFICATIONS_IDENTITY` binding
   (`resolveNotificationRecipient({ provider, playerId })`).
+- **Localized copy.** Sends read the catalog's `copy` for the recipient's
+  locale. An optional `GAME_SERVICES_NOTIFICATIONS_COPY` binding
+  (`resolveNotificationCopy(input)`, answering `{ title, body }` or `null`)
+  answers first, and the catalog's copy where it answers `null`; see
+  [localized copy](NOTIFICATIONS.md#server-copy). Each call counts toward a
+  cron run's subrequest budget.
 - **Apps in Toss** functional messages serve the `ait` target when the
   partner API's client certificate is bound as `AIT_PARTNER_MTLS` (a
   `[[mtls_certificates]]` binding) and `MPGD_AIT_NOTIFICATIONS` names the

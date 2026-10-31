@@ -1608,6 +1608,63 @@ try {
       .map((record) => [record.kind, record.topic, record.state, record.source]),
     [['host-agreement', 'energy-full', 'denied', 'provider']],
   );
+
+  // The project's copy binding answers first; where it has none, the catalog's copy does.
+  const copyAsks: { readonly topic: string; readonly locale?: string; readonly provider: string }[] = [];
+  const copyEnv = {
+    ...env,
+    GAME_SERVICES_NOTIFICATIONS_COPY: {
+      async resolveNotificationCopy(input: { readonly topic: { readonly id: string }; readonly locale?: string; readonly provider: string }) {
+        copyAsks.push({
+          topic: input.topic.id,
+          ...(input.locale === undefined ? {} : { locale: input.locale }),
+          provider: input.provider,
+        });
+        return input.locale?.startsWith('en') === true
+          ? { title: 'Challenge', body: '{{name}} challenged you.' }
+          : null;
+      },
+    },
+  } satisfies GameServicesWorkerEnv;
+  const copyService = resolveWorkerNotifications(copyEnv);
+  assert.ok(copyService.status === 'ready');
+  const localized = (player: string, locale: string) =>
+    copyService.service.registerEndpoint(
+      { player, sessionId: `s-${player}`, installationId: `i-${player}` },
+      {
+        registration: {
+          provider: 'fcm',
+          address: { kind: 'fcm-token', value: `tok-${player}`, permission: 'granted' },
+          locale,
+          timeZone: 'Asia/Seoul',
+        },
+        target: 'android',
+      },
+    );
+  await localized('p-en', 'en-US');
+  await localized('p-ko', 'ko-KR');
+  const copySentBefore = sends.length;
+  for (const player of ['p-en', 'p-ko']) {
+    assert.deepEqual(
+      await deliverWorkerNotification(copyEnv, {
+        idempotencyKey: `copy-${player}`,
+        player,
+        topic: 'friend-challenge',
+        templateData: { name: 'Mina' },
+      }),
+      { status: 'delivered', alreadyProcessed: false },
+    );
+  }
+  const copySends = sends.slice(copySentBefore);
+  assert.ok(copySends[0]?.body.includes('Mina challenged you.'), copySends[0]?.body);
+  assert.ok(copySends[1]?.body.includes('Mina님이 도전했어요.'), copySends[1]?.body);
+  // Asked at the send's first check and again immediately before the provider call.
+  assert.deepEqual(copyAsks, [
+    { topic: 'friend-challenge', locale: 'en-US', provider: 'fcm' },
+    { topic: 'friend-challenge', locale: 'en-US', provider: 'fcm' },
+    { topic: 'friend-challenge', locale: 'ko-KR', provider: 'fcm' },
+    { topic: 'friend-challenge', locale: 'ko-KR', provider: 'fcm' },
+  ]);
   console.info('Worker notifications routes passed.');
 } finally {
   globalThis.fetch = realFetch;
