@@ -853,11 +853,12 @@ subscription). Keep `MPGD_GOOGLE_PLAY_VOIDED_SWEEP_MINUTES` on; RTDN is the
 fast path, the sweep is the backstop. A void whose RTDN arrived first is
 recorded with reason `voided` and the push's event time: the RTDN carries no
 `voidedReason`, so a chargeback revoked this way is not labelled
-`chargeback`.
+`chargeback`, and the sweep's later read does not relabel it (the ledger is
+append-only).
 
 ```toml
 [vars]
-GAME_SERVICES_GOOGLE_PLAY_PACKAGE_NAME = "com.example.game"
+# GAME_SERVICES_GOOGLE_PLAY_PACKAGE_NAME is the in-Worker Play boundary's (above).
 # The push subscription's audience and the service account it signs as.
 GAME_SERVICES_GOOGLE_PLAY_RTDN_AUDIENCE = "https://<worker-host>/google-play/rtdn"
 GAME_SERVICES_GOOGLE_PLAY_RTDN_SERVICE_ACCOUNT = "play-rtdn-push@<project-id>.iam.gserviceaccount.com"
@@ -865,9 +866,12 @@ GAME_SERVICES_GOOGLE_PLAY_RTDN_SERVICE_ACCOUNT = "play-rtdn-push@<project-id>.ia
 
 Either RTDN setting mounts the route. With one of the three missing, the
 route answers `503` to every push (logged at startup), so Pub/Sub keeps the
-messages until the settings are complete. The route needs neither
-`GAME_SERVICES_GOOGLE_PLAY_PUBLISHER_AUTH` nor D1, but it only finds grants
-the in-Worker Play boundary verified (the same rule as the sweep).
+messages until the settings are complete. The route only finds grants the
+in-Worker Play boundary verified (the same rule as the sweep), so it runs
+next to that boundary's settings: `GAME_SERVICES_GOOGLE_PLAY_PACKAGE_NAME`
+requires `GAME_SERVICES_GOOGLE_PLAY_PUBLISHER_AUTH` and the account binding
+(or the unbound opt-in), and without them the purchase routes answer `500`.
+It revokes in the Worker's store: D1 in production.
 
 **Authentication.** Every push must carry the OIDC token an authenticated
 push subscription sends (`Authorization: Bearer <JWT>`). The Worker checks

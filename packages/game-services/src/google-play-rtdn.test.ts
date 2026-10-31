@@ -126,6 +126,25 @@ const keys = fakeKeys({ 'google-key-1': googleKey.publicJwk });
     await reasonOf(await bearer(goodClaims, googleKey, { alg: 'HS256' })),
     'GOOGLE_PUBSUB_PUSH_TOKEN_ALGORITHM',
   );
+  assert.equal(
+    await reasonOf(await bearer(goodClaims, googleKey, { kid: undefined })),
+    'GOOGLE_PUBSUB_PUSH_TOKEN_ALGORITHM',
+    'a token without a key id',
+  );
+  assert.equal(
+    await reasonOf(await bearer({ ...goodClaims, aud: ['https://other.example.com', audience] })),
+    'verified',
+    'an audience list naming the subscription audience',
+  );
+  assert.equal(
+    await reasonOf(await bearer({ ...goodClaims, iat: undefined })),
+    'GOOGLE_PUBSUB_PUSH_TOKEN_NOT_YET_VALID',
+    'a token without iat',
+  );
+  assert.equal(
+    await reasonOf(await bearer({ ...goodClaims, email: 42 })),
+    'GOOGLE_PUBSUB_PUSH_TOKEN_EMAIL',
+  );
   await assert.rejects(
     verifyGooglePubSubPushToken({
       authorization: await bearer(goodClaims),
@@ -272,6 +291,14 @@ const keys = fakeKeys({ 'google-key-1': googleKey.publicJwk });
     decoded.status === 'decoded' && decoded.notification.eventTimeMillis,
     1_761_868_800_000,
     'an int64 string is read as a number',
+  );
+  const epoch = decodeGooglePlayDeveloperNotificationPush(
+    push({ packageName, eventTimeMillis: 0, testNotification: {} }),
+  );
+  assert.equal(
+    epoch.status === 'decoded' && epoch.notification.eventTimeMillis,
+    undefined,
+    'an event time at the epoch is dropped',
   );
   assert.deepEqual(decodeGooglePlayDeveloperNotificationPush({}), {
     status: 'rejected',
@@ -468,6 +495,47 @@ const keys = fakeKeys({ 'google-key-1': googleKey.publicJwk });
     }),
     RangeError,
   );
+
+  // The sweep first, the RTDN second: the RTDN answers the sweep's entry.
+  const swept = await grantToken(store, 'swept-token');
+  const sweptFirst = await sweepGooglePlayVoidedPurchases({
+    client: {
+      async listVoidedPurchases() {
+        return {
+          voidedPurchases: [{ purchaseToken: 'swept-token', voidedReason: 7 }],
+        };
+      },
+    },
+    store,
+    packageName,
+    startTimeMillis: nowMs - 3_600_000,
+    endTimeMillis: nowMs,
+    signal: new AbortController().signal,
+    now: () => new Date(nowMs).toISOString(),
+  });
+  assert.equal(sweptFirst.revoked, 1);
+  const rtdnSecond = await handle(voided('swept-token'));
+  assert.equal(rtdnSecond.status === 'revoked' && rtdnSecond.alreadyProcessed, true);
+  const [sweptRevocation, ...more] = await findEntitlementRevocationsChunked(store, [
+    swept.ledgerEntryId,
+  ]);
+  assert.equal(more.length, 0);
+  assert.equal(sweptRevocation?.reason, 'chargeback', 'the sweep\u2019s reason is kept');
+
+  // A far-future event time never dates the revocation ahead of the clock.
+  const future = await grantToken(store, 'future-token');
+  await handleGooglePlayDeveloperNotification({
+    store,
+    packageName,
+    body: push({
+      packageName,
+      eventTimeMillis: String(nowMs + 86_400_000),
+      ...voided('future-token'),
+    }),
+    now: () => new Date(nowMs).toISOString(),
+  });
+  const [futureRevocation] = await findEntitlementRevocationsChunked(store, [future.ledgerEntryId]);
+  assert.equal(futureRevocation?.revokedAt, new Date(nowMs).toISOString());
 }
 
 console.log('Google Play RTDN tests passed.');

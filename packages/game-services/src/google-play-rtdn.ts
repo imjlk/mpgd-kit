@@ -391,12 +391,17 @@ export function decodeGooglePlayDeveloperNotificationPush(
   if (!isRecord(notification) || typeof notification.packageName !== 'string') {
     return { status: 'rejected', reason: 'GOOGLE_PLAY_RTDN_NOTIFICATION_INVALID', ...withId };
   }
-  const eventTimeMillis = readInteger(notification.eventTimeMillis, 16);
+  const eventMillis = readInteger(notification.eventTimeMillis, 16);
+  // A time Date can represent, after the epoch; anything else is dropped.
+  const eventTimeMillis = eventMillis !== undefined && eventMillis > 0
+      && eventMillis <= 8_640_000_000_000_000
+    ? eventMillis
+    : undefined;
   return {
     status: 'decoded',
     ...withId,
     notification: {
-      ...notification,
+      ...withoutEventTime(notification),
       packageName: notification.packageName,
       ...(eventTimeMillis === undefined ? {} : { eventTimeMillis }),
     } as GooglePlayDeveloperNotification,
@@ -530,16 +535,18 @@ export async function handleGooglePlayDeveloperNotification(
   }
   const now = input.now ?? (() => new Date().toISOString());
   const eventTimeMillis = notification.eventTimeMillis;
-  const eventTime = eventTimeMillis === undefined ? undefined : new Date(eventTimeMillis);
-  const eventAt = eventTime === undefined || Number.isNaN(eventTime.getTime())
+  const nowMillis = Date.parse(now());
+  // Never a revocation time ahead of this clock (a far-future event time).
+  const revokedAt = eventTimeMillis === undefined
     ? undefined
-    : eventTime.toISOString();
+    : new Date(Number.isFinite(nowMillis) ? Math.min(eventTimeMillis, nowMillis) : eventTimeMillis)
+      .toISOString();
   const outcome = await revokeGooglePlayVoidedPurchase({
     store: input.store,
     packageName,
     voided: { purchaseToken, ...(orderId === undefined ? {} : { orderId }) },
     // RTDN carries no voidedTimeMillis; the event time is when Google voided it.
-    now: () => eventAt ?? now(),
+    now: () => revokedAt ?? now(),
   });
   if (outcome.status === 'revoked') {
     return {
@@ -554,7 +561,7 @@ export async function handleGooglePlayDeveloperNotification(
       eventTimeMillis !== undefined
       // Both ways, so a little clock skew still retries and a far-future
       // time cannot keep the message unacknowledged.
-      && Math.abs(Date.parse(now()) - eventTimeMillis) < unmatchedVoidRetryMs
+      && Math.abs(nowMillis - eventTimeMillis) < unmatchedVoidRetryMs
     ) {
       return { status: 'retry', reason: 'GOOGLE_PLAY_RTDN_GRANT_NOT_FOUND', ...withOrder };
     }
@@ -584,6 +591,11 @@ function ignoredKindReason(notification: GooglePlayDeveloperNotification): strin
     return 'GOOGLE_PLAY_RTDN_ONE_TIME_PRODUCT';
   }
   return 'GOOGLE_PLAY_RTDN_KIND_UNHANDLED';
+}
+
+function withoutEventTime(notification: Record<string, unknown>): Record<string, unknown> {
+  const { eventTimeMillis: _eventTimeMillis, ...rest } = notification;
+  return rest;
 }
 
 function readInteger(input: unknown, maxDigits: number): number | undefined {
