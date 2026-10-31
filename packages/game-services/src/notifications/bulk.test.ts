@@ -94,6 +94,7 @@ async function setup(options: {
   readonly players?: readonly string[];
   readonly elapsedMs?: () => number;
   readonly resolve?: (player: string, time: ReturnType<typeof clock>) => Promise<string>;
+  readonly topic?: NotificationTopicDeclaration;
 }) {
   const time = clock(options.start ?? '2026-11-01T03:00:00Z');
   const store = createInMemoryNotificationStore();
@@ -103,7 +104,7 @@ async function setup(options: {
     registry: createNotificationProviderRegistry([
       { entry: options.entry ?? entry, delivery: options.provider, targets: ['platform-target'] },
     ]),
-    catalog: { defaultLocale: 'ko', topicsFor: () => [topic] },
+    catalog: { defaultLocale: 'ko', topicsFor: () => [options.topic ?? topic] },
     resolvePlatformRecipient: ({ player }) =>
       options.resolve === undefined ? `u-${player}` : options.resolve(player, time),
     now: time.now,
@@ -483,6 +484,44 @@ const statuses = (result: NotificationBulkDeliveryResult) =>
     'event-15:p2',
     'event-15:p3',
   ]);
+}
+
+// The gate runs again when the batch is sent: quiet hours that began while it gathered hold every recipient.
+{
+  const fake = bulkProvider({ maxRecipients: 10, minRecipients: 2, perRecipientOutcomes: true });
+  let p3Reads = 0;
+  const { service, store, time, reports } = await setup({
+    provider: fake.provider,
+    players: players(3),
+    topic: { ...topic, quietHours: { start: '03:01', end: '04:00' } },
+    resolve: async (player, clockNow) => {
+      if (player === 'p3' && (p3Reads += 1) === 2) {
+        // p1 and p2 were allowed at 03:00:00 and wait; p3's gate ends at 03:01, inside the quiet hours.
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        clockNow.advance(60);
+      }
+      return `u-${player}`;
+    },
+  });
+  for (const player of players(3)) {
+    await store.putPlatformRegistration({
+      player,
+      provider: 'platform',
+      timeZone: 'UTC',
+      registeredAt: time.now(),
+    });
+  }
+  const result = await service.deliverBulk(bulkInput('event-18', players(3)));
+  assert.deepEqual(statuses(result), [
+    ['p1', 'deferred', 'provider-rate-limited'],
+    ['p2', 'deferred', 'provider-rate-limited'],
+    ['p3', 'deferred', 'quiet-hours'],
+  ]);
+  assert.deepEqual([fake.batches.length, fake.singles.length], [0, 0]);
+  assert.equal(
+    reports.filter((report) => report.includes('no longer allowed by the gate')).length,
+    2,
+  );
 }
 
 // A device provider's deliveries count each device against the call's attempts.

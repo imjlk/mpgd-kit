@@ -3017,10 +3017,15 @@ announcements and event pushes.
       call. A batch gathers its calls only when it has at least the
       provider's minimum and is outside its hold window; otherwise each
       recipient is sent and settled on its own, so no claim waits past its
-      lease on a queue of single calls. A recipient that waited for its
-      batch past half its claim lease is not sent with it (another holder
-      may own its row by now): it answers `rate-limited`, which proves
-      nothing was sent, and is replayed. A refused player never reaches the provider and has its own
+      lease on a queue of single calls.
+    - When the batch is sent, the gate runs once more for each recipient at
+      that instant, with the inputs its check read, so quiet hours or the
+      night window that began while the batch gathered still hold it. A
+      recipient the gate no longer allows, or whose claim has less than
+      half a lease left (another holder may own its row by the time the
+      call answers), is not sent with the batch: it answers `rate-limited`,
+      which proves nothing was sent, and its replay runs the gate again.
+    - A refused player never reaches the provider and has its own
       answer. Copy is rendered per recipient by the gate, so the
       server-side locale resolver (open question 4) applies to bulk sends
       wherever it plugs into the gate's content.

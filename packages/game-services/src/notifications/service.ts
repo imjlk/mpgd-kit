@@ -981,6 +981,8 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     at: number,
     // When the caller's claim on the row ends (epoch ms); a bulk batch checks it before its call.
     _claimedUntil?: number,
+    // The gate again at a later instant; a bulk batch runs it just before its call.
+    _regate?: (when: number) => NotificationDeliveryDecision,
   ): Promise<NotificationRemoteDeliveryAnswer> =>
     sendOne(recipient.provider, deliveryRequestOf(recipient, request, topic, decision, at));
 
@@ -1249,6 +1251,8 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     let evaluated: ReturnType<typeof decide>;
     let recipient: Recipient;
     let at: number;
+    // The same gate at a later instant, with the inputs read now: a bulk batch checks it again before its call.
+    let regate: (when: number) => NotificationDeliveryDecision;
     try {
       recipient = await recipientOfRow(registered, send.request, row, claimed.at);
       const consent = await store.listConsent(send.request.player);
@@ -1259,18 +1263,24 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         ? await readServerPermission(registered, send.request)
         : undefined;
       at = nowMs();
+      const history = early === undefined
+        ? historyOn(
+            await loadHistory(send.request.player, sendKey, at, { key: sendKey, claimedAt: claimed.at }),
+            row.provider,
+          )
+        : [];
       evaluated = early ?? decide(
         send.request,
         send.origin,
         recipient,
         consent,
-        historyOn(
-          await loadHistory(send.request.player, sendKey, at, { key: sendKey, claimedAt: claimed.at }),
-          row.provider,
-        ),
+        history,
         serverPermission,
         at,
       );
+      const gated = recipient;
+      regate = (when) =>
+        decide(send.request, send.origin, gated, consent, history, serverPermission, when).decision;
     } catch (error) {
       if (error instanceof NotificationSendInputError) {
         // A send that cannot be made as asked fails once, not on every replay.
@@ -1337,6 +1347,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       decision,
       at,
       row.state.status === 'in-flight' ? Date.parse(row.state.leaseUntil) : undefined,
+      regate,
     );
     const answeredAt = nowMs();
     switch (answer.status) {
@@ -2857,30 +2868,57 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         && members.length >= (capability.minRecipients ?? 2)
         && !isInsideNotificationHoldWindow(capability.holdWindow, nowMs());
       const barrier = createNotificationBatchBarrier<
-        { readonly request: NotificationRemoteDeliveryRequest; readonly claimedUntil: number },
+        {
+          readonly request: NotificationRemoteDeliveryRequest;
+          readonly claimedUntil: number;
+          /** The request the gate allows at `when`, or `undefined` when it no longer does. */
+          readonly regate: (when: number) => NotificationRemoteDeliveryRequest | undefined;
+        },
         NotificationRemoteDeliveryAnswer
       >(members.length, async (items) => {
         // A recipient whose claim has less than half a lease left (it may run
         // out before the call answers, and another holder may then own its
         // row) is not sent. Nothing was sent, so it waits a moment and is
         // replayed (its own claim settles only while it still holds the row).
+        // The gate runs again for each recipient at the batch's own time
+        // (quiet hours or the night window may have begun while it gathered),
+        // with the inputs its first check read. A recipient it no longer
+        // allows is not sent either: it is replayed, and its replay's gate
+        // defers or refuses it.
         const now = nowMs();
-        const holds = (item: { readonly claimedUntil: number }): boolean =>
-          item.claimedUntil - now >= leaseMs / 2;
-        const fresh = items.filter(holds);
+        type Checked =
+          | { readonly item: (typeof items)[number]; readonly request: NotificationRemoteDeliveryRequest }
+          | { readonly item: (typeof items)[number]; readonly reason: string };
+        const checked = items.map((item): Checked => {
+          if (item.claimedUntil - now < leaseMs / 2) {
+            return { item, reason: 'has less than half a claim lease left' };
+          }
+          let request: NotificationRemoteDeliveryRequest | undefined;
+          try {
+            request = item.regate(now);
+          } catch {
+            request = undefined;
+          }
+          return request === undefined ? { item, reason: 'is no longer allowed by the gate' } : { item, request };
+        });
+        const fresh = checked.flatMap((entry) => ('request' in entry ? [entry] : []));
         // The last call starts while every fresh claim still has a quarter lease left.
-        const startWithinMs = Math.min(...fresh.map((item) => item.claimedUntil)) - leaseMs / 4 - now;
-        const answers = await flushBulk(provider, fresh.map((item) => item.request), calls, startWithinMs);
+        const startWithinMs = Math.min(...fresh.map((entry) => entry.item.claimedUntil)) - leaseMs / 4 - now;
+        const answers = await flushBulk(provider, fresh.map((entry) => entry.request), calls, startWithinMs);
         let next = 0;
-        return items.map((item): NotificationRemoteDeliveryAnswer => {
-          if (holds(item)) {
+        return checked.map((entry): NotificationRemoteDeliveryAnswer => {
+          if ('request' in entry) {
             next += 1;
             return answers[next - 1] ?? { status: 'ambiguous' };
           }
           report(
-            new Error('A bulk recipient has less than half a claim lease left when its batch is sent; it is not sent now.'),
+            new Error(`A bulk recipient ${entry.reason} when its batch is sent; it is not sent now.`),
             'dispatch.stale',
-            { sendKey: item.request.sendKey, provider: provider.entry.provider, rowKey: item.request.idempotencyKey },
+            {
+              sendKey: entry.item.request.sendKey,
+              provider: provider.entry.provider,
+              rowKey: entry.item.request.idempotencyKey,
+            },
           );
           return { status: 'rate-limited', retryAfterSeconds: 1 };
         });
@@ -2900,7 +2938,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
           }
         };
         try {
-          const { refusal } = await runRow(entry.key, row.provider, row.key, entry.mode, async (recipient, request, topic, decision, at, claimedUntil) => {
+          const { refusal } = await runRow(entry.key, row.provider, row.key, entry.mode, async (recipient, request, topic, decision, at, claimedUntil, regate) => {
             arrived = true;
             if (!gathers) {
               calls.single += 1;
@@ -2911,6 +2949,12 @@ export function createNotificationService(input: CreateNotificationServiceInput)
             const answer = await barrier.arrive({
               request: deliveryRequestOf(recipient, request, topic, decision, at),
               claimedUntil: claimedUntil ?? at,
+              regate: (when) => {
+                const again = regate?.(when);
+                return again?.status === 'allowed'
+                  ? deliveryRequestOf(recipient, request, topic, again, when)
+                  : undefined;
+              },
             });
             await limiter.acquire();
             holding = true;
