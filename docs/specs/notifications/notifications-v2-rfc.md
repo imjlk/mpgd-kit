@@ -650,9 +650,12 @@ Runtime rules:
   - When the backend's records cannot be read, the reminders whose
     permission the host itself reports as not granted are still cancelled,
     and the read's error is thrown after.
-  - A call's own read of the player's records serves the records it then
-    writes and the sweep after it, so the backend is not asked again; after
-    the runtime records something, the next use reads again.
+  - A read's own listing of the player's records serves the local sweep
+    after it, so the backend is not asked again; after the runtime records
+    something, the sweep reads again. A write always lists the records
+    afresh: a `changed` record is skipped when the listing already holds its
+    state, so a listing from before the write could hide another device's
+    record and skip one that must be written.
 - **Restarts.** A restart drops runtime memory and listeners. Host state,
   backend records, the persisted registration, the unbound state after
   `unregister()`, and the backend authentication persist.
@@ -3010,10 +3013,11 @@ left open: Android advertising pushes with the opt-out action.
 **What NF2 landed.** NF2 closes the low-severity items N2 deferred, each to
 the phase that owned it, as far as they were still open on main.
 
-- `@mpgd/platform/notifications-runtime`: one backend read per call for the
-  records, the write, and the local sweep; per-key local cancels after a
-  batch the host fails; and the permission sweep when the records cannot be
-  read (see [Runtime](#runtime), Local reminders).
+- `@mpgd/platform/notifications-runtime`: a read's local sweep reuses the
+  read's listing (`getPermission` lists twice at most, not three times);
+  per-key local cancels after a batch the host fails; and the permission
+  sweep when the records cannot be read (see [Runtime](#runtime), Local
+  reminders).
 - Vectors for runtime rules that only unit tests pinned:
   `endpoint-registration-refresh`, `endpoint-unbind-until-register`
   (`register()` after `unregister()`), and `duplicate-topics-once`.

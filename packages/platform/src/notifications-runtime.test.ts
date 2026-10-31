@@ -619,7 +619,7 @@ describe('createNotificationRuntime storage', () => {
     return { host, backend, runtime, calls };
   }
 
-  it('reads the records once for a read, its write, and its local sweep', async () => {
+  it('reads the records once for a read and its local sweep', async () => {
     const { host, backend, runtime, calls } = await withLocalReminder();
     // Another device turns the topic off: only the sweep after a read sees it.
     await backend.recordConsent({
@@ -633,6 +633,66 @@ describe('createNotificationRuntime storage', () => {
     await runtime.runUntilIdle();
     expect(host.localPending).toEqual([]);
     expect(calls).toEqual(['listConsent']);
+  });
+
+  it("lists the records afresh before a write, so another device's grant does not hide the host's denial", async () => {
+    const profile = {
+      ...osProfile,
+      capabilities: {
+        ...osProfile.capabilities,
+        remote: { ...osProfile.capabilities.remote, addressing: 'platform-user' as const },
+      },
+    };
+    const clock = createNotificationConformanceClock(now);
+    const host = createNotificationConformanceHost({ profile, catalog: [energy], timeZone: 'Asia/Seoul' });
+    const entry = notificationConformanceRegistryEntry({ provider: profile.provider, capabilities: profile.capabilities });
+    const backend = createNotificationConformanceBackend({
+      entry,
+      catalog: [energy],
+      clock,
+      defaultLocale: 'ko',
+      defaultPlayer: 'p-1',
+    });
+    let grantAfterNextList = false;
+    const runtime = createNotificationRuntime({
+      provider: host.provider,
+      backend: clientOf(backend, {
+        listConsent: async () => {
+          const listed = await backend.listConsent();
+          if (grantAfterNextList) {
+            // Another device records a grant right after this call's read.
+            grantAfterNextList = false;
+            clock.advance(1);
+            await backend.recordConsent({
+              kind: 'delivery-permission',
+              state: 'granted',
+              source: 'client-report',
+              at: clock.now(),
+            });
+          }
+          return listed;
+        },
+      }),
+      catalog: [energy],
+      clock,
+      defaultLocale: 'ko',
+      ...(entry === undefined ? {} : { registryEntry: entry }),
+    });
+    await runtime.start();
+    backend.authenticate('p-1');
+    host.setPermission('denied');
+    await runtime.getPermission({ topics: ['energy-full'] });
+    await runtime.runUntilIdle();
+    const permissionStates = async () => (await backend.listConsent())
+      .filter((record) => record.kind === 'delivery-permission')
+      .map((record) => record.state);
+    expect(await permissionStates()).toEqual(['denied']);
+    grantAfterNextList = true;
+    clock.advance(1);
+    await runtime.getPermission({ topics: ['energy-full'] });
+    await runtime.runUntilIdle();
+    // The host still reads denied after the other device's grant: the denial is written again.
+    expect(await permissionStates()).toEqual(['denied', 'granted', 'denied']);
   });
 
   it('reads the records again after the runtime wrote one since its read', async () => {

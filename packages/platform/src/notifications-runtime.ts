@@ -742,9 +742,11 @@ export function createNotificationRuntime(
 
   /**
    * `read` while it still holds the backend's records for `session`: read in
-   * that session, and before no record this runtime wrote since. One call
-   * reuses its own read for the write and the local sweep that follow it,
-   * instead of asking the backend again.
+   * that session, and before no record this runtime wrote since. A read
+   * reuses its own listing for the local sweep that follows it, instead of
+   * asking the backend again. The sweep only cancels, and a withdrawal from
+   * another device that this listing misses is caught by the next sweep;
+   * writes never reuse a listing (see `writeRecords`).
    */
   const reusableRead = (
     read: ConsentRead | undefined,
@@ -806,10 +808,12 @@ export function createNotificationRuntime(
   /**
    * Inside the record queue: writes the session player's waiting records and
    * then `pending`, in order. What cannot be written waits for the next write.
-   * `reuse` is the caller's own read, used instead of listing the records
-   * again while it is still current.
+   * It lists the records afresh, never from a caller's earlier read: a
+   * `changed` record is skipped when the listing already holds its state, so
+   * a listing from before the queue wait could miss another device's record
+   * and skip one that must be written.
    */
-  const writeRecords = async (pending: readonly PendingRecord[], reuse?: ConsentRead): Promise<void> => {
+  const writeRecords = async (pending: readonly PendingRecord[]): Promise<void> => {
     for (const next of pending) {
       addWaiting(next);
     }
@@ -835,7 +839,7 @@ export function createNotificationRuntime(
       waitingRecords.splice(waitingRecords.indexOf(waiting), 1);
     }
     try {
-      const records = [...(reusableRead(reuse, session)?.listed ?? await backend.listConsent())];
+      const records = [...(await backend.listConsent())];
       while (mine.length > 0) {
         if (backend.session()?.id !== session.id) {
           // The session changed during the write: the rest waits for its
@@ -864,7 +868,7 @@ export function createNotificationRuntime(
       throw error;
     }
   };
-  const queueRecords = (pending: readonly PendingRecord[], reuse?: ConsentRead): Promise<void> => {
+  const queueRecords = (pending: readonly PendingRecord[]): Promise<void> => {
     // A record the backend would refuse (a provider's malformed evidence) is
     // dropped, so it never blocks the records after it; its error surfaces.
     const valid = pending.filter((next) => {
@@ -878,7 +882,7 @@ export function createNotificationRuntime(
     });
     return valid.length === 0 && waitingRecords.length === 0
       ? Promise.resolve()
-      : enqueue('record', () => writeRecords(valid, reuse));
+      : enqueue('record', () => writeRecords(valid));
   };
   /**
    * A player action is recorded for the authenticated player, never for
@@ -1613,14 +1617,13 @@ export function createNotificationRuntime(
       track((async () => {
         const capabilities = await provider.getCapabilities();
         const topics = Object.keys(event.snapshot.topics);
-        const read = await readConsent();
-        const states = resolveStates(capabilities, event.snapshot, topics, withWaiting(read));
+        const states = resolveStates(capabilities, event.snapshot, topics, await readRecords());
         await enqueue('record', () => writeRecords(permissionRecords(
           capabilities,
           hostObservations(capabilities, states, topics),
           undefined,
           player,
-        ), read));
+        )));
         await syncRegistration(capabilities, states.app);
         await cancelRevokedLocal(capabilities, states, topics);
       })());
@@ -1760,7 +1763,7 @@ export function createNotificationRuntime(
           sources: Object.fromEntries(request.topics.map((topic) => [topic, 'host' as const])),
         };
       }
-      // One backend read serves the records, the write, and the local sweep.
+      // One backend read serves the records and the local sweep; the write lists afresh.
       let read: ConsentRead | undefined;
       let records: NotificationConsentRecord[] | undefined;
       try {
@@ -1776,7 +1779,7 @@ export function createNotificationRuntime(
         hostObservations(capabilities, states, request.topics),
         undefined,
         player,
-      ), read));
+      )));
       await settle(syncRegistration(capabilities, states.app));
       await settle(cancelRevokedLocal(capabilities, states, request.topics));
       if (records !== undefined) {
@@ -1853,11 +1856,9 @@ export function createNotificationRuntime(
         );
       }
       // The host has answered: its answer is returned whatever the backend does.
-      let read: ConsentRead | undefined;
       let records: NotificationConsentRecord[] | undefined;
       try {
-        read = await readConsent();
-        records = withWaiting(read);
+        records = await readRecords();
       } catch (error) {
         fail(error);
       }
@@ -1894,7 +1895,7 @@ export function createNotificationRuntime(
           }
         }
       }
-      await settle(queueRecords(pending, read));
+      await settle(queueRecords(pending));
       await settle(syncRegistration(capabilities, states.app));
       await settle(cancelRevokedLocal(capabilities, states, request.topics));
       return {
