@@ -221,13 +221,20 @@ const statuses = (result: NotificationBulkDeliveryResult) =>
 
 // A partial provider failure maps per recipient; an unattributed answer is never replayed.
 {
-  const fake = bulkProvider({ maxRecipients: 10, perRecipientOutcomes: true }, () => [
-    { status: 'accepted' },
-    { status: 'rate-limited', retryAfterSeconds: 120 },
-    { status: 'rejected', reason: 'recipient' },
-    { status: 'ambiguous' },
-    { status: 'ambiguous', providerCode: 'PARTIAL', unattributed: true },
-  ]);
+  let firstCall = true;
+  const fake = bulkProvider({ maxRecipients: 10, perRecipientOutcomes: true }, (requests) => {
+    if (!firstCall) {
+      return requests.map(() => ({ status: 'accepted' }));
+    }
+    firstCall = false;
+    return [
+      { status: 'accepted' },
+      { status: 'rate-limited', retryAfterSeconds: 120 },
+      { status: 'rejected', reason: 'recipient' },
+      { status: 'ambiguous' },
+      { status: 'ambiguous', providerCode: 'PARTIAL', unattributed: true },
+    ];
+  });
   const { service, time, reports } = await setup({ provider: fake.provider, players: players(5) });
   const result = await service.deliverBulk(bulkInput('event-2', players(5)));
   assert.deepEqual(statuses(result), [
@@ -242,19 +249,21 @@ const statuses = (result: NotificationBulkDeliveryResult) =>
       (report) => report.startsWith('dispatch.unattributed: ') && report.includes('PARTIAL'),
     ),
   );
-  // The scheduler replays the rate-limited and the ambiguous recipients one by one, never the unattributed one.
+  // The scheduler replays the rate-limited and the ambiguous recipients, due together, in one
+  // batch call; never the unattributed one.
   for (let step = 0; step < 30; step += 1) {
     time.advance(3_600);
     await service.dispatchDue();
   }
-  assert.deepEqual([...new Set(fake.singles.map((request) => request.idempotencyKey))].sort(), [
-    'event-2:p2',
-    'event-2:p4',
-  ]);
+  assert.deepEqual(
+    fake.batches.slice(1).map((batch) => batch.map((request) => request.idempotencyKey)),
+    [['event-2:p2', 'event-2:p4']],
+  );
+  assert.deepEqual(fake.singles, []);
   // A retry of the call answers the unattributed recipient from the ledger and sends nothing to it.
   const retried = await service.deliverBulk(bulkInput('event-2', ['p5']));
   assert.deepEqual(statuses(retried), [['p5', 'in-flight', undefined]]);
-  assert.equal(fake.batches.length, 1);
+  assert.equal(fake.batches.length, 2);
 }
 
 // A retry skips recipients already accepted and sends only the rest.
@@ -471,19 +480,18 @@ const statuses = (result: NotificationBulkDeliveryResult) =>
   });
   const result = await service.deliverBulk(bulkInput('event-15', players(3)));
   assert.deepEqual(
-    statuses(result).map((row) => row[2]),
-    ['provider-rate-limited', 'provider-rate-limited', 'provider-rate-limited'],
+    statuses(result).map((row) => row[2] ?? row[1]),
+    ['in-flight', 'in-flight', 'in-flight'],
   );
   assert.deepEqual([fake.batches.length, fake.singles.length], [0, 0]);
   assert.equal(reports.filter((report) => report.startsWith('dispatch.stale: ')).length, 3);
-  // Nothing was sent, so the scheduler sends them once they are due.
+  // Nothing was sent, so the scheduler sends them, together, once they are due.
   time.advance(120);
   await service.dispatchDue();
-  assert.deepEqual(fake.singles.map((request) => request.idempotencyKey).sort(), [
-    'event-15:p1',
-    'event-15:p2',
-    'event-15:p3',
-  ]);
+  assert.deepEqual(
+    fake.batches.map((batch) => batch.map((request) => request.idempotencyKey).sort()),
+    [['event-15:p1', 'event-15:p2', 'event-15:p3']],
+  );
 }
 
 // Gate inputs read more than 30 s before the batch's call are not trusted: those recipients are replayed.
@@ -505,7 +513,7 @@ const statuses = (result: NotificationBulkDeliveryResult) =>
   // p1 and p2 read their consent 40 s before the call; p3 alone is fresh, under the minimum, and goes on its own.
   assert.deepEqual(
     statuses(result).map((row) => row[2] ?? row[1]),
-    ['provider-rate-limited', 'provider-rate-limited', 'delivered'],
+    ['in-flight', 'in-flight', 'delivered'],
   );
   assert.deepEqual(
     [fake.batches.length, fake.singles.map((request) => request.idempotencyKey)],
@@ -541,8 +549,8 @@ const statuses = (result: NotificationBulkDeliveryResult) =>
   }
   const result = await service.deliverBulk(bulkInput('event-18', players(3)));
   assert.deepEqual(statuses(result), [
-    ['p1', 'deferred', 'provider-rate-limited'],
-    ['p2', 'deferred', 'provider-rate-limited'],
+    ['p1', 'in-flight', undefined],
+    ['p2', 'in-flight', undefined],
     ['p3', 'deferred', 'quiet-hours'],
   ]);
   assert.deepEqual([fake.batches.length, fake.singles.length], [0, 0]);
@@ -591,8 +599,90 @@ const statuses = (result: NotificationBulkDeliveryResult) =>
   );
   assert.deepEqual(
     statuses(result).map((row) => row[2] ?? row[1]),
-    ['delivered', 'provider-rate-limited', 'delivered', 'provider-rate-limited'],
+    ['delivered', 'in-flight', 'delivered', 'in-flight'],
   );
+}
+
+// A batch that keeps leaving recipients out (`not-sent`) for over a day never gives up on them:
+// no call was made, so no rate-limit backoff or 24-hour limit applies, and they are sent later.
+{
+  let lateCalls = 0;
+  const late = (requests: readonly NotificationRemoteDeliveryRequest[]): readonly NotificationRemoteDeliveryAnswer[] =>
+    requests.map((): NotificationRemoteDeliveryAnswer => {
+      lateCalls += 1;
+      return lateCalls <= 60 ? { status: 'not-sent' } : { status: 'accepted' };
+    });
+  const fake = bulkProvider(
+    { maxRecipients: 10, minRecipients: 2, perRecipientOutcomes: true },
+    late,
+  );
+  const { service, store, time } = await setup({ provider: fake.provider, players: players(2) });
+  const first = await service.deliverBulk(bulkInput('event-21', players(2)));
+  assert.deepEqual(
+    statuses(first).map((row) => row[1]),
+    ['in-flight', 'in-flight'],
+  );
+  for (let hour = 0; hour < 30 && lateCalls <= 60; hour += 1) {
+    time.advance(3_600);
+    await service.dispatchDue();
+  }
+  // 30 hourly replays of 2 recipients, all left out, then the replay that sends them.
+  time.advance(3_600);
+  await service.dispatchDue();
+  const settled = await service.deliverBulk(bulkInput('event-21', players(2)));
+  assert.deepEqual(
+    statuses(settled).map((row) => row[1]),
+    ['delivered', 'delivered'],
+  );
+  const row = (await store.getSend('event-21:p1'))?.send.rows[0];
+  assert.equal(row?.rateLimit, undefined, 'a not-sent answer is not a rate limit');
+  assert.equal(row?.state.status, 'delivered');
+}
+
+// The scheduler replays due rows of a bulk provider through sendBatch, one call per call group.
+{
+  const fake = bulkProvider({
+    maxRecipients: 10,
+    minRecipients: 2,
+    perRecipientOutcomes: true,
+    callKey: (request) => request.content.body ?? '',
+  });
+  const { service, store, time } = await setup({
+    provider: fake.provider,
+    players: players(4),
+    start: '2026-11-01T03:30:00Z',
+    topic: { ...topic, quietHours: { start: '03:00', end: '04:00' } },
+  });
+  for (const [player, locale] of [
+    ['p1', 'ko'],
+    ['p2', 'en'],
+    ['p3', 'ko'],
+    ['p4', 'en'],
+  ] as const) {
+    await store.putPlatformRegistration({
+      player,
+      provider: 'platform',
+      locale,
+      timeZone: 'UTC',
+      registeredAt: time.now(),
+    });
+  }
+  const held = await service.deliverBulk(bulkInput('event-22', players(4)));
+  assert.deepEqual(
+    statuses(held).map((row) => row[2]),
+    ['quiet-hours', 'quiet-hours', 'quiet-hours', 'quiet-hours'],
+  );
+  time.advance(1_800);
+  const due = await service.dispatchDue();
+  assert.equal(due.results.filter((result) => result.outcome.status === 'delivered').length, 4);
+  assert.deepEqual(
+    fake.batches.map((batch) => batch.map((request) => request.idempotencyKey)),
+    [
+      ['event-22:p1', 'event-22:p3'],
+      ['event-22:p2', 'event-22:p4'],
+    ],
+  );
+  assert.deepEqual(fake.singles, []);
 }
 
 // A device provider's deliveries count each device against the call's attempts.

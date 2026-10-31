@@ -728,6 +728,28 @@ assert.equal(defaultAitFunctionalMessageTimeoutMs, defaultAppsInTossPartnerApiTi
     });
   };
   assert.deepEqual(await outcomes(bulkSuccess(2)), [['ambiguous', 'BULK_PARTIAL', true]]);
+  // Split across channels: 2 by push and 1 by inbox reach 3 recipients once each.
+  const split = (push: number, inbox: number): Response =>
+    json({
+      resultType: 'SUCCESS',
+      success: {
+        msgCount: push + inbox,
+        sentPushCount: push,
+        sentInboxCount: inbox,
+        sentSmsCount: 0,
+        sentAlimtalkCount: 0,
+        sentFriendtalkCount: 0,
+        detail: emptyChannels,
+        fail: emptyChannels,
+      },
+    });
+  assert.deepEqual(
+    (await outcomes(split(2, 1))).map((answer) => answer[0]),
+    ['accepted'],
+  );
+  // 2 + 2 for 3 recipients: someone got two messages, so who got none is unknown.
+  assert.deepEqual(await outcomes(split(2, 2)), [['ambiguous', 'BULK_PARTIAL', true]]);
+  assert.deepEqual(await outcomes(split(1, 1)), [['ambiguous', 'BULK_PARTIAL', true]]);
   assert.deepEqual(await outcomes(bulkSuccess(4)), [['ambiguous', 'BULK_PARTIAL', true]]);
   assert.deepEqual(await outcomes(bulkSuccess(0)), [['rejected', 'recipient', undefined]]);
   assert.deepEqual(await outcomes(fail('4095', { retryAfterSeconds: 30 })), [
@@ -753,8 +775,8 @@ assert.equal(defaultAitFunctionalMessageTimeoutMs, defaultAppsInTossPartnerApiTi
       { startWithinMs: 0 },
     ),
     [
-      { status: 'rate-limited', retryAfterSeconds: 1 },
-      { status: 'rate-limited', retryAfterSeconds: 1 },
+      { status: 'not-sent' },
+      { status: 'not-sent' },
     ],
   );
   assert.equal(late.calls.length, 0);

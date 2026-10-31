@@ -1463,6 +1463,18 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         }
         await complete(sendKey, row, token, { kind: 'remove' }, answeredAt);
         return { refusal: { status: 'unavailable', reason: 'provider-rejected' } };
+      case 'not-sent':
+        // No call was made for it (a bulk batch left it out): the row goes
+        // back as it was before this claim, due again shortly. It is not a
+        // rate limit, so it neither backs off nor nears the 24-hour give-up.
+        await complete(
+          sendKey,
+          row,
+          token,
+          { kind: 'set', row: backedOff(before, answeredAt) },
+          answeredAt,
+        );
+        return {};
       case 'rate-limited': {
         // Nothing was sent: the claim is released and the row waits.
         const next = nextRateLimit(row.rateLimit, answer.retryAfterSeconds, answeredAt);
@@ -1744,9 +1756,14 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     const limit = batchLimit(options.limit);
     const keys = await store.listDueSends({ at: formatNotificationInstant(nowMs()), limit });
     const listed = keys.length;
-    const results: NotificationDueResult[] = [];
+    // Each listed send's result, in listing order; a failed one has none.
+    const slots = new Map<string, NotificationDueResult | undefined>();
     let failed = 0;
     let paced = 0;
+    // Sends whose due rows all go to one provider with a bulk path: replayed
+    // together through its `sendBatch` (BK1), each row still its own claim,
+    // gate check, and answer.
+    const gathered = new Map<string, { readonly provider: RegisteredNotificationProvider; readonly sends: { readonly key: string; readonly rows: NotificationSendRow[] }[] }>();
     for (const sendKey of keys) {
       try {
         const held = await store.getSend(sendKey);
@@ -1784,19 +1801,60 @@ export function createNotificationService(input: CreateNotificationServiceInput)
             failed += 1;
             report(error, 'queue.enqueue', sendKey);
           }
-          results.push({ sendKey, outcome: await settle(sendKey, []) });
+          slots.set(sendKey, { sendKey, outcome: await settle(sendKey, []) });
+          continue;
+        }
+        const only = due.every((row) => row.provider === due[0]?.provider)
+          ? registry.provider(due[0]?.provider ?? '')
+          : undefined;
+        if (only?.delivery.bulk !== undefined && only.delivery.sendBatch !== undefined) {
+          const group = gathered.get(only.entry.provider)
+            ?? { provider: only, sends: [] };
+          group.sends.push({ key: sendKey, rows: due });
+          gathered.set(only.entry.provider, group);
+          slots.set(sendKey, undefined);
           continue;
         }
         const ran = await runInline(sendKey, due, 'due');
         if (ran.failed > 0) {
           failed += 1;
         }
-        results.push({ sendKey, outcome: await settle(sendKey, ran.refusals) });
+        slots.set(sendKey, { sendKey, outcome: await settle(sendKey, ran.refusals) });
       } catch (error) {
         failed += 1;
         report(error, 'dispatchDue', sendKey);
       }
     }
+    for (const { provider, sends } of gathered.values()) {
+      let answers: Awaited<ReturnType<typeof runBulkBatch>>;
+      try {
+        answers = await runBulkBatch(
+          provider,
+          sends.map((send) => ({ key: send.key, rows: send.rows, mode: 'due', refusals: [], wasDelivered: false })),
+          { batch: 0, single: 0 },
+        );
+      } catch (error) {
+        failed += sends.length;
+        report(error, 'dispatchDue', sends[0]?.key ?? '');
+        continue;
+      }
+      sends.forEach((send, index) => {
+        const answer = answers[index];
+        if (answer !== undefined && 'outcome' in answer) {
+          slots.set(send.key, { sendKey: send.key, outcome: answer.outcome });
+          return;
+        }
+        failed += 1;
+        report(
+          answer !== undefined && 'error' in answer ? answer.error : new Error('No answer.'),
+          'dispatchDue',
+          send.key,
+        );
+      });
+    }
+    const results = [...slots.values()].filter(
+      (result): result is NotificationDueResult => result !== undefined,
+    );
     return { results, failed, listed, paced };
   };
 
@@ -2742,7 +2800,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
    * `minRecipients` and inside the provider's hold window. The gate runs
    * again for each request as its call starts, and no call starts past the
    * claims' deadline: a request the gate now refuses, or one past the
-   * deadline, answers `rate-limited` (nothing sent; it is replayed). Every answer is one of the five kinds; a
+   * deadline, answers `not-sent` (it is replayed shortly). Every answer is one of the five kinds; a
    * missing or broken one, or a call that threw, is `ambiguous`.
    */
   const flushBulk = async (
@@ -2760,10 +2818,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     const answers: NotificationRemoteDeliveryAnswer[] = requests.map(() => ({
       status: 'ambiguous',
     }));
-    const notSent: NotificationRemoteDeliveryAnswer = {
-      status: 'rate-limited',
-      retryAfterSeconds: 1,
-    };
+    const notSent: NotificationRemoteDeliveryAnswer = { status: 'not-sent' };
     /** The request as the gate allows it at `at`, or `undefined`. */
     const current = (index: number, at: number): NotificationRemoteDeliveryRequest | undefined => {
       const regate = regates[index];
@@ -2981,7 +3036,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
               rowKey: entry.item.request.idempotencyKey,
             },
           );
-          return { status: 'rate-limited', retryAfterSeconds: 1 };
+          return { status: 'not-sent' };
         });
       });
       await Promise.all(members.map(async ({ entry, index, row }) => {
@@ -4190,6 +4245,8 @@ function deliveryAnswerOf(answer: unknown): NotificationRemoteDeliveryAnswer | u
         : { status: 'accepted' };
     case 'unregistered':
       return { status: 'unregistered' };
+    case 'not-sent':
+      return { status: 'not-sent' };
     case 'rate-limited':
       return typeof answer.retryAfterSeconds === 'number'
         ? { status: 'rate-limited', retryAfterSeconds: answer.retryAfterSeconds }

@@ -114,8 +114,8 @@ describe('the Devvit provider bulk path', () => {
     const provider = createDevvitNotificationDeliveryProvider({ notifications: plugin });
     const answers = await provider.sendBatch?.([request('t2_a'), request('t2_b', 'Another text.')], { startWithinMs: 0 });
     expect(answers).toEqual([
-      { status: 'rate-limited', retryAfterSeconds: 1 },
-      { status: 'rate-limited', retryAfterSeconds: 1 },
+      { status: 'not-sent' },
+      { status: 'not-sent' },
     ]);
     expect(calls).toEqual([]);
   });

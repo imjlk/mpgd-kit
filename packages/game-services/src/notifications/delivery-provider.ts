@@ -104,9 +104,15 @@ export interface NotificationRemoteDeliveryRequest {
  *   answer). The claim is kept until its lease ends.
  *
  * A provider that throws is treated as `ambiguous`.
+ *
+ * A batch may also answer `not-sent` for a request it made no call for (its
+ * calls ran past `startWithinMs`): the row goes back as it was, due again
+ * shortly, without a rate-limit backoff or the 24-hour give-up, since no
+ * provider refused anything.
  */
 export type NotificationRemoteDeliveryAnswer =
   | { readonly status: 'accepted'; readonly providerMessageId?: string }
+  | { readonly status: 'not-sent' }
   | { readonly status: 'unregistered' }
   | { readonly status: 'rate-limited'; readonly retryAfterSeconds?: number }
   | {
@@ -178,7 +184,7 @@ export interface NotificationRemoteBatchOptions {
    * Milliseconds from the start of `sendBatch` after which the provider
    * starts no further call (one batch may take several, such as one per
    * text): the requests' claims must outlive the calls. A request it did not
-   * start answers `rate-limited`, which proves nothing was sent.
+   * start answers `not-sent`.
    */
   readonly startWithinMs?: number;
 }

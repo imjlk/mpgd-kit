@@ -412,7 +412,7 @@ export function createDevvitNotificationDeliveryProvider(
      *   idempotency key and a replay would notify the queued ones again.
      * - A call that throws is `ambiguous` for each of its recipients.
      * - Past `startWithinMs` no further call starts: its recipients are
-     *   `rate-limited` (nothing was sent) and are replayed.
+     *   `not-sent` and are replayed shortly.
      */
     async sendBatch(requests, options = {}) {
       const startedAt = globalThis.performance.now();
@@ -444,7 +444,7 @@ export function createDevvitNotificationDeliveryProvider(
         ) {
           // Too late to start another call within the recipients' claims: nothing was sent to them.
           for (const member of call.members) {
-            answers[member.index] = { status: 'rate-limited', retryAfterSeconds: 1 };
+            answers[member.index] = { status: 'not-sent' };
           }
           continue;
         }

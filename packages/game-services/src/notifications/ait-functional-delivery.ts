@@ -131,6 +131,8 @@ export type AitFunctionalMessageAnswer =
       readonly retryAfterSeconds?: number;
       readonly providerCode?: string;
     }
+  /** A bulk request no call was started for (past `startWithinMs`): nothing was sent. */
+  | { readonly status: 'not-sent' }
   | {
       readonly status: 'rejected';
       readonly reason: AitFunctionalMessageRejection;
@@ -219,7 +221,9 @@ export interface AitFunctionalMessageDeliveryProvider {
    * order of `requests`. Every recipient of a call gets the call's answer:
    * `accepted` only when one channel's sent count equals the recipients
    * (the kit reads a channel as reaching each recipient at most once per
-   * message, which the documentation does not state), `rejected` with
+   * message, which the documentation does not state) or the channels'
+   * sent counts add up to exactly the recipients (read as each recipient
+   * reached on at most one channel per message, also not stated), `rejected` with
    * reason `recipient` when nothing was sent on any channel, and otherwise
    * `ambiguous` with `unattributed` (code `BULK_PARTIAL`): some were
    * reached, and a replay would reach them again. A failure of the whole
@@ -466,7 +470,7 @@ export function createAitFunctionalMessageDeliveryProvider(
             && globalThis.performance.now() - startedAt >= batchOptions.startWithinMs;
           // Too late to start another call within the recipients' claims: nothing was sent to them.
           const answer: AitFunctionalMessageAnswer = late
-            ? { status: 'rate-limited', retryAfterSeconds: 1 }
+            ? { status: 'not-sent' }
             : await sendBulkGroup(templateSetCode, contexts);
           for (const index of group.indexes.slice(start, start + contexts.length)) {
             answers[index] = answer;
@@ -605,10 +609,20 @@ function readSuccess(
 
 /**
  * A `send-bulk-message` `SUCCESS` for `recipients` recipients. The answer
- * names no recipient, so it proves each one reached only when one channel
- * sent exactly as many messages as there were recipients, and proves
- * nothing sent only when every count is zero. Anything between is some
- * recipients reached and some not, without saying which.
+ * names no recipient, so the counts decide, under two readings the
+ * documentation does not state:
+ * - a channel reaches each recipient at most once per message, so one
+ *   channel that sent exactly as many messages as there were recipients
+ *   reached each of them;
+ * - a recipient is reached on at most one channel per message (push, else
+ *   inbox, and so on), so per-channel sent counts that add up to exactly
+ *   the recipients, none above it, reached each of them once.
+ * It proves nothing sent only when every count is zero. Anything else is
+ * some recipients reached and some not, without saying which: each is
+ * `unattributed`, its row stays in flight and is never replayed. Such a
+ * row writes no delivery history, so the app-wide pace (the registry
+ * `rate`) never counts it; the gate still counts it toward the player's
+ * frequency caps and per-user limits as an attempted in-flight send.
  */
 function readBulkSuccess(success: unknown, recipients: number): AitFunctionalMessageAnswer {
   if (!isRecord(success) || !isCount(success['msgCount'])) {
@@ -640,6 +654,14 @@ function readBulkSuccess(success: unknown, recipients: number): AitFunctionalMes
   ) as unknown as AitFunctionalMessageChannelResults;
   const messageCount = success['msgCount'];
   if (channelNames.some((channel) => sentOn(channel) === recipients)) {
+    return { status: 'accepted', messageCount, channels };
+  }
+  // Split across channels (some by push, the rest by inbox): exactly one message each.
+  const counts = channelNames.map(sentOn);
+  if (
+    counts.reduce((sum, count) => sum + count, 0) === recipients
+    && counts.every((count) => count <= recipients)
+  ) {
     return { status: 'accepted', messageCount, channels };
   }
   if (messageCount === 0 && channelNames.every((channel) => sentOn(channel) === 0)) {

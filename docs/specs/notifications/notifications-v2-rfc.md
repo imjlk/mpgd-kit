@@ -1580,6 +1580,15 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
   row stays `in-flight` and is not replayed (neither by a retry of the key
   nor by the scheduler) until its key's retention ends, and the backend
   reports it. A recipient may miss the message; none gets it twice.
+  The row writes no delivery history, so the provider's app-wide pace
+  (the registry `rate`) never counts it, while the gate still counts it
+  toward the player's frequency caps and provider limits as an attempted
+  in-flight send.
+- **Not sent (BK1).** A batch may answer `not-sent` for a request it made
+  no call for (a call group that would start past the claims' deadline,
+  or a recipient the batch's final gate check left out). The row goes
+  back as it was before the claim, due again a minute later; it is not a
+  rate limit, so it neither backs off nor nears the 24-hour give-up.
 
 ### Delivery providers {#remote-delivery}
 
@@ -3025,8 +3034,10 @@ announcements and event pushes.
       history, the host's permission) were read more than 30 seconds
       before its call, or whose claim has less than half a lease left
       (another holder may own its row by the time the call answers), is not
-      sent with the batch: it answers `rate-limited`, which proves nothing
-      was sent, and its replay reads the inputs again and runs the gate.
+      sent with the batch: it answers `not-sent`, which puts the row back
+      as it was, due again a minute later, without the rate-limit backoff
+      or its 24-hour give-up, and its replay reads the inputs again and
+      runs the gate.
     - A refused player never reaches the provider and has its own
       answer. Copy is rendered per recipient by the gate, so the
       server-side locale resolver (open question 4) applies to bulk sends
@@ -3056,6 +3067,11 @@ announcements and event pushes.
     `maxRecipients` attempts. A batch below the minimum, or inside the hold
     window, goes one `send` per recipient. A provider without the
     capability (FCM) sends one by one through the same path.
+  - **Scheduler replays.** When the scheduler sends due rows inline, the
+    sends whose due rows all go to one provider with a bulk path are
+    replayed together through the same batches (call groups, minimum,
+    maximum, hold window, and the gate checks above), each row still its
+    own claim and answer. Through the queue, each row stays one job.
   - **`ambiguous` with `unattributed`** (see [Provider
     answers](#provider-answers)), kept on the row as `unattributed`, which
     `notificationSendDueAt` never makes due. Rows are JSON in every store,
@@ -3077,7 +3093,9 @@ announcements and event pushes.
   - **Answers.** Every recipient of a call gets the call's answer:
     - `accepted` when one channel's sent count equals the recipients (the
       kit reads a channel as reaching a recipient at most once per message,
-      which the documentation does not state);
+      which the documentation does not state), or when the channels' sent
+      counts add up to exactly the recipients (read as each recipient
+      reached on at most one channel per message, also not stated);
     - `rejected` (`recipient`) when every count is zero;
     - otherwise `ambiguous` with `unattributed` (`BULK_PARTIAL`).
     - A failure of the whole call maps as for `send-message`, except that
@@ -3107,14 +3125,14 @@ announcements and event pushes.
   service binding, beside `deliverNotification`, is never a fetch route. It
   attempts at most `MPGD_NOTIFICATIONS_BULK_RECIPIENTS` deliveries a call
   (50 by default) and reads at most 60 recipients' keys (`maxLookups`), to
-  stay under D1's 1,000 queries per Worker invocation, and runs inline. At
-  those defaults a call reaches the Apps in Toss minimum of 50 only when
-  every attempted recipient passes the gate, so most Worker calls send one
-  by one until the ledger's D1 queries are batched. Devvit's backend bridge serves no bulk
+  stay under D1's 1,000 queries per Worker invocation, and runs inline.
+  Only recipients the gate allows spend attempts, so a call plans up to 60
+  recipients and attempts the first 50 it allows: it reaches the Apps in
+  Toss minimum of 50 when at most 10 of the 60 are refused, and sends one
+  by one otherwise. Raising either number needs the ledger's D1 queries
+  batched (`db.batch`), a follow-up. Devvit's backend bridge serves no bulk
   method.
 - **Left to follow-ups.**
-  - Due replays of bulk rows (deferred, rate-limited, ambiguous) go one by
-    one through the scheduler.
   - Batching the ledger's D1 queries (`db.batch`), so one Worker call can
     prepare more than about 50 deliveries under D1's 1,000 queries per
     invocation.

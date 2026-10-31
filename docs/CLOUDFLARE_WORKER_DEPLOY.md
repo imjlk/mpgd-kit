@@ -602,9 +602,10 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   with it): planning a recipient costs about 7 D1 queries and an attempted
   delivery about 11 more, which keeps a call under D1's 1,000 queries per
   Worker invocation on Workers Paid. The rest answer `not-attempted`, and a
-  later call sends them. Apps in Toss uses its bulk API only when a call's
-  allowed recipients reach its minimum of 50, so at these defaults most
-  Worker calls send one by one. A large audience therefore takes several calls on the
+  later call sends them. Only recipients the gate allows spend attempts,
+  so a call plans up to 60 and attempts the first 50 allowed: Apps in Toss
+  uses its bulk API (minimum 50) when at most 10 of them are refused, and
+  sends one by one otherwise. A large audience therefore takes several calls on the
   Worker: bulk sends cut provider calls there, not D1 queries. It runs
   inline, not through the queue.
 - **Scheduler.** Each cron run fires the due server reminders as sends
