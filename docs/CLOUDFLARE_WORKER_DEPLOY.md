@@ -802,8 +802,9 @@ Requirements:
 - The iOS verifier Worker bound to this Worker's
   `GameServicesAppStoreRevocations` entrypoint. That entrypoint is
   read-only and exposes nothing else. It rejects calls unless the flag, the
-  D1 store, and the notifications route are all configured, so a registry
-  that nothing fills is never served as "no refunds". On the memory store,
+  D1 store, and the notifications route are all configured, and it rejects
+  a lookup for a bundle other than `GAME_SERVICES_APP_STORE_BUNDLE_ID`. A
+  registry that nothing fills is therefore never served as "no refunds". On the memory store,
   the route records into one isolate's memory for local development, and
   the entrypoint still rejects. The flag must be the string `"true"`. Any
   other value, such as an unquoted TOML `true`, is logged once per isolate

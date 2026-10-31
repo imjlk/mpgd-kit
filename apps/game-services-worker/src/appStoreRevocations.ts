@@ -79,8 +79,9 @@ export function resolveWorkerAppStoreRevocationRegistry(
  * One lookup for the `GameServicesAppStoreRevocations` entrypoint, as data
  * (errors lose their class across a service binding). Throws unless this
  * Worker records revocations durably (the flag, the D1 store, and the
- * notifications route): otherwise the lookup would answer `absent` for
- * refunds it never saw, and the verifier would grant without the check.
+ * notifications route) for the lookup's bundle: otherwise the lookup would
+ * answer `absent` for refunds it never saw, and the verifier would grant
+ * without the check.
  */
 export async function findWorkerAppStoreRevocation(
   env: AppStoreRevocationsEnv,
@@ -99,6 +100,15 @@ export async function findWorkerAppStoreRevocation(
       'APP_STORE_REVOCATIONS_NOT_CONFIGURED: set GAME_SERVICES_APP_STORE_REVOCATION_REGISTRY = "true" '
         + 'with MPGD_STORE = "d1" and the App Store notifications route (GAME_SERVICES_APP_STORE_NOTIFICATION_VERIFIER and '
         + 'GAME_SERVICES_APP_STORE_BUNDLE_ID).',
+    );
+  }
+  const bundleId = env.GAME_SERVICES_APP_STORE_BUNDLE_ID?.trim();
+  if (input.bundleId !== bundleId) {
+    // The route refuses another bundle's notifications, so this registry can
+    // never hold its refunds: answering absent would let them grant.
+    throw new Error(
+      'APP_STORE_REVOCATIONS_BUNDLE_MISMATCH: this Worker records revocations for '
+        + 'GAME_SERVICES_APP_STORE_BUNDLE_ID only.',
     );
   }
   return answerAppStoreRevocationLookup(registry, input);

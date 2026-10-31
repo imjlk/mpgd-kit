@@ -333,6 +333,21 @@ try {
       ),
       /APP_STORE_REVOCATIONS_NOT_CONFIGURED/u,
     );
+    await assert.rejects(
+      findWorkerAppStoreRevocation(env, { ...lookupRequest('x'), bundleId: 'com.example.other' }),
+      /APP_STORE_REVOCATIONS_BUNDLE_MISMATCH/u,
+      'a lookup for a bundle this Worker never records refunds for is refused, not absent',
+    );
+    assertDecision(
+      await createOfflineVerifier(
+        createBindingTo({ ...env, GAME_SERVICES_APP_STORE_BUNDLE_ID: 'com.example.other' }),
+        jws,
+        { now: refundedAt + 20 * minute },
+      ).verifyPurchase(purchaseInput('post-reversal.jws')),
+      'pending',
+      'APP_STORE_REVOCATION_LOOKUP_UNAVAILABLE',
+      "a verifier bound to another bundle's registry never grants",
+    );
     const memoryEnv = { ...env, MPGD_STORE: 'memory' } satisfies GameServicesWorkerEnv;
     assert.ok(
       resolveWorkerAppStoreRevocationRegistry(memoryEnv) !== undefined,
