@@ -768,6 +768,118 @@ For App Review, the iOS verifier Worker also constructs its purchase verifier
 with `sandboxPurchases: { mode: 'grant', ... }`; see
 [App Review and TestFlight purchases](GAME_SERVICES_BACKEND.md#app-review-and-testflight-purchases-on-a-production-backend).
 
+### App Store revocation registry (offline-only purchases)
+
+The iOS verifier Worker verifies purchases in `server-api` mode by default,
+which reads every transaction's current status from the App Store Server API.
+A deployment without Server API access can use
+`signedTransactionEvidence: { mode: 'offline-only', maxSignedAgeMs, revocations }`
+instead
+([offline-only mode](GAME_SERVICES_BACKEND.md#backend-boundary)).
+That mode needs a registry of the refunds and revocations App Store Server
+Notifications reported. The registry must be shared by every isolate and
+must survive restarts. Otherwise a client can present a JWS signed before its
+refund and be granted again. This Worker keeps that registry in D1, next to
+the notifications route that fills it. The iOS verifier Worker reads it
+through a service binding back to this Worker. It does not get its own D1
+binding.
+
+Requirements:
+
+- The App Store Server Notifications V2 route above, with both URLs set in
+  App Store Connect. A refund Apple never notifies is never recorded.
+- `MPGD_STORE = "d1"` and migration `0011_app_store_revocations.sql`
+  applied (additive: one table, no player id).
+- `GAME_SERVICES_APP_STORE_REVOCATION_REGISTRY = "true"` on this Worker.
+  The route then records every verified `REFUND` and `REVOKE` of the
+  customer's own one-time purchase before it reads the ledger, whether or
+  not a grant exists. Per grant verification id it keeps the latest
+  revocation, so a redelivery or an older notification that arrives late
+  changes nothing. Apply 0011 before you set the flag. Until the table
+  exists, every refund is answered 503 and Apple redelivers it.
+- The iOS verifier Worker bound to this Worker's
+  `GameServicesAppStoreRevocations` entrypoint. That entrypoint is
+  read-only and exposes nothing else. It rejects calls unless the flag and
+  the notifications route are both configured, so a registry that nothing
+  fills is never served as "no refunds".
+
+Turn the flag on in `server-api` mode too, as soon as the route runs on D1.
+Recording costs one D1 write per refund, and a later switch to
+`offline-only` then starts with the refunds already recorded.
+
+```toml
+# This Worker
+[vars]
+GAME_SERVICES_APP_STORE_REVOCATION_REGISTRY = "true"
+```
+
+```toml
+# The iOS verifier Worker
+[[services]]
+binding = "GAME_SERVICES_APP_STORE_REVOCATIONS"
+service = "mpgd-game-services"
+entrypoint = "GameServicesAppStoreRevocations"
+```
+
+```ts
+import {
+  createAppStoreGameServicesEvidenceVerifier,
+  createAppStoreRevocationLookupOverBinding,
+} from '@mpgd/game-services/app-store-verifier';
+
+const verifier = createAppStoreGameServicesEvidenceVerifier({
+  // ...bundleId, environment, serverApi, signedTransactionVerifier,
+  // resolveAppAccountToken as before
+  clockSkewMs: 5 * 60 * 1000, // the default
+  signedTransactionEvidence: {
+    mode: 'offline-only',
+    maxSignedAgeMs: 60 * 60 * 1000,
+    revocations: createAppStoreRevocationLookupOverBinding(
+      env.GAME_SERVICES_APP_STORE_REVOCATIONS,
+    ),
+  },
+});
+```
+
+`createAppStoreRevocationLookupOverBinding` fails closed. If the binding
+throws, answers `unavailable` or something malformed, or the verification is
+aborted, the purchase stays `pending` (`APP_STORE_REVOCATION_LOOKUP_UNAVAILABLE`).
+It is never granted without the check.
+
+A recorded revocation refuses any JWS signed at or before its `revokedAt`
+plus `clockSkewMs`. `revokedAt` is Apple's `revocationDate`, else the
+notification's `signedDate`. Keep `clockSkewMs` at least as large as the
+clock difference between Apple and the verifier Worker. A larger skew refuses
+more pre-refund JWS. It also refuses a JWS that was re-signed within that
+window after a `REFUND_REVERSED`. `REFUND_REVERSED` records nothing: a JWS
+signed after the reversal carries no `revocationDate`, so it grants again, as
+it would in `server-api` mode. A ledger grant that a refund already revoked
+stays revoked
+([re-granting](GAME_SERVICES_BACKEND.md#re-granting-after-a-refund-reversal)).
+
+The two Workers bind each other. Deploy them in this order:
+
+1. The iOS verifier Worker, in `server-api` mode and without
+   `GAME_SERVICES_APP_STORE_REVOCATIONS`.
+2. This Worker, with 0011 applied and the flag set.
+3. The iOS verifier Worker again, with the binding and `offline-only`.
+
+Rows hold no player id. A row can be deleted once its `revoked_at_ms` is
+older than the verifier's `maxSignedAgeMs` plus `clockSkewMs`. By then, every
+JWS the row would refuse is stale anyway. For example, with a one-hour
+window:
+
+```sh
+pnpm --dir apps/game-services-worker exec wrangler d1 execute mpgd-game-services --remote \
+  --command "DELETE FROM app_store_revocations WHERE revoked_at_ms < (unixepoch('now') - 7200) * 1000"
+```
+
+A row whose `revoked_at` did not parse (`revoked_at_ms` is NULL) refuses
+every JWS for that grant. Such a row is never replaced or pruned by this
+rule. Support removes it by hand.
+
+<!-- @link ../apps/game-services-worker/src/appStoreRevocations.ts#createD1AppStoreRevocationRegistry One conditional upsert keeps the latest revokedAt; a D1 failure is AppStoreDependencyUnavailableError. -->
+
 ### Google Play: voided purchases and owed acknowledges
 
 Both run from the cron with the in-Worker Play boundary

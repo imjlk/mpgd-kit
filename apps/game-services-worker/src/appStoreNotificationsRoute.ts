@@ -4,6 +4,7 @@ import {
   handleAppStoreServerNotification,
   maxAppStoreServerNotificationBytes,
   type AppStoreEnvironment,
+  type AppStoreRevocationRecorder,
   type AppStoreServerNotificationVerificationResult,
   type AppStoreServerNotificationVerifier,
   type GameServicesStore,
@@ -45,6 +46,12 @@ export function createAppStoreNotificationsFetchHandler(input: {
   readonly binding: AppStoreNotificationVerifierBinding;
   readonly bundleId: string;
   readonly timeoutMs?: number;
+  /**
+   * Records every verified `REFUND` and `REVOKE` before the ledger is read
+   * (`GAME_SERVICES_APP_STORE_REVOCATION_REGISTRY`), for an `offline-only`
+   * iOS purchase verifier. A recorder outage answers 503.
+   */
+  readonly revocations?: AppStoreRevocationRecorder;
 }): (request: Request) => Promise<Response | undefined> {
   const timeoutMs = input.timeoutMs ?? 10_000;
   const verifier: AppStoreServerNotificationVerifier = {
@@ -106,6 +113,7 @@ export function createAppStoreNotificationsFetchHandler(input: {
         body,
         environment,
         bundleId: input.bundleId,
+        ...(input.revocations === undefined ? {} : { revocations: input.revocations }),
         // Past the binding race below, so a slow binding answers 503, not 500.
         signal: AbortSignal.timeout(timeoutMs + 2 * bindingGraceMs),
       });

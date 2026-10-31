@@ -2,8 +2,11 @@ import type { PlatformEvidenceEnvelope } from '@mpgd/platform';
 
 import {
   createAppStoreSignedTransactionEvidence,
+  createAppStoreVerificationId,
   type AppStoreEnvironment,
   type AppStoreInAppPurchaseType,
+  type AppStoreRevocationRecord,
+  type AppStoreRevocationRegistry,
   type AppStoreTransactionPayload,
 } from './app-store-verifier.js';
 
@@ -88,4 +91,243 @@ export function createAppStoreTransactionConformanceFixture(
       : { revocationDate: input.revocationDate }),
     ...(input.isUpgraded === undefined ? {} : { isUpgraded: input.isUpgraded }),
   };
+}
+
+/** The rules `runAppStoreRevocationRegistryConformance` checks, in order. */
+export const appStoreRevocationRegistryConformanceChecks = [
+  'an unrecorded grant identity is absent',
+  'the first record is kept and read back unchanged',
+  'a redelivery keeps the record it repeats',
+  'an older revocation arriving late keeps the later one',
+  'a later revocation replaces the earlier one',
+  'an unparseable revokedAt replaces a parseable one and is never replaced',
+  'grant identities are independent',
+] as const;
+
+/** Checked only when `reopen` is given. */
+export const appStoreRevocationRegistryDurabilityCheck =
+  'records survive a new registry instance over the same storage';
+
+export interface RunAppStoreRevocationRegistryConformanceInput {
+  readonly registry: AppStoreRevocationRegistry;
+  /**
+   * Another registry instance over the same storage, as a new Worker isolate
+   * or process would build it. When given, every rule is also read back
+   * through it, so a registry that only remembers in memory fails.
+   */
+  readonly reopen?: () => AppStoreRevocationRegistry;
+  /**
+   * Keeps this run's grant identities apart from earlier runs on a storage
+   * that persists between them; a random id by default.
+   */
+  readonly runId?: string;
+  readonly signal?: AbortSignal;
+}
+
+export interface AppStoreRevocationRegistryConformanceReport {
+  readonly checks: readonly string[];
+  readonly passed: true;
+}
+
+/**
+ * Runs the `AppStoreRevocationRegistry` contract against an implementation:
+ * the latest `revokedAt` per grant identity wins, a redelivery or an older
+ * notification arriving late answers `alreadyRecorded: true` and changes
+ * nothing, an unparseable `revokedAt` counts as the latest, and records are
+ * read back field for field. `createInMemoryAppStoreRevocationRegistry`
+ * passes it; a durable registry should pass it with `reopen` as well. It
+ * writes records under fresh grant identities and deletes nothing; it throws
+ * on the first rule that fails.
+ */
+export async function runAppStoreRevocationRegistryConformance(
+  input: RunAppStoreRevocationRegistryConformanceInput,
+): Promise<AppStoreRevocationRegistryConformanceReport> {
+  const signal = input.signal ?? new AbortController().signal;
+  const runId = input.runId ?? `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+  const writer = input.registry;
+  const readers = input.reopen === undefined ? [writer] : [writer, input.reopen()];
+  let sequence = 0;
+  const recordFor = (
+    name: string,
+    overrides: Partial<AppStoreRevocationRecord> = {},
+  ): AppStoreRevocationRecord => {
+    const transactionId = `conformance-${runId}-${name}`;
+    return {
+      verificationId: createAppStoreVerificationId({
+        environment: 'Production',
+        bundleId: 'com.example.game',
+        transactionId,
+      }),
+      environment: 'Production',
+      bundleId: 'com.example.game',
+      transactionId,
+      originalTransactionId: transactionId,
+      productId: 'com.example.game.coins100',
+      reason: 'refund',
+      revokedAt: '2026-10-20T00:00:00.000Z',
+      notificationType: 'REFUND',
+      notificationUUID: `conformance-${runId}-${String(++sequence)}`,
+      ...overrides,
+    };
+  };
+  const record = async (value: AppStoreRevocationRecord) =>
+    (await writer.recordRevocation({ record: value, signal })).alreadyRecorded;
+  const expectKept = async (expected: AppStoreRevocationRecord | undefined, rule: string) => {
+    for (const [index, reader] of readers.entries()) {
+      const kept = await reader.findRevocation({
+        verificationId: expected?.verificationId ?? recordFor('absent').verificationId,
+        environment: 'Production',
+        bundleId: 'com.example.game',
+        transactionId: expected?.transactionId ?? `conformance-${runId}-absent`,
+        originalTransactionId: expected?.originalTransactionId ?? `conformance-${runId}-absent`,
+        signal,
+      });
+      assertRevocationConformance(
+        sameRevocationRecord(kept, expected),
+        `${rule}${index === 0 ? '' : ' (read through reopen)'}: expected ${describeRecord(expected)}, `
+          + `read ${describeRecord(kept)}`,
+      );
+    }
+  };
+  const [
+    absentRule,
+    firstRule,
+    redeliveryRule,
+    olderRule,
+    laterRule,
+    unparseableRule,
+    independentRule,
+  ] = appStoreRevocationRegistryConformanceChecks;
+
+  await expectKept(undefined, absentRule);
+
+  const first = recordFor('first', {
+    originalTransactionId: `conformance-${runId}-first-original`,
+    productId: 'com.example.game.remove_ads',
+    reason: 'voided',
+    revokedAt: '2026-10-20T01:02:03.456Z',
+    notificationType: 'REVOKE',
+  });
+  assertRevocationConformance(!(await record(first)), `${firstRule}: alreadyRecorded was true`);
+  await expectKept(first, firstRule);
+
+  const redelivered = { ...first, notificationUUID: `${first.notificationUUID}-redelivered` };
+  assertRevocationConformance(
+    await record(first),
+    `${redeliveryRule}: the same record answered false`,
+  );
+  assertRevocationConformance(
+    await record(redelivered),
+    `${redeliveryRule}: an equal revokedAt answered false`,
+  );
+  await expectKept(first, redeliveryRule);
+
+  const later = recordFor('order', { revokedAt: '2026-10-20T02:00:00.000Z' });
+  await record(later);
+  const older = { ...later, revokedAt: '2026-10-20T01:00:00.000Z', notificationUUID: 'older' };
+  assertRevocationConformance(await record(older), `${olderRule}: answered false`);
+  await expectKept(later, olderRule);
+
+  // Refunded, reversed (nothing recorded), and revoked again.
+  const again = {
+    ...later,
+    reason: 'voided' as const,
+    revokedAt: '2026-10-21T00:00:00.000Z',
+    notificationType: 'REVOKE',
+    notificationUUID: 'revoked-again',
+  };
+  assertRevocationConformance(!(await record(again)), `${laterRule}: answered true`);
+  await expectKept(again, laterRule);
+  // Compared as instants, not as text.
+  const offsetLater = {
+    ...again,
+    revokedAt: '2026-10-21T09:30:00+09:00',
+    notificationUUID: 'offset',
+  };
+  assertRevocationConformance(
+    !(await record(offsetLater)),
+    `${laterRule}: a later offset time answered true`,
+  );
+  await expectKept(offsetLater, laterRule);
+  const lexicallyLater = {
+    ...again,
+    revokedAt: '2026-10-21T10:00:00+11:00',
+    notificationUUID: 'lexically-later',
+  };
+  assertRevocationConformance(
+    await record(lexicallyLater),
+    `${laterRule}: an earlier instant that sorts later as text answered false`,
+  );
+  await expectKept(offsetLater, laterRule);
+
+  const parseable = recordFor('unparseable', { revokedAt: '2026-10-20T00:00:00.000Z' });
+  await record(parseable);
+  const unparseable = { ...parseable, revokedAt: 'unparseable', notificationUUID: 'unparseable' };
+  assertRevocationConformance(!(await record(unparseable)), `${unparseableRule}: answered true`);
+  await expectKept(unparseable, unparseableRule);
+  for (const revokedAt of ['2099-01-01T00:00:00.000Z', 'also-unparseable']) {
+    assertRevocationConformance(
+      await record({ ...parseable, revokedAt, notificationUUID: revokedAt }),
+      `${unparseableRule}: ${revokedAt} replaced an unparseable record`,
+    );
+  }
+  await expectKept(unparseable, unparseableRule);
+
+  const sandbox = recordFor('first', {
+    environment: 'Sandbox',
+    verificationId: createAppStoreVerificationId({
+      environment: 'Sandbox',
+      bundleId: 'com.example.game',
+      transactionId: first.transactionId,
+    }),
+    revokedAt: '2026-10-19T00:00:00.000Z',
+  });
+  assertRevocationConformance(
+    !(await record(sandbox)),
+    `${independentRule}: another identity answered alreadyRecorded`,
+  );
+  await expectKept(sandbox, independentRule);
+  await expectKept(first, independentRule);
+
+  return {
+    checks: input.reopen === undefined
+      ? [...appStoreRevocationRegistryConformanceChecks]
+      : [...appStoreRevocationRegistryConformanceChecks, appStoreRevocationRegistryDurabilityCheck],
+    passed: true,
+  };
+}
+
+const revocationRecordKeys = [
+  'verificationId',
+  'environment',
+  'bundleId',
+  'transactionId',
+  'originalTransactionId',
+  'productId',
+  'reason',
+  'revokedAt',
+  'notificationType',
+  'notificationUUID',
+] as const satisfies readonly (keyof AppStoreRevocationRecord)[];
+
+function sameRevocationRecord(
+  actual: AppStoreRevocationRecord | undefined,
+  expected: AppStoreRevocationRecord | undefined,
+): boolean {
+  if (actual === undefined || expected === undefined) {
+    return actual === expected;
+  }
+  return revocationRecordKeys.every((key) => actual[key] === expected[key]);
+}
+
+function describeRecord(record: AppStoreRevocationRecord | undefined): string {
+  return record === undefined
+    ? 'none'
+    : `${record.revokedAt} (${record.notificationType} ${record.notificationUUID})`;
+}
+
+function assertRevocationConformance(condition: boolean, message: string): asserts condition {
+  if (!condition) {
+    throw new Error(`App Store revocation registry conformance failed: ${message}.`);
+  }
 }

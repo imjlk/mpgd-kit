@@ -1,4 +1,5 @@
 import type {
+  AppStoreRevocationLookupRequest,
   ClaimAdRewardRequest,
   GetVerifiedLeaderboardSnapshotRequest,
   PurchaseLedgerStatusRequest,
@@ -8,6 +9,7 @@ import type {
 } from '@mpgd/game-services';
 import { WorkerEntrypoint } from 'cloudflare:workers';
 
+import { findWorkerAppStoreRevocation } from './appStoreRevocations.js';
 import {
   createWorkerAccountDeletionService,
   createWorkerFetchHandler,
@@ -115,6 +117,22 @@ export class GameServicesAccountDeletion extends WorkerEntrypoint<GameServicesWo
       throw new Error('ACCOUNT_DELETION_NOT_CONFIGURED: bind GAME_SERVICES_ACCOUNT_DELETION.');
     }
     return service.deletePlayerAccount({ playerId: input.playerId });
+  }
+}
+
+/**
+ * The App Store revocation registry for the iOS verifier Worker's
+ * `offline-only` purchase verifier
+ * (`createAppStoreRevocationLookupOverBinding` from
+ * `@mpgd/game-services/app-store-verifier`): the refunds and revocations the
+ * App Store Server Notifications route recorded. Read-only, in a named
+ * entrypoint of its own, so the verifier Worker binds this and nothing else
+ * of this Worker. Rejects unless `GAME_SERVICES_APP_STORE_REVOCATION_REGISTRY`
+ * is `"true"` next to the notifications route.
+ */
+export class GameServicesAppStoreRevocations extends WorkerEntrypoint<GameServicesWorkerEnv> {
+  async findAppStoreRevocation(input: AppStoreRevocationLookupRequest) {
+    return findWorkerAppStoreRevocation(this.env, input);
   }
 }
 

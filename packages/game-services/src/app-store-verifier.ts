@@ -269,7 +269,11 @@ export interface AppStoreRevocationRegistry
  * A process-local `AppStoreRevocationRegistry` for tests and single-process
  * hosts. It forgets everything on restart and is not shared between
  * instances (a Worker isolate is one), so a deployment that verifies
- * purchases offline needs a durable registry of its own.
+ * purchases offline needs a durable registry of its own: the reference
+ * game-services Worker keeps one in D1, and
+ * `runAppStoreRevocationRegistryConformance` (in
+ * `@mpgd/game-services/app-store-verifier-conformance`) checks another
+ * implementation against the same rules.
  */
 export function createInMemoryAppStoreRevocationRegistry(): AppStoreRevocationRegistry {
   const records = new Map<string, AppStoreRevocationRecord>();
@@ -304,6 +308,142 @@ function isLaterRevocation(
     return false;
   }
   return !Number.isFinite(recordMs) || recordMs > keptMs;
+}
+
+/** What `findRevocation` asks, without the `AbortSignal` (it does not cross a Worker service binding). */
+export type AppStoreRevocationLookupRequest = Omit<
+  Parameters<AppStoreRevocationLookup['findRevocation']>[0],
+  'signal'
+>;
+
+/**
+ * A revocation lookup's answer as data, for a lookup served by another
+ * process: errors lose their class across a Worker service binding, so an
+ * outage is `{ status: 'unavailable' }` rather than a thrown
+ * `AppStoreDependencyUnavailableError`.
+ */
+export type AppStoreRevocationLookupAnswer =
+  | { readonly status: 'found'; readonly record: AppStoreRevocationRecord }
+  | { readonly status: 'absent' }
+  | { readonly status: 'unavailable' };
+
+/**
+ * The registry of another Worker, reached through a service binding: the
+ * reference game-services Worker serves it from D1 on its
+ * `GameServicesAppStoreRevocations` entrypoint, next to the App Store Server
+ * Notifications route that fills it.
+ */
+export interface AppStoreRevocationLookupBinding {
+  findAppStoreRevocation(
+    input: AppStoreRevocationLookupRequest,
+  ): Promise<AppStoreRevocationLookupAnswer>;
+}
+
+/**
+ * Answers one lookup as data (`AppStoreRevocationLookupAnswer`): the serving
+ * side of `createAppStoreRevocationLookupOverBinding`. An
+ * `AppStoreDependencyUnavailableError` becomes `unavailable`; any other
+ * error propagates.
+ */
+export async function answerAppStoreRevocationLookup(
+  lookup: AppStoreRevocationLookup,
+  input: AppStoreRevocationLookupRequest,
+  signal: AbortSignal = new AbortController().signal,
+): Promise<AppStoreRevocationLookupAnswer> {
+  assertRecord(input, 'input');
+  assertNonEmptyString(input.verificationId, 'input.verificationId');
+  try {
+    const record = await lookup.findRevocation({
+      verificationId: input.verificationId,
+      environment: input.environment,
+      bundleId: input.bundleId,
+      transactionId: input.transactionId,
+      originalTransactionId: input.originalTransactionId,
+      signal,
+    });
+    return record === undefined ? { status: 'absent' } : { status: 'found', record };
+  } catch (error) {
+    if (error instanceof AppStoreDependencyUnavailableError) {
+      return { status: 'unavailable' };
+    }
+    throw error;
+  }
+}
+
+/**
+ * An `AppStoreRevocationLookup` over another Worker's registry
+ * (`AppStoreRevocationLookupBinding`), for an `offline-only` purchase
+ * verifier that runs apart from the notification route recording the
+ * revocations. It fails closed: an `unavailable` answer, a binding that
+ * throws, an answer of another shape or for another grant identity, and an
+ * abort of the verification are all `AppStoreDependencyUnavailableError`, so
+ * the purchase stays `pending` (`APP_STORE_REVOCATION_LOOKUP_UNAVAILABLE`)
+ * instead of granting without the check.
+ */
+export function createAppStoreRevocationLookupOverBinding(
+  binding: AppStoreRevocationLookupBinding,
+): AppStoreRevocationLookup {
+  assertRecord(binding, 'binding');
+  if (typeof binding.findAppStoreRevocation !== 'function') {
+    throw new Error('binding must implement findAppStoreRevocation.');
+  }
+  return {
+    async findRevocation({ signal, ...request }) {
+      const answer = await raceAbort(
+        Promise.resolve().then(() => binding.findAppStoreRevocation({
+          verificationId: request.verificationId,
+          environment: request.environment,
+          bundleId: request.bundleId,
+          transactionId: request.transactionId,
+          originalTransactionId: request.originalTransactionId,
+        })),
+        signal,
+      ).catch((error: unknown) => {
+        throw new AppStoreDependencyUnavailableError(
+          'The App Store revocation registry binding did not answer.',
+          error,
+        );
+      });
+      if (typeof answer === 'object' && answer !== null && !Array.isArray(answer)) {
+        if (answer.status === 'absent') {
+          return undefined;
+        }
+        if (
+          answer.status === 'found'
+          && typeof answer.record === 'object'
+          && answer.record !== null
+          && answer.record.verificationId === request.verificationId
+          && typeof answer.record.revokedAt === 'string'
+        ) {
+          return answer.record;
+        }
+      }
+      throw new AppStoreDependencyUnavailableError(
+        'The App Store revocation registry is unavailable.',
+      );
+    },
+  };
+}
+
+/** `promise`, or a rejection once `signal` aborts (the binding itself cannot be cancelled). */
+function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) {
+    return Promise.reject(signal.reason);
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
 }
 
 /**
