@@ -58,14 +58,20 @@ const jwksTimeoutMs = 5_000;
 const jwksDefaultCacheMs = 60 * 60 * 1000;
 const jwksMinCacheMs = 60 * 1000;
 const jwksMaxCacheMs = 24 * 60 * 60 * 1000;
-/** An unknown key id refreshes the keys at most this often, so a forged `kid` cannot drive fetches. */
+/**
+ * The keys are fetched at most this often, whatever the outcome: a forged
+ * `kid` or an endpoint outage cannot drive one fetch per request.
+ */
 const jwksMinRefreshMs = 60 * 1000;
 
 /**
  * Reads Google's ID token keys from `googleIdTokenJwksUrl`, cached for the
  * response's `Cache-Control: max-age` (one minute to a day; an hour without
- * one) and refreshed early, at most once a minute, for a key id it does not
- * hold: Google rotates its keys. One instance per isolate shares the cache.
+ * one) and refreshed early for a key id it does not hold: Google rotates its
+ * keys. Fetches, failed ones included, are at least a minute apart; in
+ * between, an expired cache still answers and an outage is
+ * `GoogleIdTokenKeysUnavailableError`. One instance per isolate shares the
+ * cache.
  */
 export function createGoogleIdTokenSigningKeys(
   options: GoogleIdTokenSigningKeysOptions = {},
@@ -75,17 +81,22 @@ export function createGoogleIdTokenSigningKeys(
   const now = options.now ?? Date.now;
   let cached: { readonly keys: ReadonlyMap<string, JsonWebKey>; readonly expiresAt: number } | undefined;
   let fetchedAt = Number.NEGATIVE_INFINITY;
+  let lastFetchFailed = false;
   let pending: Promise<ReadonlyMap<string, JsonWebKey>> | undefined;
 
-  const refresh = (signal: AbortSignal): Promise<ReadonlyMap<string, JsonWebKey>> => {
-    if (pending !== undefined) {
-      return pending;
-    }
+  const startFetch = (signal: AbortSignal): Promise<ReadonlyMap<string, JsonWebKey>> => {
     fetchedAt = now();
-    const load = loadGoogleIdTokenKeys(requestFetch, jwksUrl, signal).then(({ keys, maxAgeMs }) => {
-      cached = { keys, expiresAt: now() + maxAgeMs };
-      return keys;
-    });
+    const load = loadGoogleIdTokenKeys(requestFetch, jwksUrl, signal).then(
+      ({ keys, maxAgeMs }) => {
+        cached = { keys, expiresAt: now() + maxAgeMs };
+        lastFetchFailed = false;
+        return keys;
+      },
+      (error: unknown) => {
+        lastFetchFailed = true;
+        throw error;
+      },
+    );
     pending = load;
     const clear = () => {
       if (pending === load) {
@@ -98,18 +109,31 @@ export function createGoogleIdTokenSigningKeys(
 
   return {
     async getSigningKey({ kid, signal }) {
-      const fresh = cached !== undefined && cached.expiresAt > now();
-      if (fresh && cached !== undefined) {
-        const key = cached.keys.get(kid);
-        if (key !== undefined || now() - fetchedAt < jwksMinRefreshMs) {
-          return key;
+      const known = cached?.keys.get(kid);
+      if (known !== undefined && cached !== undefined && cached.expiresAt > now()) {
+        return known;
+      }
+      let load = pending;
+      if (load === undefined) {
+        if (now() - fetchedAt < jwksMinRefreshMs) {
+          // Throttled: answer from what is held. A key Google published
+          // before still verifies (it rotates rarely); otherwise the last
+          // fetch either lacked the key or failed.
+          if (known !== undefined) {
+            return known;
+          }
+          if (lastFetchFailed) {
+            throw new GoogleIdTokenKeysUnavailableError(
+              'Google ID token keys are unavailable; the next fetch waits a minute.',
+            );
+          }
+          return undefined;
         }
+        load = startFetch(signal);
       }
       try {
-        return (await refresh(signal)).get(kid);
+        return (await load).get(kid);
       } catch (error) {
-        // Google rotates its keys rarely: a key it published before still
-        // verifies while the endpoint is unreachable.
         const stale = cached?.keys.get(kid);
         if (stale !== undefined) {
           return stale;

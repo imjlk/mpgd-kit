@@ -211,10 +211,42 @@ const keys = fakeKeys({ 'google-key-1': googleKey.publicJwk });
     googleKey.publicJwk.n,
     'a key fetched before still verifies during an outage',
   );
-  await assert.rejects(
-    source.getSigningKey({ kid: 'never-seen', signal }),
-    GoogleIdTokenKeysUnavailableError,
+  const fetchesAtOutage = requests.length;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    await assert.rejects(
+      source.getSigningKey({ kid: `forged-${attempt}`, signal }),
+      GoogleIdTokenKeysUnavailableError,
+      'an unknown kid during an outage is unavailable',
+    );
+    assert.equal(
+      (await source.getSigningKey({ kid: 'google-key-1', signal }))?.n,
+      googleKey.publicJwk.n,
+    );
+  }
+  assert.equal(requests.length, fetchesAtOutage, 'a failed fetch is not retried within a minute');
+  clock += 60_000;
+  reply = () => Response.json({ keys: [{ ...googleKey.publicJwk, kid: 'rotated-in' }] });
+  assert.equal(
+    (await source.getSigningKey({ kid: 'rotated-in', signal }))?.n,
+    googleKey.publicJwk.n,
+    'a minute later the keys are fetched again',
   );
+  assert.equal(requests.length, fetchesAtOutage + 1);
+  const cold = createGoogleIdTokenSigningKeys({
+    now: () => clock,
+    fetch: async () => {
+      requests.push('cold');
+      throw new TypeError('network down');
+    },
+  });
+  const coldBefore = requests.length;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await assert.rejects(
+      cold.getSigningKey({ kid: 'google-key-1', signal }),
+      GoogleIdTokenKeysUnavailableError,
+    );
+  }
+  assert.equal(requests.length, coldBefore + 1, 'nor without any keys held');
   const empty = createGoogleIdTokenSigningKeys({
     fetch: async () => Response.json({ keys: [] }),
   });
