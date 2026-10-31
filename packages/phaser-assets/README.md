@@ -565,6 +565,12 @@ const groups = definePhaserResidencyGroups([
       { kind: 'json', key: 'forest-waves', url: 'forest-waves.json' },
     ],
   },
+  {
+    id: 'desert',
+    dependsOn: ['ui'],
+    estimateBytes: 2048 * 2048 * 4,
+    assets: [{ kind: 'atlas', key: 'desert', textureUrl: 'desert.webp', atlasUrl: 'desert.json' }],
+  },
 ]);
 
 const residency = createPhaserResidency(game, groups, {
@@ -574,7 +580,7 @@ const residency = createPhaserResidency(game, groups, {
 
 // In a scene: claim what it draws. The claim ends when the scene shuts down.
 await residency.claimForScene(this, ['forest']);
-residency.prefetch(['desert']); // Only into free budget; never evicts.
+residency.prefetch(['desert']); // Only into free budget (with its dependencies); never evicts.
 
 // Runtime-generated textures can share a group's lifetime.
 const detach = residency.attach('forest', { textureKey: 'forest-tinted', dispose: () => {} });
@@ -587,18 +593,25 @@ Rules:
   bytes exceed the budget. `release(owner)` keeps groups cached.
 - **Keep-warm and eviction.** Unowned resident groups stay until room is needed,
   then go least-recently-used first.
-  A prefetch that measures larger than its estimate and no longer fits is dropped
-  rather than displacing warm groups.
+  `prefetch` admits each requested group together with its missing dependencies, or
+  not at all. A prefetch that measures larger than its estimate and no longer fits is
+  dropped rather than displacing warm groups.
 - **Make room before load.** A claim evicts against the groups' `estimateBytes`
   before queueing files, so swapping screens does not hold old and new sets at once.
-  Measured bytes replace the estimate after load.
+  A group without `estimateBytes` counts as 0 bytes until it loads, so no room is made
+  for it and its load can overlap old unowned groups; set `estimateBytes` on groups
+  that replace large sets. Measured bytes replace the estimate after load.
 - **Measurement.** Measured bytes are texture sources at width × height × 4, decoded
   audio PCM when the cache exposes an `AudioBuffer`, and attachment bytes. JSON and
   binary count as 0. Like `/packs`, this is an estimate, not a GPU or process bound.
+  Attachment `bytes` must be non-negative safe integers; `attach()` and `refresh()`
+  throw a `RangeError` otherwise.
 - **Host scene.** Loading runs on a hidden host scene (`hostSceneKey`, default
-  `__mpgdResidency`), so claims survive scene changes. Do not stop that scene. Assets
-  already in the texture or JSON caches are adopted instead of loaded again. Asset
-  keys are fixed manifest keys and must be unique across groups.
+  `__mpgdResidency`), so claims survive scene changes. Do not stop that scene. A second
+  instance on the same game needs its own `hostSceneKey`. Assets already in the texture
+  or JSON caches are adopted instead of loaded again. Asset keys are fixed manifest
+  keys and must be unique across groups. If something else removes a resident group's
+  asset, `isResident` reports false and the next claim reloads the group.
 - **Failure.** If one file fails, its group's claim rejects, the files that did load
   are removed, and the next claim retries. Aborting a claim's `signal` drops that
   claim (if it is still the owner's latest); the load itself continues and stays cached.

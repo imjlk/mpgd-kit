@@ -158,6 +158,21 @@ describe('residency policy', () => {
     const ok = createResidencyPolicy({ budgetBytes: 10 });
     ok.claim('screen', ['a']);
     expect(() => ok.loaded('a', -5)).toThrow(RangeError);
+    expect(ok.state('a')).toBe('loading');
+  });
+
+  it('leaves claims and prefetches unchanged when an estimate throws', () => {
+    const policy = createResidencyPolicy({
+      budgetBytes: 64 * MiB,
+      estimateBytes: (id) => (id === 'bad' ? -1 : MiB),
+    });
+    loadAll(policy, 'screen', ['kept'], MiB);
+    expect(() => policy.claim('screen', ['fresh', 'bad'])).toThrow(RangeError);
+    expect(policy.state('fresh')).toBeUndefined();
+    expect(policy.owners('kept')).toEqual(['screen']);
+    expect(() => policy.prefetch(['fresh', 'bad'])).toThrow(RangeError);
+    expect(policy.state('fresh')).toBeUndefined();
+    expect(policy.claim('screen', ['fresh']).load).toEqual(['fresh']);
   });
 
   it('reports owned and total bytes and a recency order in snapshots', () => {

@@ -264,6 +264,70 @@ describe('phaser residency', () => {
     expect(() => f.residency.attach('a', {})).toThrow(/not resident/);
   });
 
+  it('rejects invalid attachment byte counts on attach and refresh without changing sizes', async () => {
+    const f = setup([set('a')], { budgetBytes: 64 * MiB });
+    const a = f.residency.claim('screen', ['a']);
+    await f.flush();
+    await a;
+    expect(() => f.residency.attach('a', { bytes: -1 })).toThrow(RangeError);
+    expect(() => f.residency.attach('a', { bytes: 1.5 })).toThrow(RangeError);
+    expect(f.residency.snapshot().groups[0]).toMatchObject({ attachments: 0, bytes: TEXTURE_2048 });
+    let bytes = MiB;
+    f.residency.attach('a', { bytes: () => bytes });
+    bytes = Number.NaN;
+    expect(() => f.residency.refresh()).toThrow(RangeError);
+    expect(f.residency.snapshot().groups[0]?.bytes).toBe(TEXTURE_2048 + MiB);
+  });
+
+  it('prefetches a group only together with dependencies that fit', async () => {
+    const big: PhaserResidencyGroup = { ...set('big'), estimateBytes: 4 * TEXTURE_2048 };
+    const f = setup([big, set('child', { dependsOn: ['big'] }), set('solo')], { budgetBytes: 32 * MiB });
+    expect(f.residency.prefetch(['child', 'solo'])).toEqual(['solo']);
+    expect(f.residency.snapshot().groups.map((group) => group.id)).toEqual(['solo']);
+    await f.flush();
+    expect(f.residency.isResident(['child'])).toBe(false);
+    expect(f.residency.isResident(['solo'])).toBe(true);
+  });
+
+  it('reloads a group whose assets were removed by someone else', async () => {
+    const f = setup([set('a')]);
+    const a = f.residency.claim('screen', ['a']);
+    await f.flush();
+    await a;
+    f.textures.delete('a-atlas');
+    expect(f.residency.isResident(['a'])).toBe(false);
+    const again = f.residency.claim('screen', ['a']);
+    await f.flush();
+    await again;
+    expect(f.textures.has('a-atlas')).toBe(true);
+    expect(f.residency.isResident(['a'])).toBe(true);
+  });
+
+  it('a claim made from onEvict for the evicted group reloads it instead of adopting removed assets', async () => {
+    const ref: { residency?: ReturnType<typeof createPhaserResidency> } = {};
+    let reclaim: Promise<void> | undefined;
+    const f = setup([set('a'), set('b')], {
+      budgetBytes: 16 * MiB,
+      onEvict: (id) => {
+        if (id === 'a' && !reclaim) {
+          reclaim = ref.residency?.claim('other', ['a']);
+        }
+      },
+    });
+    ref.residency = f.residency;
+    const a = f.residency.claim('screen', ['a']);
+    await f.flush();
+    await a;
+    f.residency.release('screen');
+    const b = f.residency.claim('screen', ['b']);
+    expect(f.textures.has('a-atlas')).toBe(false);
+    expect(f.residency.isResident(['a'])).toBe(false);
+    await f.flush();
+    await Promise.all([b, reclaim]);
+    expect(f.textures.has('a-atlas')).toBe(true);
+    expect(f.residency.isResident(['a', 'b'])).toBe(true);
+  });
+
   it('prefetches into free budget only and never evicts', async () => {
     const f = setup([set('a'), set('b'), set('c')], { budgetBytes: 32 * MiB });
     const a = f.residency.claim('screen', ['a']);
@@ -404,6 +468,15 @@ describe('phaser residency', () => {
     expect(f.sceneManager.remove).toHaveBeenCalledWith('__mpgdResidency');
     expect(() => f.residency.claim('screen', ['a'])).toThrow(/disposed/);
     f.residency.dispose();
+  });
+
+  it('removes a host scene that is created after dispose', async () => {
+    const f = setup([set('a')], {}, { deferHost: true });
+    f.residency.dispose();
+    f.createHost();
+    expect(f.sceneManager.remove).toHaveBeenCalledTimes(2);
+    expect(f.residency.snapshot().hostReady).toBe(false);
+    expect(f.load.listenerCount('filecomplete')).toBe(0);
   });
 
   it('rejects unknown groups and empty owners', async () => {

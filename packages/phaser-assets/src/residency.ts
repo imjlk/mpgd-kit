@@ -41,7 +41,10 @@ export interface PhaserResidencyAttachment {
 export interface PhaserResidencyOptions {
   /** Retention cap for unowned groups, in bytes (decoded RGBA estimate + audio PCM + attachments). */
   readonly budgetBytes: number;
-  /** Key of the hidden, game-level scene whose loader serves every claim. Default: `__mpgdResidency`. */
+  /**
+   * Key of the hidden, game-level scene whose loader serves every claim. Default: `__mpgdResidency`. Each instance
+   * on the same game needs its own unused key; Phaser rejects a duplicate scene key.
+   */
   readonly hostSceneKey?: string;
   /**
    * Called before a group's assets are removed, so the game can drop animations or other engine objects that
@@ -73,13 +76,22 @@ export interface PhaserResidency {
   claimForScene(scene: Phaser.Scene, groupIds: readonly string[], options?: PhaserResidencyClaimOptions): Promise<void>;
   /** Drop an owner's claim. Groups stay cached until room is needed. */
   release(owner: string): void;
-  /** Warm groups into free budget only (never evicts). Returns the group ids that started loading. */
+  /**
+   * Warm groups into free budget only (never evicts). Each requested group is admitted together with its missing
+   * dependencies or not at all. Returns the group ids that started loading.
+   */
   prefetch(groupIds: readonly string[]): readonly string[];
-  /** True when every group (and dependency) is resident, so a scene can build synchronously. */
+  /** True when every group (and dependency) is resident and its assets are present, so a scene can build synchronously. */
   isResident(groupIds: readonly string[]): boolean;
-  /** Tie a runtime resource to a resident group. Returns a detach function that does not dispose it. */
+  /**
+   * Tie a runtime resource to a resident group. Returns a detach function that does not dispose it. Throws a
+   * RangeError when `bytes` is not a non-negative safe integer.
+   */
   attach(groupId: string, resource: PhaserResidencyAttachment): () => void;
-  /** Re-measure resident groups (attachments may have grown) and evict to fit the budget. */
+  /**
+   * Re-measure resident groups (attachments may have grown) and evict to fit the budget. Throws a RangeError, before
+   * changing anything, if an attachment reports an invalid byte count.
+   */
   refresh(): void;
   setBudget(bytes: number): void;
   snapshot(): PhaserResidencySnapshot;
@@ -171,6 +183,7 @@ export function createPhaserResidency(
     estimateBytes: (id) => groups.get(id)?.estimateBytes ?? 0,
   });
   const pending = new Map<string, Pending>();
+  const evicting = new Set<string>();
   const attachments = new Map<string, Attached[]>();
   const generation = new Map<string, number>();
   const hookedScenes = new Set<Phaser.Scene>();
@@ -239,10 +252,17 @@ export function createPhaserResidency(
     return 0;
   };
 
-  const attachmentBytes = (resource: PhaserResidencyAttachment): number => {
+  /** Reads an attachment's bytes; throws RangeError in strict mode, otherwise counts invalid values as 0. */
+  const attachmentBytes = (resource: PhaserResidencyAttachment, strict = false): number => {
     const value = typeof resource.bytes === 'function' ? resource.bytes() : resource.bytes;
     if (value !== undefined) {
-      return Number.isSafeInteger(value) && value > 0 ? value : 0;
+      if (Number.isSafeInteger(value) && value >= 0) {
+        return value;
+      }
+      if (strict) {
+        throw new RangeError(`Invalid residency attachment byte count: ${String(value)}`);
+      }
+      return 0;
     }
     return resource.textureKey ? textureBytes(resource.textureKey) : 0;
   };
@@ -312,6 +332,8 @@ export function createPhaserResidency(
       if (!group) {
         continue;
       }
+      // While evicting, the assets still exist; a claim made from onEvict/dispose must reload, not adopt them.
+      evicting.add(id);
       if (options.onEvict) {
         const onEvict = options.onEvict;
         guard(id, () =>
@@ -337,6 +359,18 @@ export function createPhaserResidency(
       }
       attachments.delete(id);
       removeAssets(id);
+      evicting.delete(id);
+    }
+  };
+
+  /** Forget resident groups whose engine assets were removed by someone else, so the next claim reloads them. */
+  const healMissing = (ids: readonly string[]): void => {
+    for (const id of ids) {
+      const group = groups.get(id);
+      if (group && policy.state(id) === 'resident' && !evicting.has(id) && !group.assets.every(present)) {
+        policy.forget(id);
+        unload([id]);
+      }
     }
   };
 
@@ -398,7 +432,7 @@ export function createPhaserResidency(
     if (!group) {
       return;
     }
-    if (group.assets.every(present)) {
+    if (!evicting.has(id) && group.assets.every(present)) {
       unload(policy.loaded(id, measure(id)));
       return;
     }
@@ -456,6 +490,11 @@ export function createPhaserResidency(
       active: true,
       visible: false,
       create(this: Phaser.Scene) {
+        if (disposed) {
+          // dispose() ran before the scene manager processed the add: remove the late host again.
+          game.scene.remove(hostKey);
+          return;
+        }
         attachHost(this);
       },
     },
@@ -508,6 +547,7 @@ export function createPhaserResidency(
       } catch (error) {
         return Promise.reject(error);
       }
+      healMissing(ids);
       const plan = policy.claim(owner, ids);
       unload(plan.evict);
       const turn = (generation.get(owner) ?? 0) + 1;
@@ -548,20 +588,40 @@ export function createPhaserResidency(
     },
     prefetch(groupIds) {
       ensureLive();
-      const load = policy.prefetch(expand(groupIds));
-      for (const id of load) {
-        startLoad(id);
+      const started: string[] = [];
+      for (const requested of groupIds) {
+        const closure = expand([requested]);
+        healMissing(closure);
+        const missing = closure.filter((id) => policy.state(id) === undefined);
+        if (!missing.length) {
+          continue;
+        }
+        // All or nothing per requested group: never warm a group whose dependencies do not fit.
+        const admitted = policy.prefetch(missing);
+        if (admitted.length !== missing.length) {
+          for (const id of admitted) {
+            policy.forget(id);
+          }
+          continue;
+        }
+        for (const id of admitted) {
+          startLoad(id);
+        }
+        started.push(...admitted);
       }
-      return load;
+      return started;
     },
     isResident(groupIds) {
-      return expand(groupIds).every((id) => policy.state(id) === 'resident');
+      return expand(groupIds).every(
+        (id) => policy.state(id) === 'resident' && (groups.get(id)?.assets.every(present) ?? false),
+      );
     },
     attach(groupId, resource) {
       ensureLive();
       if (policy.state(groupId) !== 'resident') {
         throw new Error(`Residency group ${groupId} is not resident`);
       }
+      attachmentBytes(resource, true);
       const entry: Attached = { resource };
       const list = attachments.get(groupId) ?? [];
       list.push(entry);
@@ -577,6 +637,13 @@ export function createPhaserResidency(
       };
     },
     refresh() {
+      const resident = policy.snapshot().groups.filter((group) => group.state === 'resident');
+      // Validate every attachment before resizing anything, so an invalid count leaves sizes unchanged.
+      for (const group of resident) {
+        for (const { resource } of attachments.get(group.id) ?? []) {
+          attachmentBytes(resource, true);
+        }
+      }
       for (const group of policy.snapshot().groups) {
         if (group.state === 'resident') {
           unload(policy.resize(group.id, measure(group.id)));

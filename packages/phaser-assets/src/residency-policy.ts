@@ -120,6 +120,13 @@ export function createResidencyPolicy(options: ResidencyPolicyOptions): Residenc
   return {
     claim(owner, groupIds) {
       const wanted = new Set(groupIds);
+      // Validate every estimate before mutating, so a throwing estimate leaves the policy unchanged.
+      const incoming = new Map<string, number>();
+      for (const id of wanted) {
+        if (!entries.has(id)) {
+          incoming.set(id, estimate(id));
+        }
+      }
       for (const [id, entry] of entries) {
         if (!wanted.has(id)) {
           entry.owners.delete(owner);
@@ -129,7 +136,7 @@ export function createResidencyPolicy(options: ResidencyPolicyOptions): Residenc
       for (const id of wanted) {
         let entry = entries.get(id);
         if (!entry) {
-          entry = { bytes: estimate(id), owners: new Set(), used: 0, state: 'loading', speculative: false };
+          entry = { bytes: incoming.get(id) ?? 0, owners: new Set(), used: 0, state: 'loading', speculative: false };
           entries.set(id, entry);
           load.push(id);
         }
@@ -147,11 +154,10 @@ export function createResidencyPolicy(options: ResidencyPolicyOptions): Residenc
     prefetch(groupIds) {
       const load: string[] = [];
       let sum = total();
-      for (const id of new Set(groupIds)) {
-        if (entries.has(id)) {
-          continue;
-        }
-        const bytes = estimate(id);
+      const candidates = [...new Set(groupIds)]
+        .filter((id) => !entries.has(id))
+        .map((id) => ({ id, bytes: estimate(id) }));
+      for (const { id, bytes } of candidates) {
         if (sum + bytes > budget) {
           continue;
         }
