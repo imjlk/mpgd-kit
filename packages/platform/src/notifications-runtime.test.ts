@@ -894,36 +894,73 @@ describe('createNotificationRuntime registry entry', () => {
     });
   });
 
-  it('reports a given entry that cannot be compared and loads one instead', async () => {
-    const { host, backend } = setup();
+  it('fails closed on a given entry that cannot be compared, as on one that disagrees', async () => {
     const entry = notificationConformanceRegistryEntry({ provider: osProfile.provider, capabilities: osProfile.capabilities });
     expect(entry).toBeDefined();
     if (entry === undefined) {
       return;
     }
+    const hostile = (): never => {
+      throw new Error('hostile read');
+    };
+    const given: unknown[] = [
+      { ...entry, permission: null },
+      { ...entry, get purposes(): unknown {
+        return hostile();
+      } },
+      // A readable entry that disagrees: the behaviour the malformed ones must match.
+      { ...entry, addressing: 'platform-user' },
+    ];
+    for (const registryEntry of given) {
+      const { host, backend } = setup();
+      backend.authenticate('p-1');
+      host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+      const errors: unknown[] = [];
+      let loads = 0;
+      const runtime = createNotificationRuntime({
+        provider: host.provider,
+        backend,
+        catalog: [energy],
+        defaultLocale: 'ko',
+        registryEntry: registryEntry as typeof entry,
+        loadRegistryEntry: async () => {
+          loads += 1;
+          return entry;
+        },
+        onError: (error) => errors.push(error),
+      });
+      // start() does not throw for it, loads nothing in its place, and sends nothing.
+      await runtime.start();
+      await settleLoad();
+      await runtime.runUntilIdle().catch(() => undefined);
+      expect(loads).toBe(0);
+      expect(backend.endpoints).toEqual([]);
+      await expect(runtime.getPermission({ topics: ['energy-full'] })).rejects.toMatchObject({
+        code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
+      });
+      await expect(runtime.register()).rejects.toMatchObject({ code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED' });
+      expect(backend.endpoints).toEqual([]);
+    }
+  });
+
+  it('reports a given entry that cannot be compared through onError at each start', async () => {
+    const { host, backend } = setup();
+    const entry = notificationConformanceRegistryEntry({ provider: osProfile.provider, capabilities: osProfile.capabilities });
     const errors: unknown[] = [];
-    let loads = 0;
     const runtime = createNotificationRuntime({
       provider: host.provider,
       backend,
       catalog: [energy],
       defaultLocale: 'ko',
-      registryEntry: { ...entry, permission: null } as unknown as typeof entry,
-      loadRegistryEntry: async () => {
-        loads += 1;
-        return { ...entry, addressing: 'platform-user' };
-      },
+      registryEntry: { ...entry, permission: null } as unknown as NonNullable<typeof entry>,
       onError: (error) => errors.push(error),
     });
-    // start() does not throw for it.
     await runtime.start();
-    await settleLoad();
-    expect(errors).toHaveLength(1);
+    runtime.stop();
+    await runtime.start();
+    expect(errors).toHaveLength(2);
+    expect(errors[0]).toMatchObject({ code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED' });
     expect(String((errors[0] as Error).message)).toMatch(/permission/u);
-    expect(loads).toBe(1);
-    await expect(runtime.getPermission({ topics: ['energy-full'] })).rejects.toMatchObject({
-      code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
-    });
   });
 
   it('loads again after a loader that throws synchronously', async () => {
@@ -1421,6 +1458,41 @@ describe('createNotificationRuntime review fixes', () => {
     await runtime.getPermission({ topics: ['energy-full'] });
     await runtime.runUntilIdle();
     expect(attempts).toHaveLength(3);
+  });
+
+  it("does not back reads off for a failure that is not the backend's: a failed save retries on the next read", async () => {
+    const storage = asyncStorage();
+    const { clock, host, backend } = setup(storage.port);
+    let sent = 0;
+    const runtime = createNotificationRuntime({
+      provider: host.provider,
+      backend: clientOf(backend, {
+        registerEndpoint: async (registration) => {
+          sent += 1;
+          await backend.registerEndpoint(registration);
+        },
+      }),
+      catalog: [energy],
+      clock,
+      defaultLocale: 'ko',
+      storage: storage.port,
+      onError: () => undefined,
+    });
+    backend.authenticate('p-1');
+    host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    // The backend takes the first registration, but its acknowledgement cannot be saved, twice.
+    storage.failNextSaves(2);
+    await runtime.start();
+    await runtime.runUntilIdle().catch(() => undefined);
+    expect(sent).toBe(1);
+    // Without moving the clock, each read sends it again at once.
+    await runtime.getPermission({ topics: ['energy-full'] });
+    await runtime.runUntilIdle().catch(() => undefined);
+    expect(sent).toBe(2);
+    await runtime.getPermission({ topics: ['energy-full'] });
+    await runtime.runUntilIdle();
+    expect(sent).toBe(3);
+    expect(storage.stored).toMatchObject({ registration: { player: 'p-1' } });
   });
 
   it('backs reads off a registration that keeps failing: 30 s, doubling, at most an hour', async () => {
