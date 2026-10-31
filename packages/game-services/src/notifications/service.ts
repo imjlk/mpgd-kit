@@ -2952,7 +2952,9 @@ export function createNotificationService(input: CreateNotificationServiceInput)
           } catch {
             request = undefined;
           }
-          return request === undefined ? { item, reason: 'is no longer allowed by the gate' } : { item, request };
+          return request === undefined
+            ? { item, reason: 'is no longer allowed by the gate, or its gate inputs are too old' }
+            : { item, request };
         });
         const fresh = checked.flatMap((entry) => ('request' in entry ? [entry] : []));
         // The last call starts while every fresh claim still has a quarter lease left.
@@ -3009,6 +3011,11 @@ export function createNotificationService(input: CreateNotificationServiceInput)
               request: deliveryRequestOf(recipient, request, topic, decision, at),
               claimedUntil: claimedUntil ?? at,
               regate: (when) => {
+                // The consent, history, and host permission were read at `at`: past a short age
+                // they may be stale, so the recipient is replayed with fresh reads instead.
+                if (when - at > bulkGateFreshMs) {
+                  return undefined;
+                }
                 const again = regate?.(when);
                 return again?.status === 'allowed'
                   ? deliveryRequestOf(recipient, request, topic, again, when)
@@ -4217,6 +4224,11 @@ type BulkAnswer =
 
 /** Recipients prepared and run at once in a bulk batch (each one's ledger reads and writes). */
 const bulkConcurrency = 8;
+/**
+ * How old a bulk recipient's gate inputs (consent, history, host permission)
+ * may be when its call starts; an older one is replayed with fresh reads.
+ */
+const bulkGateFreshMs = 30_000;
 /** Recipients per batch for a provider that sends one by one. */
 const defaultBulkBatchSize = 100;
 /** The most recipients one bulk batch runs for a provider that sends one by one. */

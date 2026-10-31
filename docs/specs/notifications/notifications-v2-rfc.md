@@ -3021,10 +3021,12 @@ announcements and event pushes.
     - When the batch is sent, the gate runs once more for each recipient at
       that instant, with the inputs its check read, so quiet hours or the
       night window that began while the batch gathered still hold it. A
-      recipient the gate no longer allows, or whose claim has less than
-      half a lease left (another holder may own its row by the time the
-      call answers), is not sent with the batch: it answers `rate-limited`,
-      which proves nothing was sent, and its replay runs the gate again.
+      recipient the gate no longer allows, whose gate inputs (consent,
+      history, the host's permission) were read more than 30 seconds
+      before its call, or whose claim has less than half a lease left
+      (another holder may own its row by the time the call answers), is not
+      sent with the batch: it answers `rate-limited`, which proves nothing
+      was sent, and its replay reads the inputs again and runs the gate.
     - A refused player never reaches the provider and has its own
       answer. Copy is rendered per recipient by the gate, so the
       server-side locale resolver (open question 4) applies to bulk sends

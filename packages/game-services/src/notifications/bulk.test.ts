@@ -486,6 +486,33 @@ const statuses = (result: NotificationBulkDeliveryResult) =>
   ]);
 }
 
+// Gate inputs read more than 30 s before the batch's call are not trusted: those recipients are replayed.
+{
+  const fake = bulkProvider({ maxRecipients: 10, minRecipients: 2, perRecipientOutcomes: true });
+  let p3Reads = 0;
+  const { service } = await setup({
+    provider: fake.provider,
+    players: players(3),
+    resolve: async (player, clockNow) => {
+      if (player === 'p3' && (p3Reads += 1) === 2) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        clockNow.advance(40);
+      }
+      return `u-${player}`;
+    },
+  });
+  const result = await service.deliverBulk(bulkInput('event-20', players(3)));
+  // p1 and p2 read their consent 40 s before the call; p3 alone is fresh, under the minimum, and goes on its own.
+  assert.deepEqual(
+    statuses(result).map((row) => row[2] ?? row[1]),
+    ['provider-rate-limited', 'provider-rate-limited', 'delivered'],
+  );
+  assert.deepEqual(
+    [fake.batches.length, fake.singles.map((request) => request.idempotencyKey)],
+    [0, ['event-20:p3']],
+  );
+}
+
 // The gate runs again when the batch is sent: quiet hours that began while it gathered hold every recipient.
 {
   const fake = bulkProvider({ maxRecipients: 10, minRecipients: 2, perRecipientOutcomes: true });
@@ -493,12 +520,13 @@ const statuses = (result: NotificationBulkDeliveryResult) =>
   const { service, store, time, reports } = await setup({
     provider: fake.provider,
     players: players(3),
+    start: '2026-11-01T03:00:45Z',
     topic: { ...topic, quietHours: { start: '03:01', end: '04:00' } },
     resolve: async (player, clockNow) => {
       if (player === 'p3' && (p3Reads += 1) === 2) {
-        // p1 and p2 were allowed at 03:00:00 and wait; p3's gate ends at 03:01, inside the quiet hours.
+        // p1 and p2 were allowed at 03:00:45 and wait; p3's gate ends at 03:01:05, inside the quiet hours.
         await new Promise((resolve) => setTimeout(resolve, 50));
-        clockNow.advance(60);
+        clockNow.advance(20);
       }
       return `u-${player}`;
     },
@@ -529,8 +557,8 @@ const statuses = (result: NotificationBulkDeliveryResult) =>
   const fake = bulkProvider(
     { maxRecipients: 10, minRecipients: 2, perRecipientOutcomes: true, callKey: (request) => request.content.body ?? '' },
     (requests) => {
-      // The first group's call takes a minute, into the quiet hours.
-      groupClock.current?.advance(60);
+      // The first group's call takes 20 s, into the quiet hours.
+      groupClock.current?.advance(20);
       return requests.map(() => ({ status: 'accepted' }));
     },
   );
@@ -538,6 +566,7 @@ const statuses = (result: NotificationBulkDeliveryResult) =>
   const { service, store, time } = await setup({
     provider: fake.provider,
     players: players(4),
+    start: '2026-11-01T03:00:45Z',
     topic: { ...topic, quietHours: { start: '03:01', end: '04:00' } },
   });
   groupClock.current = time;
