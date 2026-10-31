@@ -18,7 +18,8 @@ reuse `OpenIapModule` and `OpenIapStore` and add no store logic of its own.
 game that sells consumables and non-consumables, verifies every receipt on
 its own backend, and grants only through a server ledger. Since mpgd-kit's
 OpenIAP migration both plugins call the OpenIAP Apple and Google cores
-(pinned at 4.0.7 and 4.0.8 since 2026-10-31; first 4.0.5 and 4.0.6). What has been verified is listed in the migration record:
+(pinned at 4.0.7 and 4.0.8 since 2026-10-31; first 4.0.5 and 4.0.6). What
+has been verified is listed in the migration record:
 native unit tests of the mapping, compiled and packed consumer builds, and
 the game's checkout and recovery suites. No sandbox purchase has run yet; the
 proposal should wait for the game's store acceptance.

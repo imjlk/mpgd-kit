@@ -115,7 +115,7 @@ try {
   const packageSwift = storeKit.read('Package.swift');
   assert.ok(
     packageSwift.includes(openIapApple),
-    'The packed Swift package must pin OpenIAP Apple 4.0.5',
+    'The packed Swift package must pin OpenIAP Apple 4.0.7',
   );
   assert.match(
     packageSwift,
@@ -173,7 +173,7 @@ try {
   const gradle = playBilling.read('android/build.gradle');
   assert.ok(
     gradle.includes(openIapGoogle),
-    'The packed Gradle module must pin OpenIAP Google 4.0.6',
+    'The packed Gradle module must pin OpenIAP Google 4.0.8',
   );
   assert.doesNotMatch(
     gradle,
