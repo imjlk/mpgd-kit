@@ -164,7 +164,14 @@ current status, selected by `signedTransactionEvidence`:
   (`APP_STORE_REVOCATION_LOOKUP_UNAVAILABLE`). The registry is filled by
   `handleAppStoreServerNotification({ revocations })` (below), so it must be
   a durable store both read: `createInMemoryAppStoreRevocationRegistry` is
-  for tests and single-process hosts only. The remaining risk: a refund
+  for tests and single-process hosts only. The reference Worker keeps one in
+  D1 (`GAME_SERVICES_APP_STORE_REVOCATION_REGISTRY`, migration 0011) and
+  serves it to the iOS verifier Worker, which wraps that binding with
+  `createAppStoreRevocationLookupOverBinding`
+  ([revocation registry](CLOUDFLARE_WORKER_DEPLOY.md#app-store-revocation-registry-offline-only-purchases)).
+  `runAppStoreRevocationRegistryConformance`
+  (`@mpgd/game-services/app-store-verifier-conformance`) checks any other
+  registry against the same rules as the in-memory and D1 ones. The remaining risk: a refund
   Apple has not notified yet is accepted until the window closes; its
   notification then reverses the grant.
 - `{ mode: 'ignore' }`: the evidence is not read and the transaction is
@@ -1076,8 +1083,8 @@ the purchase verifier, one per environment.
 
 - With the optional `revocations` (an `AppStoreRevocationRecorder`), every
   `REFUND` and `REVOKE` of the customer's own one-time purchase is recorded
-  there before the ledger is read, granted or not, keyed by the grant's
-  verification id (`createAppStoreVerificationId`: original transaction id
+  there before the ledger is read, granted or not, keyed by the
+  environment and the grant's verification id (`createAppStoreVerificationId`: original transaction id
   for non-consumables, transaction id for consumables). The registry keeps
   the latest revocation per key: a purchase refunded, reversed, and revoked
   again refuses every JWS signed before the last revocation, and a

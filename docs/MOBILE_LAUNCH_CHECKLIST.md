@@ -192,6 +192,19 @@ production` prints what it lacks and fails on contradictions
       filters by IP. Refunds revoke grants; a refund reversal is logged at
       warn for support to re-grant
       ([re-granting](./GAME_SERVICES_BACKEND.md#re-granting-after-a-refund-reversal)).
+- [ ] App Store refund registry: apply D1 migration
+      `0011_app_store_revocations.sql`, then set
+      `GAME_SERVICES_APP_STORE_REVOCATION_REGISTRY = "true"` so the
+      notifications route records every refund (recommended in the default
+      `server-api` mode too). Required before the iOS verifier Worker runs
+      `offline-only`: bind it to this Worker's
+      `GameServicesAppStoreRevocations` entrypoint, pass
+      `createAppStoreRevocationLookupOverBinding` as `revocations`, and
+      keep `clockSkewMs` (5 minutes by default) above the clock difference
+      to Apple. Optionally set
+      `GAME_SERVICES_APP_STORE_REVOCATION_RETENTION_MS` (at least
+      `maxSignedAgeMs + clockSkewMs`) so the cron prunes old rows
+      ([revocation registry](./CLOUDFLARE_WORKER_DEPLOY.md#app-store-revocation-registry-offline-only-purchases)).
 - [ ] Play Console → Users and permissions: give the publisher service
       account financial access ("View financial reports" in Google's API
       docs; the Console label may differ) for the Voided Purchases API, and
