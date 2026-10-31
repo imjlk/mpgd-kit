@@ -14,6 +14,8 @@ import {
 import type { NotificationConsentRecord } from '@mpgd/platform/notifications';
 import { createHash } from 'node:crypto';
 
+import { isThrownInstance, readThrownField } from '../thrown-values.js';
+
 /**
  * A `NotificationStore` over Devvit Redis (notifications v2 RFC, "Delivery
  * providers", Devvit: "The same delivery module and policy gate run there
@@ -1371,7 +1373,11 @@ const transactionAbort = /\b(?:timed?\s*out|timeout|deadline exceeded)\b/iu;
 function redisThrowKind(
   error: unknown,
 ): 'permanent' | 'aborted-before-commit' | 'connection-loss' | 'other' {
-  if (error instanceof TypeError || error instanceof RangeError || error instanceof SyntaxError) {
+  if (
+    isThrownInstance(error, TypeError)
+    || isThrownInstance(error, RangeError)
+    || isThrownInstance(error, SyntaxError)
+  ) {
     return 'permanent';
   }
   const text = redisErrorText(error);
@@ -1400,8 +1406,8 @@ function redisErrorText(error: unknown): string {
   if (typeof error !== 'object' || error === null) {
     return '';
   }
-  const record = error as { readonly message?: unknown; readonly code?: unknown; readonly msg?: unknown };
-  return [record.message, record.code, record.msg]
+  // A field whose getter or Proxy trap throws counts as missing.
+  return [readThrownField(error, 'message'), readThrownField(error, 'code'), readThrownField(error, 'msg')]
     .filter((part): part is string => typeof part === 'string')
     .join(' ');
 }

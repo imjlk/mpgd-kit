@@ -18,6 +18,8 @@ import type {
   NotificationRuntimeSession,
 } from '@mpgd/platform/notifications-runtime';
 
+import { isThrownInstance, readThrownField } from './thrown-values.js';
+
 /**
  * The webview side of the notifications runtime's backend on Devvit
  * (notifications v2 RFC, "Bridge and versioning", "Backend methods"): a
@@ -381,12 +383,15 @@ export function createDevvitNotificationsBackendClient(
 }
 
 function toNotificationError(method: BridgeNotificationsBackendMethod, error: unknown): NotificationError {
-  if (error instanceof NotificationError) {
+  if (isThrownInstance(error, NotificationError)) {
     return error;
   }
-  const failure = typeof error === 'object' && error !== null
-    ? error as { readonly code?: unknown; readonly message?: unknown; readonly retryable?: unknown }
-    : {};
+  // Each field read once; one whose getter or Proxy trap throws counts as missing.
+  const failure = {
+    code: readThrownField(error, 'code'),
+    message: readThrownField(error, 'message'),
+    retryable: readThrownField(error, 'retryable'),
+  };
   const message = typeof failure.message === 'string' ? failure.message : undefined;
   if (backendUnavailableCodes.has(failure.code)) {
     return new NotificationError('NOTIFICATIONS_CONFIGURATION_REQUIRED', {

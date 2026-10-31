@@ -2,6 +2,7 @@ import { PlatformOperationError } from '@mpgd/platform';
 import type { NotificationProvider } from '@mpgd/platform/notifications';
 
 import type { CreateAitBridgeNotificationProviderInput } from './notifications-bridge.js';
+import { thrownMessage } from './thrown-values.js';
 
 /** What the provider uses from the bridge client chunk. */
 export type AitBridgeNotificationClientModule = Pick<
@@ -114,9 +115,7 @@ export function createLazyAitBridgeNotificationProvider(
     } catch (error) {
       throw new PlatformOperationError({
         code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
-        message: `The notifications bridge client did not load: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        message: `The notifications bridge client did not load: ${thrownMessage(error)}`,
         retryable: true,
       });
     }

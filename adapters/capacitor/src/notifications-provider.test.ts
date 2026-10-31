@@ -757,6 +757,30 @@ describe('Capacitor notifications provider: events around a request', () => {
     expect(errors).toEqual([new Error('Firebase is not configured'), new Error('offline')]);
   });
 
+  it('reads a hostile token failure without throwing: a Proxy, and an unreadable code', async () => {
+    const hostile = (): never => {
+      throw new Error('hostile read');
+    };
+    const { provider, sdks, errors } = setup();
+    const trapped = new Proxy({}, { get: hostile, getPrototypeOf: hostile });
+    sdks.failNext('push.getToken', trapped);
+    expect(await provider.register?.()).toBeNull();
+    // Compared by identity: deep equality would read the Proxy.
+    expect(errors).toHaveLength(1);
+    expect(errors[0] === trapped).toBe(true);
+    // A missing plugin whose code is readable still answers configuration-required.
+    sdks.failNext('push.getToken', {
+      code: 'UNIMPLEMENTED',
+      get message(): string {
+        return hostile();
+      },
+    });
+    await expect(provider.register?.()).rejects.toMatchObject({
+      code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
+      hostCode: 'UNIMPLEMENTED',
+    });
+  });
+
   it('keeps the request answer when an older read finishes after it', async () => {
     const sdks = createFakeNotificationSdks({ platform: 'android' });
     let hold: ((state: { readonly display: 'prompt' }) => void) | undefined;

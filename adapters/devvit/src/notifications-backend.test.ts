@@ -420,6 +420,27 @@ describe('createDevvitNotificationsBackendClient', () => {
       code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
       retryable: true,
     });
+    // A hostile thrown value is read without throwing: a Proxy, and a readable code beside a throwing getter.
+    const hostile = (): never => {
+      throw new Error('hostile read');
+    };
+    answers.push(() => {
+      throw new Proxy({}, { get: hostile, getPrototypeOf: hostile });
+    });
+    await expect(client.listConsent()).rejects.toMatchObject({
+      code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+      retryable: true,
+    });
+    answers.push(() => {
+      throw {
+        code: 'NOTIFICATIONS_UNSUPPORTED',
+        retryable: false,
+        get message(): string {
+          return hostile();
+        },
+      };
+    });
+    await expect(client.listNotices()).rejects.toMatchObject({ code: 'NOTIFICATIONS_UNSUPPORTED', retryable: false });
     // A payload outside the bridge contract is refused before it is sent.
     await expect(client.setReminder({ key: 'k', topic: 'daily-puzzle', fireAt: 'tomorrow' }))
       .rejects.toMatchObject({ code: 'NOTIFICATIONS_INVALID_INPUT' });
