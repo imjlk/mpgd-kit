@@ -4,7 +4,7 @@
 
 ### Patch changes
 
-- Updated dependencies: @mpgd/cli@0.68.0
+- Updated dependencies: cli@0.68.0
 
 ## 0.66.0 — 2026-10-30
 

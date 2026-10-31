@@ -4,7 +4,7 @@
 
 ### Patch changes
 
-- Updated dependencies: @mpgd/catalog@0.15.0
+- Updated dependencies: catalog@0.15.0
 
 ## 0.33.0 — 2026-10-30
 

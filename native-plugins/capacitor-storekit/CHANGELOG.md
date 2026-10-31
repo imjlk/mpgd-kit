@@ -4,7 +4,7 @@
 
 ### Patch changes
 
-- Updated dependencies: @mpgd/adapter-capacitor@0.19.1, @mpgd/game-services@0.33.1
+- Updated dependencies: adapter-capacitor@0.19.1, game-services@0.33.1
 
 ## 0.7.0 — 2026-10-30
 

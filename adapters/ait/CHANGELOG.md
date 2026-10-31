@@ -4,7 +4,7 @@
 
 ### Patch changes
 
-- Updated dependencies: @mpgd/catalog@0.15.0, @mpgd/game-runtime@0.10.1
+- Updated dependencies: catalog@0.15.0, game-runtime@0.10.1
 
 ## 0.21.8 — 2026-10-30
 

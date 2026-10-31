@@ -609,7 +609,11 @@ function createReadiness(
     };
   }
 
-  if (input.enforceExternalReadiness === true) {
+  // SDK 3 registers app branding in the console after bundle upload. Its bundle config
+  // contains only brand.primaryColor, so a console icon URL cannot gate that first upload.
+  const consoleManagedBranding = input.target.metadata?.sdkMajor === 3;
+
+  if (input.enforceExternalReadiness === true && !consoleManagedBranding) {
     throw new Error(
       `${input.targetName}.icon.externalUrl is required for a production Apps in Toss package. Upload ${requireOutput(outputs, 'console-icon').path} in the Apps in Toss console first.`,
     );
@@ -617,7 +621,9 @@ function createReadiness(
 
   return {
     state: 'console-upload-required',
-    message: `Upload ${requireOutput(outputs, 'console-icon').path} in the Apps in Toss console and configure icon.externalUrl before production packaging.`,
+    message: consoleManagedBranding
+      ? `SDK 3 packaging does not require an external icon URL. Upload ${requireOutput(outputs, 'console-icon').path} in the Apps in Toss console before requesting review; console registration is not verified by this manifest.`
+      : `Upload ${requireOutput(outputs, 'console-icon').path} in the Apps in Toss console and configure icon.externalUrl before production packaging.`,
   };
 }
 

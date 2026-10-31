@@ -108,10 +108,19 @@ mpgd game icons inspect .
 
 Target builds generate and verify their selected profile automatically.
 
-Apps in Toss remains a two-step release flow. Generate the 600x600 asset,
-upload it in the Apps in Toss console, then set the returned HTTPS URL as the
-AIT target's `icon.externalUrl`. Production AIT package builds fail until that
-URL is configured; wrapper preview builds may use the local generated file.
+Apps in Toss always generates and verifies the 600x600 console asset. With
+`metadata.sdkMajor: 3`, production bundle packaging may finish before console
+branding is registered: SDK 3's bundle config accepts `brand.primaryColor`,
+while the app icon is registered in the console before requesting review.
+Without `icon.externalUrl`, the generated manifest keeps
+`readiness.state: "console-upload-required"`; successful packaging does not
+assert console registration or review readiness. Upload the generated asset
+when completing the console app information.
+
+SDK 2 and targets without an explicit SDK major retain the older order: upload
+the generated asset in the console, set the returned HTTPS URL as
+`icon.externalUrl`, then build the production package. Wrapper previews may
+use the local generated file. Any configured external URL must still be HTTPS.
 
 ## Platform References
 
