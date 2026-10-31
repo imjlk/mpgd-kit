@@ -1,5 +1,15 @@
 # @mpgd/capacitor-play-billing
 
+## 0.6.3 — 2026-11-01
+
+### Changed
+
+- [a42e13d6](https://github.com/imjlk/mpgd-kit/commit/a42e13d60af5a48213bc8ced63153ea47987335f) Bump the pinned OpenIAP Google core to `io.github.hyochan.openiap:openiap-google:4.0.8` (from `4.0.6`). Upstream, `OpenIapStore.finishTransaction` now clears `currentPurchase` so a later collector does not see a finished purchase again; the plugin never finishes on the device (the backend consumes or acknowledges after its ledger grant) and does not read `currentPurchase`, so its behavior is unchanged. Play Billing stays at 9.1.0 and the other transitive dependencies are unchanged. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/adapter-capacitor@0.19.2, @mpgd/bridge@0.19.0, @mpgd/game-services@0.34.0, @mpgd/platform@0.35.1
+
 ## 0.6.2 — 2026-10-31
 
 ### Patch changes

@@ -1,6 +1,6 @@
 {
   "name": "@mpgd/capacitor-play-billing",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "description": "Opt-in Android Google Play Billing purchase collector for mpgd Capacitor games.",
   "license": "MIT",
   "repository": {
@@ -35,7 +35,7 @@
   "peerDependencies": {
     "@capacitor/core": "^8.5.1",
     "@mpgd/adapter-capacitor": "^0.19.0",
-    "@mpgd/bridge": "^0.18.0",
+    "@mpgd/bridge": "^0.19.0",
     "@mpgd/platform": "^0.35.0"
   },
   "devDependencies": {

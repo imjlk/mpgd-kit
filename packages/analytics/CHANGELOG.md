@@ -1,5 +1,11 @@
 # @mpgd/analytics
 
+## 0.5.9 — 2026-11-01
+
+### Patch changes
+
+- Updated dependencies: @mpgd/platform@0.35.1
+
 ## 0.5.8 — 2026-10-30
 
 ### Patch changes
