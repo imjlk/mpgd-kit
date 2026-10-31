@@ -1,3 +1,4 @@
+import { isThrownInstance } from '@mpgd/bridge';
 import {
   NotificationError,
   type NotificationCapabilities,
@@ -23,7 +24,6 @@ import { hasRouteControlCharacter, normalizeRootRelativeRoute } from '@mpgd/plat
  */
 
 import { aitNotificationProviderId } from './notifications-provider-id.js';
-import { isThrownInstance } from './thrown-values.js';
 
 export { aitNotificationProviderId };
 

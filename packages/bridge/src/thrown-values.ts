@@ -2,7 +2,8 @@
  * Reads a thrown value defensively. A value thrown across a bridge or by a
  * platform SDK may be anything, including a hostile one: a getter or
  * `toString` that throws, or a `Proxy` whose traps throw. None of these
- * throws, so a catch block that reads a failure never fails itself.
+ * throws, so a catch block that reads a failure never fails itself. Pure:
+ * no platform, DOM, or SDK code, so the main entry stays light.
  */
 
 /** `value[key]`, or `undefined` when `value` has no fields or reading the field throws. */

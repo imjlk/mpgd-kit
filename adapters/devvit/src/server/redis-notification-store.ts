@@ -1,3 +1,4 @@
+import { isThrownInstance, readThrownField } from '@mpgd/bridge';
 import {
   formatNotificationInstant,
   notificationSendDueAt,
@@ -13,8 +14,6 @@ import {
 } from '@mpgd/game-services/notifications';
 import type { NotificationConsentRecord } from '@mpgd/platform/notifications';
 import { createHash } from 'node:crypto';
-
-import { isThrownInstance, readThrownField } from '../thrown-values.js';
 
 /**
  * A `NotificationStore` over Devvit Redis (notifications v2 RFC, "Delivery

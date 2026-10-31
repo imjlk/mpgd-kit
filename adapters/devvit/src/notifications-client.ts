@@ -1,4 +1,4 @@
-import type { BridgeNotificationsV2Method } from '@mpgd/bridge';
+import { isThrownInstance, readThrownField, type BridgeNotificationsV2Method } from '@mpgd/bridge';
 import {
   assertBridgeNotificationsV2Result,
   readBridgeNotificationsHostCode,
@@ -17,7 +17,6 @@ import {
 } from '@mpgd/platform/notifications';
 
 import { devvitNotificationProviderId } from './notifications-contract.js';
-import { isThrownInstance, readThrownField } from './thrown-values.js';
 
 /**
  * The webview side of notifications v2 on Devvit, loaded in its own chunk

@@ -1,8 +1,8 @@
+import { thrownMessage } from '@mpgd/bridge';
 import { PlatformOperationError } from '@mpgd/platform';
 import type { NotificationProvider } from '@mpgd/platform/notifications';
 
 import type { CreateAitBridgeNotificationProviderInput } from './notifications-bridge.js';
-import { thrownMessage } from './thrown-values.js';
 
 /** What the provider uses from the bridge client chunk. */
 export type AitBridgeNotificationClientModule = Pick<

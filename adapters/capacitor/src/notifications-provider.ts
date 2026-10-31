@@ -1,5 +1,6 @@
 import { App, type AppPlugin } from '@capacitor/app';
 import type { PluginListenerHandle } from '@capacitor/core';
+import { isThrownInstance, readThrownField } from '@mpgd/bridge';
 import {
   assertLocalNotificationRequest,
   isRootRelativeNotificationRoute,
@@ -33,7 +34,6 @@ import type {
   PushSdk,
   PushSdkNotification,
 } from './notifications-sdk.js';
-import { isThrownInstance, readThrownField } from './thrown-values.js';
 
 // The Capacitor notifications v2 provider (notifications RFC "Provider
 // profiles", Capacitor): app-scope OS permission, FCM device endpoints, local

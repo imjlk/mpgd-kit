@@ -1,4 +1,8 @@
-import type { BridgeNotificationsBackendMethod } from '@mpgd/bridge';
+import {
+  isThrownInstance,
+  readThrownField,
+  type BridgeNotificationsBackendMethod,
+} from '@mpgd/bridge';
 import {
   assertBridgeNotificationsBackendPayload,
   assertBridgeNotificationsBackendResult,
@@ -17,8 +21,6 @@ import type {
   NotificationRuntimeBackend,
   NotificationRuntimeSession,
 } from '@mpgd/platform/notifications-runtime';
-
-import { isThrownInstance, readThrownField } from './thrown-values.js';
 
 /**
  * The webview side of the notifications runtime's backend on Devvit

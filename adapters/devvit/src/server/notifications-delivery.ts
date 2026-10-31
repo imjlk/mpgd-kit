@@ -1,3 +1,4 @@
+import { thrownMessage } from '@mpgd/bridge';
 import {
   createNotificationProviderRegistry,
   createNotificationService,
@@ -34,7 +35,6 @@ import {
   type CreateDevvitRedisNotificationStoreOptions,
   type DevvitNotificationRedis,
 } from './redis-notification-store.js';
-import { thrownMessage } from '../thrown-values.js';
 
 /**
  * Remote delivery on Devvit (notifications v2 RFC, "Delivery providers",

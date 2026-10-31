@@ -20,6 +20,7 @@ import type {
   NotificationEventEnvelope,
 } from '@mpgd/platform/notifications';
 
+export { isThrownInstance, readThrownField, thrownMessage } from './thrown-values.js';
 /**
  * Commerce v2 request methods (RFC "Bridge and versioning"). The literal
  * union below spells them out so the published declaration stays readable;

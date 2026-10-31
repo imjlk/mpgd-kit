@@ -9,7 +9,14 @@ import {
 } from '@mpgd/platform/notifications';
 
 import { validNotificationsV2Exchanges } from './fixtures';
-import type { BridgeNotificationsEvent, BridgeRequest, BridgeResponse } from './index';
+import {
+  isThrownInstance,
+  readThrownField,
+  thrownMessage,
+  type BridgeNotificationsEvent,
+  type BridgeRequest,
+  type BridgeResponse,
+} from './index';
 import {
   createNotificationsBackendBridgeHandler,
   createNotificationsV2BridgeHandler,
@@ -458,6 +465,48 @@ const minimal: NotificationProvider = {
     message: 'notifications.v2.requestPermission failed: [object Object]',
     retryable: true,
   });
+}
+
+// The shared thrown-value helpers never throw.
+{
+  const hostile = (): never => {
+    throw new Error('hostile read');
+  };
+  const trapped = new Proxy({}, { get: hostile, getPrototypeOf: hostile });
+  const revocable = Proxy.revocable({}, {});
+  revocable.revoke();
+  assert.equal(readThrownField({ code: 'X' }, 'code'), 'X');
+  assert.equal(readThrownField(null, 'code'), undefined);
+  assert.equal(readThrownField('text', 'length'), undefined);
+  assert.equal(
+    readThrownField(
+      {
+        get code(): string {
+          return hostile();
+        },
+      },
+      'code',
+    ),
+    undefined,
+  );
+  assert.equal(readThrownField(trapped, 'code'), undefined);
+  assert.equal(readThrownField(revocable.proxy, 'code'), undefined);
+  assert.equal(isThrownInstance(new TypeError('x'), Error), true);
+  assert.equal(isThrownInstance({}, Error), false);
+  assert.equal(isThrownInstance(trapped, Error), false);
+  assert.equal(isThrownInstance(revocable.proxy, Error), false);
+  assert.equal(thrownMessage(new Error('plain')), 'plain');
+  assert.equal(thrownMessage({ message: 'shaped' }), 'shaped');
+  assert.equal(thrownMessage('text'), 'text');
+  assert.equal(thrownMessage(Symbol('s')), 'Symbol(s)');
+  for (const value of [
+    { toString: hostile },
+    Object.create(null) as unknown,
+    trapped,
+    revocable.proxy,
+  ]) {
+    assert.equal(thrownMessage(value), 'a failure that cannot be read');
+  }
 }
 
 // Hostile thrown values: getters, toString, and Proxy traps that throw never

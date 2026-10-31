@@ -1,4 +1,4 @@
-import type { BridgeRequest, BridgeResponse } from '@mpgd/bridge';
+import { isThrownInstance, type BridgeRequest, type BridgeResponse } from '@mpgd/bridge';
 import { createNotificationsBackendBridgeHandler } from '@mpgd/bridge/notifications';
 import { NotificationError } from '@mpgd/platform/notifications';
 import {
@@ -8,7 +8,6 @@ import {
 } from '@mpgd/game-services/notifications';
 
 import { devvitUserIdPattern } from '../notifications-contract.js';
-import { isThrownInstance } from '../thrown-values.js';
 import {
   devvitNotificationSessionFromContext,
   type DevvitNotificationSessionContext,

@@ -54,6 +54,9 @@ import {
   createBridgeEventSource,
   isBridgeNotificationsBackendMethod,
   isBridgeNotificationsV2Method,
+  isThrownInstance,
+  readThrownField,
+  thrownMessage,
   type BridgeEventStream,
   type BridgeNotificationsBackendMethod,
   type BridgeNotificationsBackendPayload,
@@ -325,7 +328,7 @@ export function createNotificationsV2BridgeHandler(
   };
 
   const report = (error: unknown, method: BridgeNotificationsV2Method): void => {
-    if (input.onError === undefined || isInstance(error, InvalidPayloadError)) {
+    if (input.onError === undefined || isThrownInstance(error, InvalidPayloadError)) {
       return;
     }
     try {
@@ -658,7 +661,7 @@ export function createNotificationsBackendBridgeHandler<TSession extends Notific
   };
 
   const report = (error: unknown, method: BridgeNotificationsBackendMethod): void => {
-    if (input.onError === undefined || isInstance(error, InvalidPayloadError) || isInstance(error, SessionRefusal)) {
+    if (input.onError === undefined || isThrownInstance(error, InvalidPayloadError) || isThrownInstance(error, SessionRefusal)) {
       return;
     }
     try {
@@ -712,7 +715,7 @@ function validBackendPayload<TMethod extends BridgeNotificationsBackendMethod>(
   try {
     return assertBridgeNotificationsBackendPayload(method, payload);
   } catch (error) {
-    throw new InvalidPayloadError(`${method} payload is invalid: ${messageOf(error)}`, {
+    throw new InvalidPayloadError(`${method} payload is invalid: ${thrownMessage(error)}`, {
       cause: error,
     });
   }
@@ -762,7 +765,7 @@ function validPayload<TMethod extends BridgeNotificationsV2Method>(
   try {
     return assertBridgeNotificationsV2Payload(method, payload);
   } catch (error) {
-    throw new InvalidPayloadError(`${method} payload is invalid: ${messageOf(error)}`, {
+    throw new InvalidPayloadError(`${method} payload is invalid: ${thrownMessage(error)}`, {
       cause: error,
     });
   }
@@ -777,7 +780,7 @@ function validResult<TMethod extends BridgeNotificationsV2Method>(
     return assertBridgeNotificationsV2Result(method, data);
   } catch (error) {
     throw new NotificationError('NOTIFICATIONS_CONFIGURATION_REQUIRED', {
-      message: `${name} answered ${method} with invalid data: ${messageOf(error)}`,
+      message: `${name} answered ${method} with invalid data: ${thrownMessage(error)}`,
       cause: error,
     });
   }
@@ -800,7 +803,7 @@ function toBridgeError<TMethod extends string>(
   /** Also answers a non-notifications `PlatformOperationError` with `unexpectedFailureMessage`. */
   hidePlatformFailureText = false,
 ): BridgeResponse {
-  if (isInstance(error, InvalidPayloadError)) {
+  if (isThrownInstance(error, InvalidPayloadError)) {
     return createBridgeError(id, 'NOTIFICATIONS_INVALID_INPUT', error.message);
   }
   /** The host's fixed message; one it cannot build is reported, and the answer says only that the method failed. */
@@ -824,12 +827,12 @@ function toBridgeError<TMethod extends string>(
   // permanent code must not turn into a retryable one. The fields are read
   // once, into a plain object, so a getter cannot answer differently twice.
   const failure = readPlatformOperationFailure({
-    code: readField(error, 'code'),
-    retryable: readField(error, 'retryable'),
+    code: readThrownField(error, 'code'),
+    retryable: readThrownField(error, 'retryable'),
   });
   if (failure !== null && isNotificationErrorCode(failure.code)) {
-    const message = stringOrUndefined(readField(error, 'message')) ?? `${method} failed.`;
-    const hostCode = stringOrUndefined(readField(error, 'hostCode'));
+    const message = stringOrUndefined(readThrownField(error, 'message')) ?? `${method} failed.`;
+    const hostCode = stringOrUndefined(readThrownField(error, 'hostCode'));
     return createBridgeError(
       id,
       failure.code,
@@ -839,13 +842,13 @@ function toBridgeError<TMethod extends string>(
       failure.retryable,
     );
   }
-  if (isInstance(error, PlatformOperationError)) {
+  if (isThrownInstance(error, PlatformOperationError)) {
     return createBridgeError(
       id,
       'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
       hidePlatformFailureText && unexpectedFailureMessage !== undefined
         ? fixedMessage(unexpectedFailureMessage)
-        : `${method} failed: ${messageOf(error)}`,
+        : `${method} failed: ${thrownMessage(error)}`,
       failure?.retryable ?? true,
     );
   }
@@ -855,31 +858,10 @@ function toBridgeError<TMethod extends string>(
     id,
     'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
     unexpectedFailureMessage === undefined
-      ? `${method} failed: ${messageOf(error)}`
+      ? `${method} failed: ${thrownMessage(error)}`
       : fixedMessage(unexpectedFailureMessage),
     failure?.retryable ?? true,
   );
-}
-
-/** `value[key]`, or `undefined` when `value` has no fields or reading the field throws (a getter, a `Proxy` trap). */
-function readField(value: unknown, key: string): unknown {
-  if ((typeof value !== 'object' && typeof value !== 'function') || value === null) {
-    return undefined;
-  }
-  try {
-    return (value as Readonly<Record<string, unknown>>)[key];
-  } catch {
-    return undefined;
-  }
-}
-
-/** `value instanceof type`, or `false` when the check throws (a `Proxy` whose `getPrototypeOf` trap throws). */
-function isInstance<T>(value: unknown, type: abstract new (...args: never[]) => T): value is T {
-  try {
-    return value instanceof type;
-  } catch {
-    return false;
-  }
 }
 
 function stringOrUndefined(value: unknown): string | undefined {
@@ -890,17 +872,4 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
   return (typeof value === 'object' || typeof value === 'function')
     && value !== null
     && typeof (value as { readonly then?: unknown }).then === 'function';
-}
-
-/** A failure's message, or its text; never throws, whatever was thrown. */
-function messageOf(error: unknown): string {
-  const message = readField(error, 'message');
-  if (typeof message === 'string') {
-    return message;
-  }
-  try {
-    return String(error);
-  } catch {
-    return 'a failure that cannot be read';
-  }
 }

@@ -1,5 +1,8 @@
 import {
   bridgeNotificationsEventProtocol,
+  isThrownInstance,
+  readThrownField,
+  thrownMessage,
   type BridgeEvent,
   type BridgeNotificationsEvent,
   type BridgeNotificationsV2Method,
@@ -29,7 +32,6 @@ import {
 } from '@mpgd/platform/notifications';
 
 import { namesOtherProtocol } from './bridge-events.js';
-import { isThrownInstance, readThrownField, thrownMessage } from './thrown-values.js';
 import type {
   CapacitorNotificationServiceProvider,
   CapacitorNotificationsV2Service,

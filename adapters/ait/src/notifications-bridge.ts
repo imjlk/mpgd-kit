@@ -1,5 +1,7 @@
 import {
   bridgeNotificationsEventProtocol,
+  isThrownInstance,
+  readThrownField,
   type BridgeNotificationsEvent,
   type BridgeNotificationsV2Method,
 } from '@mpgd/bridge';
@@ -22,8 +24,6 @@ import {
   type NotificationProvider,
   type NotificationProviderId,
 } from '@mpgd/platform/notifications';
-
-import { isThrownInstance, readThrownField } from './thrown-values.js';
 
 /**
  * Notifications v2 over the Apps in Toss game bridge (notifications RFC
