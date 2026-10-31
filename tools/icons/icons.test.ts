@@ -36,12 +36,85 @@ const root = mkdtempSync(join(tmpdir(), 'mpgd-icons-'));
 try {
   await testSvgAndTargetMatrix(root);
   await testPngAndOverrides(root);
+  await testAitConsoleBranding(root);
   await testInvalidInputs(root);
   await testPathEscapes(root);
   await testGameUiConfig(root);
   console.log('Icon pipeline tests passed.');
 } finally {
   rmSync(root, { recursive: true, force: true });
+}
+
+async function testAitConsoleBranding(parent: string): Promise<void> {
+  const gameRoot = join(parent, 'ait-console-branding');
+  writeGame(gameRoot, 'assets/icon.svg', simpleSvg('#2563eb'));
+  const target = requireTarget(createTargets(gameRoot), 'ait');
+  const input = {
+    gameRoot,
+    targetName: 'ait',
+    profile: 'production',
+    enforceExternalReadiness: true,
+  };
+
+  // An omitted major keeps the historical requirement; only the explicit SDK 3 contract changes it.
+  for (const legacy of [target, { ...target, metadata: { sdkMajor: 2 } }]) {
+    await assert.rejects(
+      generateTargetIcons({ ...input, target: legacy }),
+      /icon.externalUrl is required for a production Apps in Toss package/u,
+    );
+  }
+
+  const sdk3 = { ...target, metadata: { sdkMajor: 3 } };
+  const generated = await generateTargetIcons({ ...input, target: sdk3 });
+  await verifyGeneratedTargetIcons(generated);
+  await verifyExistingTargetIcons({
+    gameRoot,
+    targetName: 'ait',
+    target: sdk3,
+    profile: 'production',
+  });
+  assert.equal(generated.manifest.readiness?.state, 'console-upload-required');
+  assert.equal(generated.manifest.readiness?.externalUrl, undefined);
+  assert.match(generated.manifest.readiness?.message ?? '', /before requesting review/u);
+  assert.match(generated.manifest.readiness?.message ?? '', /not verified/u);
+  const output = generated.manifest.outputs.find((entry) => entry.purpose === 'console-icon');
+  assert.ok(output);
+  assert.deepEqual([output.width, output.height, output.opaque], [600, 600, true]);
+  const localIcon = join(generated.outputDir, 'console-icon-600.png');
+  const actual = await sharp(localIcon).metadata();
+  assert.deepEqual([actual.format, actual.width, actual.height], ['png', 600, 600]);
+
+  writeFileSync(localIcon, 'tampered icon');
+  await assert.rejects(verifyGeneratedTargetIcons(generated), /Stale generated icon output/u);
+
+  for (const configured of [target, { ...target, metadata: { sdkMajor: 2 } }, sdk3]) {
+    const withUrl = await generateTargetIcons({
+      ...input,
+      target: {
+        ...configured,
+        icon: { profile: 'ait', externalUrl: 'https://static.toss.im/test-icon.png' },
+      },
+    });
+    await verifyGeneratedTargetIcons(withUrl);
+    assert.equal(withUrl.manifest.readiness?.state, 'ready');
+    assert.equal(withUrl.manifest.outputs[0]?.pixelSha256, output.pixelSha256);
+  }
+  await assert.rejects(
+    generateTargetIcons({
+      ...input,
+      target: { ...sdk3, icon: { profile: 'ait', externalUrl: 'http://example.com/icon.png' } },
+    }),
+    /must use https/u,
+  );
+
+  // Packaging flexibility does not relax source quality or turn a preview icon into release art.
+  await sharp({ create: { width: 512, height: 512, channels: 4, background: '#2563eb' } })
+    .png().toFile(join(gameRoot, 'assets/small-icon.png'));
+  writeGameConfig(gameRoot, 'assets/small-icon.png');
+  await assert.rejects(
+    generateTargetIcons({ ...input, target: sdk3 }),
+    /must be at least 1024x1024/u,
+  );
 }
 
 async function testSvgAndTargetMatrix(parent: string): Promise<void> {
