@@ -502,6 +502,83 @@ const statuses = (result: NotificationBulkDeliveryResult) =>
   );
 }
 
+// A host whose store batches side-by-side calls raises `concurrency`: every recipient's ledger
+// and gate work runs at once, while single provider calls stay 8 at a time, and a call whose
+// gate inputs grew older than 30 s while it waited for its turn is not sent (`not-sent`).
+{
+  let open = 0;
+  let mostOpen = 0;
+  const sent: string[] = [];
+  let advanceOnSend = 0;
+  const provider: NotificationRemoteDeliveryProvider = {
+    id: 'platform',
+    async send(request) {
+      open += 1;
+      mostOpen = Math.max(mostOpen, open);
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      sent.push(request.idempotencyKey);
+      time.advance(advanceOnSend);
+      open -= 1;
+      return { status: 'accepted' };
+    },
+  };
+  let storeCalls = 0;
+  let mostStoreCalls = 0;
+  const { service, time, reports } = await setup({
+    provider,
+    players: players(40),
+    // Each store call waits a moment, so the calls that are in flight together can be counted.
+    wrapStore: (inner) => new Proxy(inner, {
+      get(target, property, receiver) {
+        const value: unknown = Reflect.get(target, property, receiver);
+        if (typeof value !== 'function') {
+          return value;
+        }
+        return async (...args: unknown[]) => {
+          storeCalls += 1;
+          mostStoreCalls = Math.max(mostStoreCalls, storeCalls);
+          try {
+            await new Promise((resolve) => setTimeout(resolve, 1));
+            return await (value as (...rest: unknown[]) => Promise<unknown>).apply(target, args);
+          } finally {
+            storeCalls -= 1;
+          }
+        };
+      },
+    }),
+  });
+  const fast = await service.deliverBulk(bulkInput('event-wide', players(20)), { concurrency: 20 });
+  assert.deepEqual(fast.summary.delivered, 20);
+  assert.ok(mostStoreCalls > 8, `store calls in flight together: ${mostStoreCalls}`);
+  assert.equal(mostOpen, 8);
+  // Each provider call now takes 5 s: the recipients still waiting past 30 s are left out, kept in flight.
+  sent.length = 0;
+  advanceOnSend = 5;
+  const slow = await service.deliverBulk(bulkInput('event-slow', players(40)), { concurrency: 40 });
+  const left = slow.recipients.filter((recipient) =>
+    recipient.status === 'answered' && recipient.outcome.status === 'in-flight');
+  assert.ok(left.length > 0 && left.length < 40, `left out: ${left.length}`);
+  assert.equal(slow.summary.delivered + left.length, 40);
+  assert.equal(sent.length, slow.summary.delivered);
+  assert.equal(slow.providerCalls.single, sent.length);
+  assert.ok(
+    reports.some(
+      (line) => line.startsWith('dispatch.stale: ') && line.includes('when its call starts'),
+    ),
+  );
+  // They were not sent, so the same call sends them (and only them) once their rows are due again.
+  advanceOnSend = 0;
+  sent.length = 0;
+  time.advance(400);
+  const later = await service.deliverBulk(bulkInput('event-slow', players(40)), {
+    concurrency: 40,
+  });
+  assert.deepEqual(
+    [later.summary.alreadyProcessed, later.summary.delivered, sent.length],
+    [40 - left.length, left.length, left.length],
+  );
+}
+
 // Gate inputs read more than 30 s before the batch's call are not trusted: those recipients are replayed.
 {
   const fake = bulkProvider({ maxRecipients: 10, minRecipients: 2, perRecipientOutcomes: true });

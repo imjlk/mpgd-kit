@@ -3285,8 +3285,15 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     }[],
     calls: { batch: number; single: number },
     copies: NotificationCopyCache,
+    // Rows whose ledger and gate work runs at once (`NotificationBulkDeliverOptions.concurrency`).
+    concurrency: number = bulkConcurrency,
   ): Promise<BulkAnswer[]> => {
-    const limiter = createNotificationLimiter(bulkConcurrency);
+    const limiter = createNotificationLimiter(concurrency);
+    // Above the default, single provider calls take a slot of their own, so
+    // no more than `bulkConcurrency` of them are open at once.
+    const callLimiter = concurrency > bulkConcurrency
+      ? createNotificationLimiter(bulkConcurrency)
+      : undefined;
     const capability = provider.delivery.bulk;
     const state = prepared.map((entry) => ({
       refusals: [...entry.refusals],
@@ -3388,9 +3395,48 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         try {
           const { refusal } = await runRow(entry.key, row.provider, row.key, entry.mode, copies, async (recipient, request, topic, decision, at, claimedUntil, regate) => {
             arrived = true;
-            if (!gathers) {
+            if (!gathers && callLimiter === undefined) {
               calls.single += 1;
               return callProvider(recipient, request, topic, decision, at);
+            }
+            if (!gathers && callLimiter !== undefined) {
+              // The work slot goes back while the row waits for a call slot,
+              // and the gate runs again once it has one, as for a batch call.
+              release();
+              await callLimiter.acquire();
+              try {
+                const when = nowMs();
+                let fresh: NotificationRemoteDeliveryRequest | undefined;
+                let reason = 'has less than half a claim lease left';
+                if ((claimedUntil ?? at) - when >= leaseMs / 2) {
+                  reason = 'is no longer allowed by the gate, or its gate inputs are too old';
+                  try {
+                    const again = when - at > bulkGateFreshMs ? undefined : regate?.(when);
+                    fresh = again?.status === 'allowed'
+                      ? deliveryRequestOf(recipient, request, topic, again, when)
+                      : undefined;
+                  } catch {
+                    fresh = undefined;
+                  }
+                }
+                let answer: NotificationRemoteDeliveryAnswer;
+                if (fresh === undefined) {
+                  report(
+                    new Error(`A bulk recipient ${reason} when its call starts; it is not sent now.`),
+                    'dispatch.stale',
+                    { sendKey: entry.key, provider: provider.entry.provider, rowKey: row.key },
+                  );
+                  answer = { status: 'not-sent' };
+                } else {
+                  calls.single += 1;
+                  answer = await sendOne(recipient.provider, fresh);
+                }
+                return answer;
+              } finally {
+                callLimiter.release();
+                await limiter.acquire();
+                holding = true;
+              }
             }
             // The slot goes back while the batch gathers, so the barrier never waits on a recipient that cannot run.
             release();
@@ -3493,6 +3539,10 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         ? Math.max(0, Math.floor(options.maxLookups))
         : Number.POSITIVE_INFINITY,
     };
+    const concurrency = typeof options.concurrency === 'number' && Number.isSafeInteger(options.concurrency)
+      && options.concurrency >= 1
+      ? options.concurrency
+      : bulkConcurrency;
     const elapsed = input.elapsedMs ?? (() => globalThis.performance.now());
     const startedAt = elapsed();
     // Recipients are prepared concurrently: their takes are made one at a
@@ -3548,7 +3598,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         break;
       }
       const ready: { readonly index: number; readonly prepared: Parameters<typeof runBulkBatch>[1][number] }[] = [];
-      const limiter = createNotificationLimiter(bulkConcurrency);
+      const limiter = createNotificationLimiter(concurrency);
       await Promise.all(bulk.recipients.slice(start, end).map(async (recipient, offset) => {
         const index = start + offset;
         // Every recipient's key is read once; past the read budget, none is.
@@ -3592,6 +3642,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         ready.map((entry) => entry.prepared),
         calls,
         copies,
+        concurrency,
       );
       ready.forEach((entry, position) => {
         answers[entry.index] = ran[position] ?? { error: new Error('The batch answered no result.') };
@@ -4653,7 +4704,11 @@ type BulkAnswer =
   | { readonly notAttempted: NotificationBulkNotAttemptedReason }
   | { readonly error: unknown };
 
-/** Recipients prepared and run at once in a bulk batch (each one's ledger reads and writes). */
+/**
+ * Recipients prepared and run at once in a bulk batch (each one's ledger
+ * reads and writes) unless the host asks for more, and always the most
+ * provider calls made one by one at once.
+ */
 const bulkConcurrency = 8;
 /**
  * How old a bulk recipient's gate inputs (consent, history, host permission)

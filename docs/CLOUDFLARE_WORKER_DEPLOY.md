@@ -597,22 +597,32 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   never a client route: one topic to many players through one provider,
   each player a single send with its own key and gate check (see the
   [notifications guide](NOTIFICATIONS.md#bulk-sends)). It attempts at most
-  `MPGD_NOTIFICATIONS_BULK_RECIPIENTS` deliveries per call (50 by default,
-  one per FCM device) and reads the keys of at most 60 recipients (scaled
-  with it): planning a recipient costs about 7 D1 queries and an attempted
-  delivery about 11 more, which keeps a call under D1's 1,000 queries per
-  Worker invocation on Workers Paid. The rest answer `not-attempted`, and a
-  later call sends them. Only recipients the gate allows spend attempts,
-  so a call plans up to 60 and attempts the first 50 allowed: Apps in Toss
-  uses its bulk API (minimum 50) when at most 10 of them are refused, and
-  sends one by one otherwise. With account-deletion tombstones bound
-  (another query per new send and per delivery record) the defaults are
-  45 deliveries and 50 keys, so Apps in Toss sends one by one (raising
-  them needs the ledger's D1 queries batched, a follow-up). On D1 these
-  defaults are also the ceiling: a larger `MPGD_NOTIFICATIONS_BULK_RECIPIENTS`
-  is lowered to them. A large audience therefore takes several calls on the
-  Worker: bulk sends cut provider calls there, not D1 queries. It runs
-  inline, not through the queue.
+  `MPGD_NOTIFICATIONS_BULK_RECIPIENTS` deliveries per call (2,500 by
+  default, the Apps in Toss `send-bulk-message` maximum, one per FCM
+  device) and reads the keys of 1.2 times as many recipients (3,000). The
+  rest answer `not-attempted`, and a later call sends them. On D1 the
+  default is also the ceiling: a larger value is lowered to it.
+  - **D1 queries.** The Worker batches the call's D1 statements: the
+    statements its recipients make side by side go in one `db.batch()` (at
+    most 500 statements each), which D1 counts as one of its 1,000 queries
+    per Worker invocation on Workers Paid. Each statement keeps its own
+    condition, and a statement that fails fails only its own recipient.
+    Measured on local D1 with account-deletion tombstones bound, 2,500 Apps
+    in Toss recipients took 96 D1 queries in one `send-bulk-message` call,
+    5 for the same call retried, and 96 inside the hold window, one
+    `send-message` call each (before this, 45 recipients took 856). A batch
+    of a call starts only while 300 of the call's 900 queries are left.
+  - **Other subrequests.** One identity lookup per recipient read and per
+    recipient attempted (5,000 for 2,500), plus one partner call per
+    recipient inside the hold window: about 8,100 subrequests at most,
+    under the 10,000 of Workers Paid.
+  - **One by one.** Provider calls made one by one (fewer than 50 Apps in
+    Toss recipients after the gate, the hold window from 20:55 to 08:00
+    Seoul time, FCM) run 8 at a time, and a recipient whose turn comes more
+    than 30 seconds after its gate check is not sent with this call: its
+    row is replayed later with fresh reads, by the scheduler or the same
+    call retried.
+  It runs inline, not through the queue.
 - **Scheduler.** Each cron run fires the due server reminders as sends
   through the policy gate, pushes the consent notices nobody recorded by
   seven days before they are due (Korean rules, through the catalog's
