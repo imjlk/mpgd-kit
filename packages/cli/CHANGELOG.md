@@ -1,5 +1,19 @@
 # @mpgd/cli
 
+## 0.71.0 — 2026-11-02
+
+### Changed
+
+- [b68836a9](https://github.com/imjlk/mpgd-kit/commit/b68836a9be41533fccd88604f707f96f99a89b4e) `mpgd store presence plan --store google-play` warns, without blocking `apply`, when Play's default language listing would not meet Play's publishing requirements after the apply (Play's images plus the file's uploads and removals): no icon or no feature graphic, which Play needs to publish; fewer than 2 phone screenshots (Play needs at least 2 screenshots across device types to publish); or no 7-inch and no 10-inch tablet screenshots, which Play recommends. The warnings are printed as `warning` lines and carried in the plan's `warnings`; translations are not checked because they show the default language's graphics, and `apply` does not compute them. `store presence plan --json` prints the plan file (the same document `--out` saves) as one JSON document. — Thanks @imjlk!
+
+### Added
+
+- [54629c6e](https://github.com/imjlk/mpgd-kit/commit/54629c6eb9c700f9b565018a2500ae2df262fe90) A game created with `--providers notifications` shows the consent notices the server lists once per launch. After the notifications runtime starts (10 seconds at most), `showStarterLaunchNotices` reads the listed notices and shows them, overdue ones first, in a small box at the top that never pauses the game (`src/platform/launchNoticesBanner.ts`), and records each one as given once the player can see it, on screen while the page is visible. A player who signs in after launch gets the read when the session becomes current. The Phaser template calls it from `createGame` (`showNotificationLaunchNotices`), and the lite panel calls it when it mounts. Under the Korean rules advertising to a player now pauses while a re-confirmation is past its due date and unrecorded, so this is how a player who never opens the settings screen ends the pause. `StarterNotificationBackend` carries `started`, which settles once the runtime has started, and `readStarterLaunchNotices` and `createStarterNoticeVisibility` hold the shared logic. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/adapter-ait@0.22.0, @mpgd/adapter-browser@0.12.7, @mpgd/adapter-capacitor@0.19.4, @mpgd/adapter-devvit@0.15.1, @mpgd/adapter-verse8@0.7.23, @mpgd/analytics@0.5.11, @mpgd/bridge@0.20.0, @mpgd/capacitor-play-billing@0.6.5, @mpgd/capacitor-storekit@0.7.4, @mpgd/catalog@0.15.3, @mpgd/game-runtime@0.10.4, @mpgd/game-services@0.36.0, @mpgd/i18n@0.6.32, @mpgd/platform@0.37.0, @mpgd/target-config@0.24.10
+
 ## 0.70.0 — 2026-11-01
 
 ### Patch changes
