@@ -6,6 +6,7 @@ import {
   listNotificationNotices,
   NotificationError,
   notificationsProtocolVersion,
+  resolveNotificationNoticePolicy,
   type NotificationDeliveryOutcome,
 } from '@mpgd/platform/notifications';
 import {
@@ -240,7 +241,7 @@ function createClientBackend(input: CreateNotificationConformanceBackendInput): 
   const record = (outcome: NotificationDeliveryOutcome, key: string, topic: string, player: string): void => {
     deliveries.push({ ...outcome, idempotencyKey: key, topic, player, at: clock.now() });
   };
-  const rules = input.deployment?.advertisingRules ?? 'none';
+  const noticePolicy = resolveNotificationNoticePolicy(input.deployment);
 
   return {
     entry,
@@ -284,7 +285,7 @@ function createClientBackend(input: CreateNotificationConformanceBackendInput): 
     },
     get notices() {
       const state = store.inspect();
-      if (rules !== 'kr') {
+      if (noticePolicy === undefined) {
         return [];
       }
       return [...new Set(state.consent.map((row) => row.player))]
@@ -292,6 +293,7 @@ function createClientBackend(input: CreateNotificationConformanceBackendInput): 
           state.consent.filter((row) => row.player === player).map(({ player: _player, ...row }) => row),
           state.noticesGiven.filter((given) => given.player === player),
           clock.now(),
+          noticePolicy,
         ).map((notice) => ({ ...notice, player })))
         .sort((left, right) => left.dueBy.localeCompare(right.dueBy) || left.kind.localeCompare(right.kind));
     },

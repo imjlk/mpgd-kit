@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 
+import { mountStarterLaunchNotices } from '../platform/launchNoticesBanner';
 import {
   starterNotificationLabelsFor,
   type StarterNotificationLabels,
@@ -8,6 +9,7 @@ import {
 } from '../platform/notificationSettings';
 import {
   createStarterNotificationSettingsModel,
+  showStarterLaunchNotices,
   subscribeStarterNotificationOpens,
 } from '../platform/notifications';
 import { starterContextKey, type StarterContext } from '../runtime/gameContext';
@@ -67,6 +69,33 @@ export function routeNotificationSettingsOpens(game: Phaser.Game, context: Start
   game.events.once('destroy', () => {
     unsubscribe();
     game.events.off('poststep', afterBoot);
+  });
+}
+
+/**
+ * Shows the consent notices the server lists once per launch, in a small box
+ * over the game that does not pause it, and records them as given (see
+ * `showStarterLaunchNotices`): a player who never opens the settings screen
+ * still sees an overdue re-confirmation, which under the Korean rules pauses
+ * advertising until it is recorded.
+ */
+export function showNotificationLaunchNotices(game: Phaser.Game, context: StarterContext): void {
+  let dispose: (() => void) | undefined;
+  const lifetime = new AbortController();
+  game.events.once('destroy', () => {
+    lifetime.abort();
+    dispose?.();
+  });
+  void showStarterLaunchNotices(context.platform, {
+    locale: context.locale,
+    signal: lifetime.signal,
+    show: (notices, seen) => {
+      if (lifetime.signal.aborted) {
+        return false;
+      }
+      dispose = mountStarterLaunchNotices(notices, context.locale, { onSeen: seen });
+      return true;
+    },
   });
 }
 

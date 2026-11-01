@@ -31,6 +31,8 @@ import type { TargetConfiguredGateway } from '@mpgd/target-config';
 export interface StarterNotificationBackend {
   readonly runtime: NotificationRuntime;
   listConsent(): Promise<readonly NotificationConsentRecord[]>;
+  /** Settles once the runtime has started, or failed to (logged); it never rejects. */
+  readonly started?: Promise<void>;
 }
 
 /** The server-backed session the Worker client needs (see `serverSession.ts`). */
@@ -153,10 +155,10 @@ export function createStarterWorkerNotificationBackend(
       },
     });
     // It subscribes to the provider at once; a backend that cannot answer yet does not fail the game.
-    runtime.start().catch((error: unknown) => {
+    const started = runtime.start().catch((error: unknown) => {
       console.error('[notifications] the runtime could not start.', error);
     });
-    return { runtime, listConsent: () => client.listConsent() };
+    return { runtime, listConsent: () => client.listConsent(), started };
   } catch (error) {
     // A configuration the client refuses turns notifications off, never the game.
     input.log('[notifications] the notifications backend could not be created.', error);
@@ -261,10 +263,10 @@ export function createStarterHostedNotificationBackend(
         console.error('[notifications]', error);
       },
     });
-    runtime.start().catch((error: unknown) => {
+    const started = runtime.start().catch((error: unknown) => {
       console.error('[notifications] the runtime could not start.', error);
     });
-    return { runtime, listConsent: () => backend.listConsent() };
+    return { runtime, listConsent: () => backend.listConsent(), started };
   } catch (error) {
     // A configuration the runtime refuses turns notifications off, never the game.
     input.log('[notifications] the notifications backend could not be created.', error);

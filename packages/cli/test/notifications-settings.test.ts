@@ -12,7 +12,11 @@ import type {
   NotificationTopicDeclaration,
 } from '@mpgd/platform/notifications';
 
-import { createStarterNotificationSettings } from '../templates/notifications-overlay/common/src/platform/notificationSettings.js';
+import {
+  createStarterNoticeVisibility,
+  createStarterNotificationSettings,
+  readStarterLaunchNotices,
+} from '../templates/notifications-overlay/common/src/platform/notificationSettings.js';
 import { routeNotificationOpens } from '../templates/notifications-overlay/common/src/platform/notificationOpens.js';
 
 // The notification settings screen's model, which the generated Phaser scene
@@ -956,6 +960,174 @@ const common = {
   }
   assert.equal(plainListeners.length, 1);
   assert.equal(plain, 0);
+}
+
+// Launch notices: read once the runtime has started, overdue ones first, and
+// recorded as given once; nothing without a runtime, provider, copy, or notice.
+{
+  const text = (title: string) => ({ title, body: '{{consentDate}} 동의' });
+  const noticeCopy = {
+    ko: {
+      'consent-result.advertising.granted': text('결과'),
+      'consent-result.advertising.withdrawn': text('철회'),
+      'consent-result.night.granted': text('야간 결과'),
+      'consent-result.night.withdrawn': text('야간 철회'),
+      'reconfirmation.advertising': text('재확인'),
+      'reconfirmation.night': text('야간 재확인'),
+    },
+  };
+  const record = {
+    kind: 'advertising',
+    state: 'granted',
+    at: '2026-10-18T16:30:00.000Z',
+    textVersion: '1',
+  } as const;
+  const upcoming: NotificationNotice = {
+    kind: 'consent-result',
+    record,
+    dueBy: '2028-11-30',
+    variant: 'consent-result.advertising.granted',
+  };
+  const overdue: NotificationNotice = {
+    kind: 'reconfirmation',
+    record,
+    dueBy: '2028-10-17',
+    variant: 'reconfirmation.advertising',
+  };
+  const { provider } = fakeProvider(capabilities('app', 'os'), { app: 'granted' });
+  const order: string[] = [];
+  const { runtime, calls } = fakeRuntime(provider, [upcoming, overdue]);
+  const listed = runtime.notices.list;
+  const timed = {
+    ...runtime,
+    notices: {
+      ...runtime.notices,
+      list: async () => {
+        order.push('list');
+        return listed();
+      },
+    },
+  };
+  let start: () => void = () => undefined;
+  const started = new Promise<void>((resolve) => {
+    start = () => {
+      order.push('started');
+      resolve();
+    };
+  });
+  const reading = readStarterLaunchNotices({
+    runtime: timed,
+    provider,
+    started,
+    noticeCopy,
+    defaultLocale: 'ko',
+    locale: 'ko',
+    now: () => '2028-11-01T03:00:00Z',
+  });
+  start();
+  const launch = await reading;
+  assert.deepEqual(order, ['started', 'list'], 'read only once the runtime has started');
+  assert.deepEqual(launch?.notices, [
+    { title: '재확인', body: '2026-10-19 동의', overdue: true },
+    { title: '결과', body: '2026-10-19 동의', overdue: false },
+  ]);
+  assert.deepEqual(calls, [], 'reading records nothing');
+  // Only the notices the player saw are recorded, each once.
+  await launch?.record([0]);
+  assert.deepEqual(calls, [{ shown: overdue }]);
+  await launch?.record([0, 1, 1, 7]);
+  assert.deepEqual(calls, [{ shown: overdue }, { shown: upcoming }]);
+  await launch?.record([0, 1]);
+  assert.equal(calls.length, 2, 'recorded once');
+  const none = { defaultLocale: 'ko', locale: 'ko', noticeCopy } as const;
+  assert.equal(
+    await readStarterLaunchNotices({ ...none, runtime: undefined, provider }),
+    undefined,
+  );
+  assert.equal(
+    await readStarterLaunchNotices({ ...none, runtime, provider: undefined }),
+    undefined,
+  );
+  assert.equal(
+    await readStarterLaunchNotices({ defaultLocale: 'ko', locale: 'ko', runtime, provider }),
+    undefined,
+  );
+  assert.equal(
+    await readStarterLaunchNotices({ ...none, runtime: fakeRuntime(provider).runtime, provider }),
+    undefined,
+  );
+  // A read that fails is logged, never thrown: the game goes on.
+  const original = console.warn;
+  const warnings: unknown[] = [];
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args[0]);
+  };
+  try {
+    const failing = {
+      ...runtime,
+      notices: { ...runtime.notices, list: async () => Promise.reject(new Error('offline')) },
+    };
+    assert.equal(
+      await readStarterLaunchNotices({ ...none, runtime: failing, provider }),
+      undefined,
+    );
+    assert.deepEqual(warnings, ['[notifications] the launch notices could not be read.']);
+  } finally {
+    console.warn = original;
+  }
+}
+
+// A runtime whose start never settles does not hold the launch read past its
+// deadline; notices.list() still checks the session itself.
+{
+  const { provider } = fakeProvider(capabilities('app', 'os'), { app: 'granted' });
+  const notice: NotificationNotice = {
+    kind: 'reconfirmation',
+    record: {
+      kind: 'advertising',
+      state: 'granted',
+      at: '2026-10-18T16:30:00.000Z',
+      textVersion: '1',
+    },
+    dueBy: '2028-10-17',
+    variant: 'reconfirmation.advertising',
+  };
+  const { runtime } = fakeRuntime(provider, [notice]);
+  const text = { title: '재확인', body: '{{consentDate}} 동의' };
+  const launch = await readStarterLaunchNotices({
+    runtime,
+    provider,
+    started: new Promise<void>(() => undefined),
+    startTimeoutMs: 5,
+    noticeCopy: { ko: { 'reconfirmation.advertising': text } },
+    defaultLocale: 'ko',
+    locale: 'ko',
+    now: () => '2028-11-01T03:00:00Z',
+  });
+  assert.deepEqual(launch?.notices, [{ title: '재확인', body: '2026-10-19 동의', overdue: true }]);
+}
+
+// A launch notice counts as seen only while it is on screen and the page is
+// visible; one on screen while the page is hidden counts once it shows.
+{
+  let visible = false;
+  const seen: number[] = [];
+  const visibility = createStarterNoticeVisibility({
+    pageVisible: () => visible,
+    onSeen: (index) => seen.push(index),
+  });
+  visibility.intersecting(0, true);
+  visibility.intersecting(1, false);
+  assert.deepEqual(seen, [], 'nothing is seen on a hidden page');
+  visible = true;
+  visibility.pageVisibilityChanged();
+  assert.deepEqual(seen, [0]);
+  // Scrolled into view later, it is seen then; each one once.
+  visibility.intersecting(1, true);
+  visibility.intersecting(0, false);
+  visibility.intersecting(0, true);
+  visibility.pageVisibilityChanged();
+  assert.deepEqual(seen, [0, 1]);
 }
 
 console.info('Notification settings model checks passed.');

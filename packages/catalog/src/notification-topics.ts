@@ -2,8 +2,11 @@ import type { tags } from 'typia';
 
 import {
   findNotificationCopy,
+  notificationConsentRefreshIssues,
   notificationNoticeCopyIssues,
   notificationProviderCarriesNotices,
+  notificationRefreshedConsentKinds,
+  notificationRequiredNoticeVariants,
   notificationShellRenderedAdvertisingTargets,
   notificationTopicDefinitionIssues,
   notificationTopicNeedsNoAgreement,
@@ -142,11 +145,15 @@ export type NotificationTopicCatalogValidation =
  *   topic on a free-form provider has its own text: `copy`, or a `title` and
  *   a `body` in the mapping, except the notice topic, whose text is
  *   `notices.copy`;
- * - given an `advertising` topic, the deployment settings: `advertisingRules`,
- *   and under `kr` the catalog's notice topic, mapped on every target that
- *   maps an advertising topic, and the advertising sender and opt-out line as
- *   gate step 8 reads them (`resolveNotificationAdvertisingSettings`): a
- *   contact, and no blank contact, name, or opt-out line.
+ * - given an `advertising` topic, the deployment settings: `advertisingRules`;
+ *   under `kr` no `consentRefresh` (the Korean rules fix it), and elsewhere
+ *   a `consentRefresh` the scheduler can follow
+ *   (`notificationConsentRefreshIssues`); where notices are owed (under `kr`,
+ *   or with a `consentRefresh` of its own) the catalog's notice topic, mapped
+ *   on every target that maps an advertising topic; and under `kr` the
+ *   advertising sender and opt-out line as gate step 8 reads them
+ *   (`resolveNotificationAdvertisingSettings`): a contact, and no blank
+ *   contact, name, or opt-out line.
  *
  * Issue paths spell locale and variant keys in brackets, such as
  * `notices.copy["ko-KR"]["reconfirmation.night"].title`.
@@ -218,10 +225,10 @@ export function validateNotificationTopicCatalog(
       }
     }
   });
-  issues.push(...noticeIssues(catalog, ids, targetProviders));
+  issues.push(...noticeIssues(catalog, ids, targetProviders, options.deployment));
   issues.push(...deploymentIssues(catalog, options.deployment, targetProviders));
-  // With no issue, `notices.copy` has every variant for every locale: the
-  // catalog has the declared type.
+  // With no issue, `notices.copy` has every variant the deployment's notices
+  // are given in for every locale: the catalog has the declared type.
   return issues.length === 0
     ? { valid: true, catalog: catalog as NotificationTopicCatalog, issues }
     : { valid: false, issues };
@@ -453,13 +460,21 @@ function noticeIssues(
   catalog: NotificationTopicCatalogShape,
   ids: ReadonlyMap<string, number>,
   targetProviders: Readonly<Record<string, NotificationProviderRegistryEntry>>,
+  deployment: NotificationDeployment | undefined,
 ): NotificationTopicCatalogIssue[] {
   if (catalog.notices === undefined) {
     return [];
   }
   return [
     ...noticeTopicIssues(catalog, catalog.notices.topic, ids, targetProviders),
-    ...notificationNoticeCopyIssues(catalog.notices.copy, catalog.defaultLocale),
+    // Only the variants the deployment's notices can be given in: outside kr
+    // a consent refresh lists re-confirmations alone.
+    ...notificationNoticeCopyIssues(
+      catalog.notices.copy,
+      catalog.defaultLocale,
+      'notices.copy',
+      notificationRequiredNoticeVariants(deployment),
+    ),
   ];
 }
 
@@ -519,13 +534,33 @@ function noticeTopicIssues(
   return issues;
 }
 
-/** The deployment settings an advertising topic needs. */
+/** The deployment's consent refresh, and the settings an advertising topic needs. */
 function deploymentIssues(
   catalog: NotificationTopicCatalogShape,
   deployment: NotificationDeployment | undefined,
   targetProviders: Readonly<Record<string, NotificationProviderRegistryEntry>>,
 ): NotificationTopicCatalogIssue[] {
   const issues: NotificationTopicCatalogIssue[] = [];
+  // The refresh itself is checked with or without an advertising topic.
+  const kr = deployment?.advertisingRules === 'kr';
+  if (kr && deployment?.consentRefresh !== undefined) {
+    issues.push({
+      path: 'deployment.consentRefresh',
+      message: 'the Korean rules fix the consent refresh (every two years, pausing advertising once overdue); leave consentRefresh out under kr',
+    });
+  } else if (deployment?.consentRefresh !== undefined) {
+    issues.push(...notificationConsentRefreshIssues(deployment.consentRefresh));
+  }
+  const refreshes = !kr
+    && notificationRefreshedConsentKinds.some((kind) => deployment?.consentRefresh?.[kind] !== undefined);
+  // A refresh of its own lists and pushes its notices for any consent holder,
+  // with or without an advertising topic: it needs the notices block.
+  if (refreshes && catalog.notices === undefined) {
+    issues.push({
+      path: 'notices.topic',
+      message: 'the consent refresh lists re-confirmation notices in the variants of notices.copy and pushes them through a service topic; declare notices',
+    });
+  }
   if (!catalog.topics.some((topic) => topic.purpose === 'advertising')) {
     return issues;
   }
@@ -536,15 +571,18 @@ function deploymentIssues(
     });
     return issues;
   }
-  if (deployment.advertisingRules === 'kr') {
+  if (kr || refreshes) {
     const noticeTopic = catalog.notices === undefined
       ? undefined
       : catalog.topics.find((topic) => topic.id === catalog.notices?.topic);
     if (catalog.notices === undefined) {
-      issues.push({
-        path: 'notices.topic',
-        message: 'the Korean advertising rules send overdue consent notices through a service topic; declare notices.topic',
-      });
+      // A refresh outside kr was reported above.
+      if (kr) {
+        issues.push({
+          path: 'notices.topic',
+          message: 'the Korean advertising rules send overdue consent notices through a service topic; declare notices.topic',
+        });
+      }
     } else if (noticeTopic !== undefined) {
       // A target that delivers advertising also delivers its notices. A
       // provider that cannot carry them is reported at the advertising mapping.
@@ -570,6 +608,8 @@ function deploymentIssues(
         });
       }
     }
+  }
+  if (kr) {
     // The sender and the opt-out line as gate step 8 reads them.
     issues.push(...resolveNotificationAdvertisingSettings(deployment).issues);
   }

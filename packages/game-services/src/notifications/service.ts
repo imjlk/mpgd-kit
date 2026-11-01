@@ -18,13 +18,18 @@ import {
   NotificationError,
   notificationKeyIssue,
   notificationNoticeCopyIssues,
-  notificationNoticeSendFrom,
+  notificationNoticePushFrom,
   notificationNoticeTopic,
+  notificationOverdueConsentRefreshes,
   notificationProviderCarriesNotices,
+  notificationRefreshedConsentKinds,
+  notificationRequiredNoticeVariants,
   notificationReservedKeyPrefix,
   notificationSendFingerprint,
   notificationShellRenderedAdvertisingTargets,
   notificationTemplateDataIssue,
+  notificationUpcomingReconfirmations,
+  resolveNotificationNoticePolicy,
   toSeoulCalendarDate,
   type NotificationConsentRecord,
   type NotificationDeliveryDecision,
@@ -121,9 +126,10 @@ import { describeError as describe } from './text.js';
  *   Due rows go out at no more than each provider's registry `rate`, through
  *   the queue when one is bound and inline otherwise.
  * - **Scheduler.** `runScheduler` turns due server reminders into
- *   `reminder:` sends and, under the Korean rules, pushes each consent notice
- *   nobody recorded by seven days before its `dueBy` as a `notice:` send of
- *   the catalog's notice topic; both then leave as due rows. A refused
+ *   `reminder:` sends and, where notices are owed, pushes each consent notice
+ *   nobody recorded from the day its policy pushes it (seven days before its
+ *   `dueBy` under the Korean rules) as a `notice:` send of the catalog's
+ *   notice topic; both then leave as due rows. A refused
  *   notice push backs off, doubling from an hour to a day.
  * - **Consent history.** Each write compacts the player's history: records
  *   no rule reads any more are deleted a day after they were written.
@@ -162,8 +168,6 @@ const noticeRecheckMs = 3_600_000;
 const noticeBackoffMs = 3_600_000;
 /** Records no rule reads are kept this long, for the daily cap, and then deleted. */
 const consentCompactionMs = dayMs;
-/** Lists every notice still owed, now or later: the next re-confirmation of each consent. */
-const noticeHorizon = '9999-12-31T00:00:00Z';
 const noticesEntryId = 'notices';
 /** How much wall time one scheduler run may use by default. */
 const defaultSchedulerBudgetMs = 20_000;
@@ -351,7 +355,10 @@ export interface NotificationService {
   unregisterEndpoint(session: NotificationSession, input?: { readonly provider?: string }): Promise<void>;
   /** The session ended (logout, revocation): every endpoint it registered is unbound. */
   endSession(input: { readonly sessionId: string }): Promise<void>;
-  /** The session player's listed notices; none unless the deployment applies the Korean rules. */
+  /**
+   * The session player's listed notices; none unless the deployment applies
+   * the Korean rules or a consent refresh of its own.
+   */
   listNotices(session: NotificationSession): Promise<readonly NotificationNotice[]>;
   /** Records a listed notice the game showed; a notice that is not listed changes nothing. */
   recordNoticeShown(
@@ -492,6 +499,12 @@ interface Recipient {
   readonly timeZone?: string;
 }
 
+/** What the gate reads of a player's consent: the records, and the notices given where step 5 reads them. */
+interface RecipientConsent {
+  readonly records: readonly NotificationConsentRecord[];
+  readonly noticesGiven?: readonly NotificationNoticeIdentity[];
+}
+
 /** Copy resolver answers kept for one invocation (`copyFor`). */
 type NotificationCopyCache = Map<string, Promise<NotificationResolvedCopy>>;
 
@@ -531,7 +544,16 @@ export function createNotificationService(input: CreateNotificationServiceInput)
   const deployment = input.deployment === undefined
     ? undefined
     : assertNotificationDeployment(input.deployment);
-  const rules = deployment?.advertisingRules ?? 'none';
+  // The notices the deployment owes: the Korean ones under kr, else its consent refresh.
+  const noticePolicy = resolveNotificationNoticePolicy(deployment);
+  /** Whether an overdue re-confirmation pauses advertising (gate step 5), so an advertising send reads the notices given. */
+  const refreshPauses = notificationRefreshedConsentKinds
+    .some((kind) => noticePolicy?.refresh[kind]?.onOverdue === 'pause');
+  /** The notice policy a check settles under: a check settled under another one runs again at the next registration. */
+  const noticePolicyKey = JSON.stringify(noticePolicy ?? null);
+  /** Whether the policy pushes any re-confirmation, so a registration may start a notice check. */
+  const refreshPushes = notificationRefreshedConsentKinds
+    .some((kind) => noticePolicy?.refresh[kind]?.pushLeadDays !== undefined);
   const leaseSeconds = input.claimLeaseSeconds ?? defaultClaimLeaseSeconds;
   // Checked in seconds: 0.5 is a whole number of milliseconds but no lease.
   if (!Number.isInteger(leaseSeconds) || leaseSeconds <= 0 || leaseSeconds * secondMs > dayMs) {
@@ -551,7 +573,13 @@ export function createNotificationService(input: CreateNotificationServiceInput)
   const customCopy = input.resolveCopy !== undefined;
   const noticeTopic = catalog.notices?.topic;
   if (catalog.notices !== undefined) {
-    const issues = notificationNoticeCopyIssues(catalog.notices.copy, catalog.defaultLocale);
+    // Only the variants the deployment's notices are given in.
+    const issues = notificationNoticeCopyIssues(
+      catalog.notices.copy,
+      catalog.defaultLocale,
+      'notices.copy',
+      notificationRequiredNoticeVariants(deployment),
+    );
     if (typeof noticeTopic !== 'string' || noticeTopic.length === 0 || issues.length > 0) {
       throw new TypeError(
         `The catalog's notices block needs its topic and copy by the catalog rules: ${issues
@@ -797,13 +825,14 @@ export function createNotificationService(input: CreateNotificationServiceInput)
   // Notices.
 
   const noticesOf = async (player: string, at: number): Promise<readonly NotificationNotice[]> =>
-    rules === 'kr'
-      ? listNotificationNotices(
+    noticePolicy === undefined
+      ? []
+      : listNotificationNotices(
           await store.listConsent(player),
           await store.listNoticesGiven(player),
           formatNotificationInstant(at),
-        )
-      : [];
+          noticePolicy,
+        );
   const noticeListed = async (
     player: string,
     notice: NotificationNoticeIdentity,
@@ -1055,11 +1084,66 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       ? early
       : undefined;
   };
+  /**
+   * The notices given to each player, read once per invocation (keyed by
+   * its copy cache), so a send's first check and its provider call in one
+   * invocation, or a bulk send's batch, read them once. A reused list can
+   * only miss a notice recorded since, which pauses rather than sends.
+   */
+  const givenByInvocation = new WeakMap<
+    NotificationCopyCache,
+    Map<string, Promise<readonly NotificationNoticeIdentity[]>>
+  >();
+  /**
+   * The player's consent records, with the notices given to them when an
+   * overdue re-confirmation may pause the send (gate step 5): the send may
+   * be advertising, the refresh policy pauses, and some re-confirmation
+   * could be overdue within a day of `at` whatever was given. Only then is
+   * the second read made; otherwise no notice can matter, and none is
+   * passed as given.
+   */
+  const consentOf = async (
+    player: string,
+    topicId: string,
+    origin: NotificationSendOrigin,
+    recipients: readonly Recipient[],
+    at: number,
+    copies: NotificationCopyCache,
+  ): Promise<RecipientConsent> => {
+    const records = await store.listConsent(player);
+    // A recipient that did not resolve answers `no-endpoint` before step 5.
+    const advertising = refreshPauses && recipients.some((recipient) =>
+      recipient.resolved
+      && topicFor(recipient.provider, recipient.target, topicId, origin)?.purpose === 'advertising');
+    if (!advertising || noticePolicy === undefined) {
+      return { records };
+    }
+    const { refresh } = noticePolicy;
+    const pausable = notificationOverdueConsentRefreshes(records, [], formatNotificationInstant(at + dayMs), refresh)
+      .some((kind) => refresh[kind]?.onOverdue === 'pause');
+    if (!pausable) {
+      return { records, noticesGiven: [] };
+    }
+    let cache = givenByInvocation.get(copies);
+    if (cache === undefined) {
+      cache = new Map();
+      givenByInvocation.set(copies, cache);
+    }
+    const held = cache;
+    let given = held.get(player);
+    if (given === undefined) {
+      given = store.listNoticesGiven(player);
+      held.set(player, given);
+      // A failed read is not kept: the next check reads again.
+      given.catch(() => held.delete(player));
+    }
+    return { records, noticesGiven: await given };
+  };
   const decide = (
     request: NotificationStoredSendRequest,
     origin: NotificationSendOrigin,
     recipient: Recipient,
-    consent: readonly NotificationConsentRecord[],
+    consent: RecipientConsent,
     history: readonly NotificationDeliveryHistoryEntry[],
     serverPermission: NotificationPermissionState | undefined,
     at: number,
@@ -1076,7 +1160,8 @@ export function createNotificationService(input: CreateNotificationServiceInput)
           topic,
           recipientResolved: recipient.resolved,
           ...(request.link === undefined ? {} : { link: request.link }),
-          consent,
+          consent: consent.records,
+          ...(consent.noticesGiven === undefined ? {} : { noticesGiven: consent.noticesGiven }),
           ...(serverPermission === undefined ? {} : { serverPermission }),
           ...(recipient.endpoint === undefined ? {} : { endpointPermission: recipient.endpoint.permission }),
           ...(recipient.endpoint === undefined ? {} : endpointActionsOf(recipient.provider, recipient.endpoint)),
@@ -1241,7 +1326,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     if (recipients.length === 0) {
       return { rows: [], refusals: [noEndpoint()] };
     }
-    const consent = await store.listConsent(request.player);
+    const consent = await consentOf(request.player, request.topic, origin, recipients, at, copies);
     const history = await loadHistory(request.player, request.idempotencyKey, at);
     const perProvider = new Map<string, {
       permission?: Promise<NotificationPermissionState | undefined>;
@@ -1518,7 +1603,14 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     let regate: (when: number) => NotificationDeliveryDecision;
     try {
       recipient = await recipientOfRow(registered, send.request, row, claimed.at);
-      const consent = await store.listConsent(send.request.player);
+      const consent = await consentOf(
+        send.request.player,
+        send.request.topic,
+        send.origin,
+        [recipient],
+        nowMs(),
+        copies,
+      );
       const early = earlyRefusal(registered, (standIn) =>
         decide(send.request, send.origin, recipient, consent, [], standIn, nowMs(), copyStandIn),
       );
@@ -2540,7 +2632,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     dueBy: notice.dueBy,
   });
   const carriesNotices = (): boolean =>
-    rules === 'kr'
+    noticePolicy !== undefined
     && noticeTopic !== undefined
     && registry.providers.some((provider) => notificationProviderCarriesNotices(provider.entry));
 
@@ -2582,7 +2674,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     }
     const records = await store.listConsent(player);
     const given = await store.listNoticesGiven(player);
-    const owed = listNotificationNotices(records, given, now);
+    const owed = listNotificationNotices(records, given, now, noticePolicy);
     const failed = new Set(check.failed ?? []);
     const previouslyPushed = new Set(check.pushed ?? []);
     const pushed: string[] = [];
@@ -2590,10 +2682,11 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     let waiting = false;
     let refused = false;
     for (const notice of owed) {
-      const sendFrom = notificationNoticeSendFrom(notice.dueBy);
+      // A notice the policy never pushes stays the game's to show.
+      const sendFrom = notificationNoticePushFrom(notice, noticePolicy);
       const identity = noticeIdentity(notice);
       const key = createNotificationNoticeIdempotencyKey({ ...identity, player });
-      if (sendFrom > today || failed.has(key)) {
+      if (sendFrom === undefined || sendFrom > today || failed.has(key)) {
         continue;
       }
       const existing = await store.getSend(key);
@@ -2657,8 +2750,11 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         report(error, 'scheduler.notice', key);
       }
     }
-    // Every notice still owed, now or later (the next re-confirmation of each consent).
-    const ahead = listNotificationNotices(records, given, noticeHorizon);
+    // Every notice still owed, now or next (the next re-confirmation of each consent).
+    const ahead = [
+      ...owed,
+      ...notificationUpcomingReconfirmations(records, given, now, noticePolicy),
+    ];
     const owedKeys = new Set(
       ahead.map((notice) =>
         createNotificationNoticeIdempotencyKey({ ...noticeIdentity(notice), player }),
@@ -2670,8 +2766,8 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       next = next === undefined ? time : Math.min(next, time);
     };
     for (const notice of ahead) {
-      const sendFrom = notificationNoticeSendFrom(notice.dueBy);
-      if (sendFrom > today) {
+      const sendFrom = notificationNoticePushFrom(notice, noticePolicy);
+      if (sendFrom !== undefined && sendFrom > today) {
         consider(seoulMidnight(sendFrom));
       }
     }
@@ -2694,6 +2790,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       attempts,
       ...(stillFailed.length === 0 ? {} : { failed: stillFailed }),
       ...(pushed.length === 0 ? {} : { pushed }),
+      policy: noticePolicyKey,
     };
     // With nothing to look at again, a check that remembers failed pushes
     // stays without a due time, so they still fail once; a new record makes
@@ -2761,7 +2858,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
   /**
    * Deletes the records no rule reads any more, once they are a day old (the
    * daily cap still counts younger ones): every record but the latest of its
-   * kind and scope, except, under the Korean rules, an advertising or night
+   * kind and scope, except, where notices are owed, an advertising or night
    * record whose result notice is still owed and the record of its kind
    * before it, which decides whether it reports a refusal. The latest
    * consent of a kind is the latest record of it, so re-confirmations keep
@@ -2781,10 +2878,17 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       for (const record of latest.values()) {
         keep.add(Date.parse(record.at));
       }
-      if (rules === 'kr' && records.some((record) => record.kind === 'advertising' || record.kind === 'night')) {
+      if (
+        noticePolicy !== undefined
+        && records.some((record) => record.kind === 'advertising' || record.kind === 'night')
+      ) {
         const owed = new Set(
-          listNotificationNotices(records, await store.listNoticesGiven(player), formatNotificationInstant(at))
-            .map((notice) => Date.parse(notice.record.at)),
+          listNotificationNotices(
+            records,
+            await store.listNoticesGiven(player),
+            formatNotificationInstant(at),
+            noticePolicy,
+          ).map((notice) => Date.parse(notice.record.at)),
         );
         for (const kind of ['advertising', 'night'] as const) {
           const series = records.filter((record) => record.kind === kind);
@@ -2830,10 +2934,37 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     phase: 'registration' | 'before-consent' | 'after-consent' = 'registration',
   ): Promise<void> => {
     try {
+      if (phase === 'registration' && await seedsRefreshPushes(player)) {
+        await markNoticesDue(player, nowMs());
+        return;
+      }
       await markNoticesDue(player, nowMs(), onlyBackedOff);
     } catch (error) {
       report(error, phase === 'registration' ? 'notices.retry' : `notices.retry.${phase}`);
     }
+  };
+  /**
+   * Whether a registration should make the player's notice check due now:
+   * the policy pushes re-confirmations, and the player either has a check
+   * that last settled under another policy, or has none and holds a consent
+   * the policy re-confirms. A consent written before the deployment added
+   * its refresh made no check, so this is how its push gets scheduled for a
+   * player who opens the game again; a player who never does gets none.
+   */
+  const seedsRefreshPushes = async (player: string): Promise<boolean> => {
+    if (!refreshPushes || !carriesNotices()) {
+      return false;
+    }
+    const held = await store.getScheduleEntry({ player, id: noticesEntryId });
+    if (held !== undefined) {
+      // A check settled under another policy (a changed interval or lead)
+      // runs again now, so its next push follows the current policy.
+      return held.entry.item.kind === 'notices' && held.entry.item.policy !== noticePolicyKey;
+    }
+    const records = await store.listConsent(player);
+    return notificationRefreshedConsentKinds.some((kind) =>
+      noticePolicy?.refresh[kind]?.pushLeadDays !== undefined
+      && latestNotificationConsent(records, kind)?.state === 'granted');
   };
 
   /**

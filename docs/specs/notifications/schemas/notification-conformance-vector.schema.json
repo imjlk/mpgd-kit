@@ -335,6 +335,9 @@
                 "const": "quiet-hours"
               },
               {
+                "const": "reconfirmation-overdue"
+              },
+              {
                 "const": "request-missing"
               },
               {
@@ -843,6 +846,9 @@
               },
               {
                 "const": "quiet-hours"
+              },
+              {
+                "const": "reconfirmation-overdue"
               },
               {
                 "const": "request-missing"
@@ -2131,6 +2137,63 @@
           }
         ]
       },
+      "NotificationConsentRefreshPolicy": {
+        "type": "object",
+        "properties": {
+          "advertising": {
+            "$ref": "#/components/schemas/NotificationConsentRefreshRule",
+            "readOnly": true
+          },
+          "night": {
+            "$ref": "#/components/schemas/NotificationConsentRefreshRule",
+            "readOnly": true
+          }
+        },
+        "required": [],
+        "additionalProperties": false,
+        "description": "Per consent kind, how it is re-confirmed; a kind without a rule is never\nre-confirmed. A paused advertising consent stops every advertising send\n(`reconfirmation-overdue`); a paused night consent counts as no night\nconsent, which holds only night-time advertising under the Korean rules."
+      },
+      "NotificationConsentRefreshRule": {
+        "type": "object",
+        "properties": {
+          "intervalMonths": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 120,
+            "readOnly": true
+          },
+          "noticeLeadDays": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 366,
+            "readOnly": true
+          },
+          "pushLeadDays": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 366,
+            "readOnly": true
+          },
+          "onOverdue": {
+            "oneOf": [
+              {
+                "const": "continue"
+              },
+              {
+                "const": "pause"
+              }
+            ],
+            "readOnly": true
+          }
+        },
+        "required": [
+          "intervalMonths",
+          "noticeLeadDays",
+          "onOverdue"
+        ],
+        "additionalProperties": false,
+        "description": "How one consent is re-confirmed: a re-confirmation notice every\n`intervalMonths` from the latest consent (`notificationConsentRefreshDueBy`),\nlisted in the game from `noticeLeadDays` before its `dueBy`, pushed by the\nscheduler from `pushLeadDays` before it while nobody recorded it (never\nwhen absent), and, once past its `dueBy` unrecorded, either pausing the\nsends the consent covers (`pause`) or not (`continue`). Recording the\nnotice, or a new consent, ends a pause."
+      },
       "NotificationConsentSource": {
         "oneOf": [
           {
@@ -2208,6 +2271,11 @@
           "shellRendersAdvertising": {
             "type": "boolean",
             "description": "Whether the game's shell renders advertising pushes itself, with the\nopt-out action, on the targets in\n`notificationShellRenderedAdvertisingTargets` (Android, through the\nkit's messaging service in `@mpgd/capacitor-game-services`). An Android\nFCM notification message cannot carry actions, so the catalog validator\nrefuses an advertising topic mapped to such a target unless this is\ntrue. With it, the backend still sends advertising under `kr` only to an\ninstallation whose registration says it renders it\n(`rendersAdvertising`); one that does not is `suppressed:\npurpose-unsupported`. Absent means false.",
+            "readOnly": true
+          },
+          "consentRefresh": {
+            "$ref": "#/components/schemas/NotificationConsentRefreshPolicy",
+            "description": "How often the player's advertising and night consent is re-confirmed,\noutside the Korean rules: absent, never. Under `kr` the Korean preset\n(`notificationKoreanConsentRefresh`) applies and this must be absent\n(`resolveNotificationConsentRefresh`).",
             "readOnly": true
           }
         },
@@ -2398,16 +2466,9 @@
             "readOnly": true
           }
         },
-        "required": [
-          "consent-result.advertising.granted",
-          "consent-result.advertising.withdrawn",
-          "consent-result.night.granted",
-          "consent-result.night.withdrawn",
-          "reconfirmation.advertising",
-          "reconfirmation.night"
-        ],
+        "required": [],
         "additionalProperties": false,
-        "description": "One locale of `notices.copy`: a title and a body for each notice variant.\nA refusal's text is optional; without it a refusal is given in the\nwithdrawal's text (`notificationNoticeVariantFallbacks`)."
+        "description": "One locale of `notices.copy`: a title and a body per notice variant. Which\nvariants a catalog must give depends on its deployment\n(`notificationRequiredNoticeVariants`), which `notificationNoticeCopyIssues`\nchecks: under the Korean rules, and without a consent refresh of its own,\nevery variant but a refusal, whose text falls back to the withdrawal's\n(`notificationNoticeVariantFallbacks`); under a consent refresh outside\nthem, only the `reconfirmation.*` texts it lists. So each key is optional\nhere, and a reader looks one up through `notificationNoticeVariantCopy`."
       },
       "NotificationNoticeSettings": {
         "type": "object",

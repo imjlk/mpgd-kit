@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 
 import {
+  notificationKoreanNoticePolicy,
   notificationNoticeVariants,
   referenceNotificationProviders,
   type NotificationDeliveryProviderEntry,
@@ -141,6 +142,8 @@ const kr: NotificationDeployment = {
   advertisingRules: 'kr',
   advertisingSender: { contact: '080-000-0000' },
 };
+/** The policy a check settles under the Korean rules. */
+const krPolicyKey = JSON.stringify(notificationKoreanNoticePolicy);
 
 interface Harness {
   readonly service: NotificationService;
@@ -156,6 +159,7 @@ function harness(options: {
   readonly topics?: readonly NotificationTopicDeclaration[];
   readonly deployment?: NotificationDeployment;
   readonly notices?: boolean;
+  readonly noticeCopy?: NotificationNoticeCopy;
   readonly answers?: NotificationRemoteDeliveryAnswer[];
   readonly fcmEntry?: NotificationDeliveryProviderEntry;
   readonly extra?: readonly NotificationProviderRegistration[];
@@ -180,7 +184,9 @@ function harness(options: {
     ]),
     catalog: {
       defaultLocale: 'ko',
-      ...(options.notices === true ? { notices: { topic: noticeTopic.id, copy: noticeCopy } } : {}),
+      ...(options.notices === true
+        ? { notices: { topic: noticeTopic.id, copy: options.noticeCopy ?? noticeCopy } }
+        : {}),
       topicsFor: () => topics,
     },
     ...(options.deployment === undefined ? {} : { deployment: options.deployment }),
@@ -752,13 +758,13 @@ const pending = (h: Harness) =>
   );
   assert.deepEqual(
     [check()?.dueAt, check()?.item],
-    ['2026-10-26T01:00:00Z', { kind: 'notices', attempts: 1 }],
+    ['2026-10-26T01:00:00Z', { kind: 'notices', attempts: 1, policy: krPolicyKey }],
   );
   h.time.set('2026-10-26T01:00:00Z');
   await h.service.runScheduler();
   assert.deepEqual(
     [check()?.dueAt, check()?.item],
-    ['2026-10-26T03:00:00Z', { kind: 'notices', attempts: 2 }],
+    ['2026-10-26T03:00:00Z', { kind: 'notices', attempts: 2, policy: krPolicyKey }],
   );
   for (let attempt = 0; attempt < 8; attempt += 1) {
     h.time.set(check()?.dueAt ?? '');
@@ -2490,6 +2496,306 @@ const pending = (h: Harness) =>
     'the replacement is sent once the old claim is dropped',
   );
   assert.deepEqual(pending(h), []);
+}
+
+// CR1: under the Korean rules an overdue advertising re-confirmation pauses
+// advertising sends, and only them, until the game records the notice or the
+// player consents anew; an overdue night one holds only night-time advertising.
+{
+  const h = harness({ topics: [weekend, challenge, noticeTopic], deployment: kr, notices: true });
+  const consent = async (player: string, kind: 'advertising' | 'night') =>
+    h.service.recordConsent(session(player), {
+      kind,
+      state: 'granted',
+      source: 'player',
+      textVersion: 'v1',
+    });
+  for (const player of ['p-1', 'p-2']) {
+    await register(h, player);
+    await consent(player, 'advertising');
+    await consent(player, 'night');
+  }
+  let sent = 0;
+  const send = (player: string, topic = 'weekend-event') =>
+    h.service.deliver({ idempotencyKey: `cr1-${(sent += 1)}`, player, topic });
+  assert.equal((await send('p-1')).status, 'delivered');
+  // The first re-confirmation is due by 2028-10-18; on its last day advertising still goes.
+  h.time.set('2028-10-18T03:00:00Z');
+  await register(h, 'p-1');
+  await register(h, 'p-2');
+  assert.equal((await send('p-1')).status, 'delivered');
+  // From the next Seoul day it is overdue: advertising pauses, other sends go on.
+  h.time.set('2028-10-19T03:00:00Z');
+  assert.deepEqual(await send('p-1'), { status: 'suppressed', reason: 'reconfirmation-overdue' });
+  assert.equal((await send('p-1', 'friend-challenge')).status, 'delivered');
+  // Recording both notices resumes advertising, late as it is.
+  const reconfirmations = (await h.service.listNotices(session('p-1')))
+    .filter((notice) => notice.kind === 'reconfirmation');
+  assert.deepEqual(
+    reconfirmations.map((notice) => [notice.record.kind, notice.dueBy]),
+    [
+      ['advertising', '2028-10-18'],
+      ['night', '2028-10-18'],
+    ],
+  );
+  for (const notice of reconfirmations) {
+    await h.service.recordNoticeShown(session('p-1'), notice);
+  }
+  assert.equal((await send('p-1')).status, 'delivered');
+  // A new consent restarts the count, so it resumes advertising too.
+  assert.deepEqual(await send('p-2'), { status: 'suppressed', reason: 'reconfirmation-overdue' });
+  await consent('p-2', 'advertising');
+  const resumed = await send('p-2');
+  assert.equal(resumed.status, 'delivered');
+  // Its night re-confirmation is still overdue: in the day it goes with the
+  // expiry of a player without night consent, and at night it waits for 08:00.
+  assert.equal(h.fcm.calls.at(-1)?.expiresAt, '2028-10-19T12:00:00Z');
+  h.time.set('2028-10-19T13:00:00Z');
+  assert.deepEqual(await send('p-2'), {
+    status: 'deferred',
+    reason: 'night-window',
+    until: '2028-10-19T23:00:00Z',
+  });
+  assert.equal((await send('p-1')).status, 'delivered', 'p-1 recorded its night notice');
+}
+
+// CR1: an advertising send reads the notices given only where a
+// re-confirmation could be overdue, and once per invocation.
+{
+  let reads = 0;
+  const h = harness({
+    topics: [weekend, challenge, noticeTopic],
+    deployment: kr,
+    notices: true,
+    store: (store) => ({
+      ...store,
+      async listNoticesGiven(player) {
+        reads += 1;
+        return store.listNoticesGiven(player);
+      },
+    }),
+  });
+  await register(h, 'p-1');
+  await h.service.recordConsent(session('p-1'), {
+    kind: 'advertising',
+    state: 'granted',
+    source: 'player',
+    textVersion: 'v1',
+  });
+  const sendCounting = async (key: string, topic = 'weekend-event') => {
+    const before = reads;
+    const outcome = await h.service.deliver({ idempotencyKey: key, player: 'p-1', topic });
+    return { status: outcome.status, reads: reads - before };
+  };
+  assert.deepEqual(await sendCounting('young'), { status: 'delivered', reads: 0 });
+  // From a day before the re-confirmation is overdue (its due date, 2028-10-18) the read starts; the send still goes.
+  h.time.set('2028-10-18T03:00:00Z');
+  await register(h, 'p-1');
+  assert.deepEqual(await sendCounting('due-soon'), { status: 'delivered', reads: 1 });
+  h.time.set('2028-10-19T03:00:00Z');
+  assert.deepEqual(await sendCounting('overdue'), { status: 'suppressed', reads: 1 });
+  assert.deepEqual(await sendCounting('service', 'friend-challenge'), {
+    status: 'delivered',
+    reads: 0,
+  });
+  // A player with no endpoint answers no-endpoint before step 5: no read, so
+  // a failing notices read cannot fail that send.
+  await h.service.recordConsent(session('p-2'), {
+    kind: 'advertising',
+    state: 'granted',
+    source: 'player',
+    textVersion: 'v1',
+  });
+  h.time.set('2030-10-19T03:00:00Z');
+  const before = reads;
+  assert.deepEqual(
+    await h.service.deliver({ idempotencyKey: 'no-endpoint', player: 'p-2', topic: 'weekend-event' }),
+    { status: 'unavailable', reason: 'no-endpoint' },
+  );
+  assert.equal(reads - before, 0);
+}
+
+// CR1: a check settled under another refresh policy (a shorter interval) runs
+// again at the next registration, so its push follows the current policy.
+{
+  const shared = createInMemoryNotificationStore();
+  const refresh = (intervalMonths: number): NotificationDeployment => ({
+    advertisingRules: 'none',
+    consentRefresh: {
+      advertising: { intervalMonths, noticeLeadDays: 30, pushLeadDays: 3, onOverdue: 'pause' },
+    },
+  });
+  const longer = harness({
+    topics: [weekend, noticeTopic],
+    deployment: refresh(24),
+    notices: true,
+    store: () => shared,
+  });
+  await longer.service.recordConsent(session('p-1'), {
+    kind: 'advertising',
+    state: 'granted',
+    source: 'player',
+    textVersion: 'v1',
+  });
+  await longer.service.runScheduler();
+  const check = () => shared.inspect().schedule.find((entry) => entry.id === 'notices');
+  // Due by 2028-10-18, pushed from 2028-10-15 KST.
+  assert.equal(check()?.dueAt, '2028-10-14T15:00:00Z');
+  const shorter = harness({
+    topics: [weekend, noticeTopic],
+    deployment: refresh(12),
+    notices: true,
+    store: () => shared,
+  });
+  await register(shorter, 'p-1');
+  assert.equal(check()?.dueAt, '2026-10-19T03:00:00Z', 'due now under the new policy');
+  await shorter.service.runScheduler();
+  assert.equal(check()?.dueAt, '2027-10-14T15:00:00Z');
+  // Settled under the current policy, a registration leaves it as it is.
+  await register(shorter, 'p-1');
+  assert.equal(check()?.dueAt, '2027-10-14T15:00:00Z');
+}
+
+// CR1: a refresh added to a deployment after its players consented starts
+// their notice check at their next registration, so the push is scheduled.
+{
+  const shared = createInMemoryNotificationStore();
+  const before = harness({
+    topics: [weekend, noticeTopic],
+    deployment: { advertisingRules: 'none' },
+    notices: true,
+    store: () => shared,
+  });
+  await before.service.recordConsent(session('p-1'), {
+    kind: 'advertising',
+    state: 'granted',
+    source: 'player',
+    textVersion: 'v1',
+  });
+  const checks = () => shared.inspect().schedule.filter((entry) => entry.id === 'notices');
+  assert.deepEqual(checks(), [], 'no refresh, no check');
+  const after = harness({
+    topics: [weekend, noticeTopic],
+    deployment: {
+      advertisingRules: 'none',
+      consentRefresh: {
+        advertising: { intervalMonths: 12, noticeLeadDays: 30, pushLeadDays: 3, onOverdue: 'pause' },
+      },
+    },
+    notices: true,
+    store: () => shared,
+  });
+  await register(after, 'p-1');
+  assert.equal(checks().length, 1, 'the registration starts the check');
+  await after.service.runScheduler();
+  // Due by 2027-10-18, pushed from 2027-10-15 KST.
+  assert.equal(checks()[0]?.dueAt, '2027-10-14T15:00:00Z');
+  // A player without a consent the policy re-confirms gets none.
+  await register(after, 'p-2');
+  assert.equal(checks().length, 1);
+}
+
+// CR1: outside the Korean rules a consent refresh of its own lists and pushes
+// re-confirmations, and none of the result notices only Korea requires.
+{
+  const yearly: NotificationDeployment = {
+    advertisingRules: 'none',
+    consentRefresh: {
+      advertising: { intervalMonths: 12, noticeLeadDays: 30, pushLeadDays: 3, onOverdue: 'pause' },
+    },
+  };
+  // Its notices.copy needs only the re-confirmation text: no result notice is given.
+  const reconfirmationOnly = {
+    ko: { 'reconfirmation.advertising': noticeCopy['ko']?.['reconfirmation.advertising'] },
+  } as unknown as NotificationNoticeCopy;
+  assert.throws(
+    () =>
+      harness({
+        topics: [weekend, noticeTopic],
+        deployment: kr,
+        notices: true,
+        noticeCopy: reconfirmationOnly,
+      }),
+    /consent-result\.advertising\.granted/u,
+    'kr still needs every result text',
+  );
+  const h = harness({
+    topics: [weekend, noticeTopic],
+    deployment: yearly,
+    notices: true,
+    noticeCopy: reconfirmationOnly,
+  });
+  await register(h, 'p-1');
+  await h.service.recordConsent(session('p-1'), {
+    kind: 'advertising',
+    state: 'granted',
+    source: 'player',
+    textVersion: 'v1',
+  });
+  const check = () => h.store.inspect().schedule.find((entry) => entry.id === 'notices');
+  assert.deepEqual(await h.service.listNotices(session('p-1')), [], 'no result notice outside kr');
+  await h.service.runScheduler();
+  assert.equal(h.fcm.calls.length, 0);
+  // Due by 2027-10-18, pushed from 2027-10-15 KST.
+  assert.equal(check()?.dueAt, '2027-10-14T15:00:00Z');
+  h.time.set('2027-09-18T03:00:00Z');
+  assert.deepEqual(
+    (await h.service.listNotices(session('p-1'))).map((notice) => [
+      notice.kind,
+      notice.dueBy,
+      notice.variant,
+    ]),
+    [['reconfirmation', '2027-10-18', 'reconfirmation.advertising']],
+  );
+  h.time.set('2027-10-14T15:00:00Z');
+  await register(h, 'p-1');
+  await h.service.runScheduler();
+  assert.deepEqual(
+    h.fcm.calls.map((call) => [call.idempotencyKey, call.content.title]),
+    [
+      [
+        'notice:p-1:reconfirmation:advertising:2026-10-19T03:00:00Z:2027-10-18:install-p-1',
+        '[Game] reconfirmation.advertising',
+      ],
+    ],
+  );
+  assert.deepEqual(
+    h.store.inspect().noticesGiven.map((given) => given.channel),
+    ['push'],
+  );
+  // Delivered, it counts as given: advertising goes on past the due date.
+  h.time.set('2027-10-20T03:00:00Z');
+  assert.equal(
+    (await h.service.deliver({ idempotencyKey: 'yearly', player: 'p-1', topic: 'weekend-event' })).status,
+    'delivered',
+  );
+  // A rule without pushLeadDays is listed but never pushed, and pauses once overdue.
+  const listedOnly = harness({
+    topics: [weekend, noticeTopic],
+    deployment: {
+      advertisingRules: 'none',
+      consentRefresh: {
+        advertising: { intervalMonths: 12, noticeLeadDays: 30, onOverdue: 'pause' },
+      },
+    },
+    notices: true,
+  });
+  await register(listedOnly, 'p-1');
+  await listedOnly.service.recordConsent(session('p-1'), {
+    kind: 'advertising',
+    state: 'granted',
+    source: 'player',
+    textVersion: 'v1',
+  });
+  listedOnly.time.set('2027-10-19T03:00:00Z');
+  await register(listedOnly, 'p-1');
+  await listedOnly.service.runScheduler();
+  assert.equal(listedOnly.fcm.calls.length, 0, 'never pushed');
+  assert.equal((await listedOnly.service.listNotices(session('p-1'))).length, 1);
+  assert.deepEqual(
+    await listedOnly.service.deliver({ idempotencyKey: 'paused', player: 'p-1', topic: 'weekend-event' }),
+    { status: 'suppressed', reason: 'reconfirmation-overdue' },
+  );
 }
 
 console.info('Notifications scheduler tests passed.');

@@ -15,6 +15,7 @@ left for you.
 | `src/platform/capacitorNotifications.ts` | The Android and iOS provider (FCM and local reminders), registered by the Capacitor gateways. |
 | `src/platform/notificationSettings.ts` | The settings screen's logic: permission, reminders, advertising and night consent, notices. |
 | `src/platform/notificationOpens.ts` | The game's one listener for notification opens: the settings route, and an `other` route for your topics. |
+| `src/platform/launchNoticesBanner.ts` | The box that shows the listed consent notices once per launch. |
 | `src/scenes/NotificationSettingsScene.ts` or `src/lite/notificationSettingsPanel.ts` | The settings screen the game renders. |
 | `tools/validate-notifications.ts` | `pnpm validate:notifications`. |
 
@@ -136,6 +137,18 @@ Night consent adds to 광고성 정보 수신동의: the screen offers it only w
 advertising consent is granted, and turning advertising consent off also
 withdraws a granted night consent in the same call (two records, two result
 notices).
+
+**Consent notices at launch.** Once per launch, after the notifications
+runtime starts (10 seconds at most), the game reads the consent notices the
+server lists and, when there is one, shows them in a small box at the top
+that does not pause the game, overdue ones first, and records each one as
+given once the player can see it: on screen while the page is visible
+(`showStarterLaunchNotices`). A player who signs in after launch gets the
+read when the session becomes current. Under the Korean rules advertising to a player
+pauses while a re-confirmation (every two years) is past its due date and
+not recorded, so this is how a player who never opens the settings screen
+ends the pause. Keep it, or show the notices in your own launch UI and
+record them the same way.
 
 ## Try it locally
 

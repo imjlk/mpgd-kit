@@ -18,33 +18,43 @@ import {
   latestNotificationConsent,
   listNotificationNotices,
   normalizeNotificationTimestamp,
+  notificationConsentRefreshDueBy,
+  notificationConsentRefreshIssues,
   notificationConsentResultDueBy,
   notificationContentSource,
   notificationKeyIssue,
+  notificationKoreanConsentRefresh,
+  notificationKoreanNoticePolicy,
   notificationNoticeCopyIssues,
+  notificationNoticePushFrom,
   notificationNoticeSendFrom,
   notificationNoticeTextIssues,
   notificationNoticeTopic,
   notificationNoticeVariantCopy,
   notificationNoticeVariantFallbacks,
   notificationNoticeVariants,
+  notificationOverdueConsentRefreshes,
   notificationPermissionConsentKind,
   notificationPermissionStateOf,
   notificationProviderCarriesNotices,
   notificationReconfirmationDueBy,
   notificationReconfirmationListDays,
   notificationRegistryMismatch,
+  notificationRequiredNoticeVariants,
   notificationReservedKeyPrefix,
   notificationSendFingerprint,
   notificationTemplateDataIssue,
   notificationTopicDefinitionIssues,
   notificationTopicNeedsNoAgreement,
+  notificationUpcomingReconfirmations,
   readNotificationTemplate,
   referenceNotificationProviders,
   referenceNotificationTargetProviders,
   renderNotificationAdvertisement,
   resolveNotificationAdvertisingSettings,
+  resolveNotificationConsentRefresh,
   resolveNotificationContent,
+  resolveNotificationNoticePolicy,
   routeNotificationReminder,
   toSeoulCalendarDate,
   type EvaluateNotificationDeliveryInput,
@@ -387,6 +397,134 @@ describe('evaluateNotificationDelivery', () => {
     // Advertising consent outranks the night window: step 5 runs before step 6.
     expect(evaluateNotificationDelivery(input({ topic: advertising, at: tenPm })))
       .toEqual({ status: 'suppressed', reason: 'advertising-consent-missing' });
+  });
+
+  it('step 5: under the Korean rules an overdue advertising re-confirmation pauses advertising only', () => {
+    // Consent at 2026-10-12 10:00 KST: the first re-confirmation is due by 2028-10-11.
+    const consent = [record('advertising', 'granted'), record('night', 'granted')];
+    const lastDueDay = '2028-10-11T03:00:00Z'; // noon KST on the due date
+    const overdue = '2028-10-11T15:00:00Z'; // 00:00 KST the day after
+    const reconfirmation = (kind: 'advertising' | 'night') => ({
+      kind: 'reconfirmation',
+      record: { kind, at: '2026-10-12T01:00:00Z' },
+      dueBy: '2028-10-11',
+    }) as const;
+    expect(evaluateNotificationDelivery(input({ topic: advertising, consent, at: lastDueDay })).status)
+      .toBe('allowed');
+    expect(evaluateNotificationDelivery(input({ topic: advertising, consent, at: overdue, noticesGiven: [] })))
+      .toEqual({ status: 'suppressed', reason: 'reconfirmation-overdue' });
+    // Absent, the notices given read as none, so the gate fails closed.
+    expect(evaluateNotificationDelivery(input({ topic: advertising, consent, at: overdue })))
+      .toEqual({ status: 'suppressed', reason: 'reconfirmation-overdue' });
+    // A send that is not advertising goes on.
+    expect(evaluateNotificationDelivery(input({ consent, at: overdue })).status).toBe('allowed');
+    // Recording the notice resumes advertising, however late; so does a new consent.
+    const given = [reconfirmation('advertising'), reconfirmation('night')];
+    const resumed = evaluateNotificationDelivery(input({
+      topic: advertising,
+      consent,
+      at: overdue,
+      noticesGiven: given,
+    }));
+    expect(resumed.status).toBe('allowed');
+    expect(resumed.status === 'allowed' ? resumed.expiresAt : 'refused').toBeUndefined();
+    expect(evaluateNotificationDelivery(input({
+      topic: advertising,
+      consent: [...consent, record('advertising', 'granted', { at: '2028-10-20T01:00:00Z' })],
+      at: '2028-10-20T03:00:00Z',
+      noticesGiven: [reconfirmation('night')],
+    })).status).toBe('allowed');
+    // A refusal at step 5 comes first.
+    expect(evaluateNotificationDelivery(input({
+      topic: advertising,
+      consent: [...consent, record('advertising', 'withdrawn', { at: '2026-11-01T01:00:00Z' })],
+      at: overdue,
+    }))).toEqual({ status: 'suppressed', reason: 'advertising-consent-missing' });
+    // The next re-confirmation pauses again once it is overdue in turn.
+    expect(evaluateNotificationDelivery(input({
+      topic: advertising,
+      consent,
+      at: '2030-10-11T15:00:00Z',
+      noticesGiven: given,
+    }))).toEqual({ status: 'suppressed', reason: 'reconfirmation-overdue' });
+  });
+
+  it('step 5: an overdue night re-confirmation under the Korean rules holds night-time advertising only', () => {
+    const consent = [record('advertising', 'granted'), record('night', 'granted')];
+    const advertisingGiven = {
+      kind: 'reconfirmation',
+      record: { kind: 'advertising', at: '2026-10-12T01:00:00Z' },
+      dueBy: '2028-10-11',
+    } as const;
+    const noon = '2028-10-20T03:00:00Z';
+    const tenPm = '2028-10-20T13:00:00Z';
+    // In the day it sends, with the expiry of a player without night consent.
+    expect(evaluateNotificationDelivery(input({
+      topic: advertising,
+      consent,
+      at: noon,
+      noticesGiven: [advertisingGiven],
+    }))).toMatchObject({ status: 'allowed', expiresAt: '2028-10-20T12:00:00Z' });
+    // At night it waits for 08:00, or is suppressed where it may not wait.
+    expect(evaluateNotificationDelivery(input({
+      topic: advertising,
+      consent,
+      at: tenPm,
+      noticesGiven: [advertisingGiven],
+    }))).toEqual({ status: 'deferred', reason: 'night-window', until: '2028-10-20T23:00:00Z' });
+    expect(evaluateNotificationDelivery(input({
+      topic: { ...advertising, deferrable: false },
+      consent,
+      at: tenPm,
+      noticesGiven: [advertisingGiven],
+    }))).toEqual({ status: 'suppressed', reason: 'night-consent-missing' });
+    // Recording the night notice restores night consent.
+    expect(evaluateNotificationDelivery(input({
+      topic: advertising,
+      consent,
+      at: tenPm,
+      noticesGiven: [advertisingGiven, { ...advertisingGiven, record: { kind: 'night', at: '2026-10-12T01:00:00Z' } }],
+    })).status).toBe('allowed');
+  });
+
+  it('step 5: a consent refresh of its own pauses or continues outside the Korean rules', () => {
+    const consent = [record('advertising', 'granted')];
+    const yearly = (onOverdue: 'pause' | 'continue'): NotificationDeployment => ({
+      advertisingRules: 'none',
+      consentRefresh: { advertising: { intervalMonths: 12, noticeLeadDays: 30, onOverdue } },
+    });
+    // Due by 2027-10-11, overdue from 2027-10-12 KST.
+    expect(evaluateNotificationDelivery(input({
+      topic: advertising,
+      consent,
+      deployment: yearly('pause'),
+      at: '2027-10-11T03:00:00Z',
+    })).status).toBe('allowed');
+    expect(evaluateNotificationDelivery(input({
+      topic: advertising,
+      consent,
+      deployment: yearly('pause'),
+      at: '2027-10-12T03:00:00Z',
+    }))).toEqual({ status: 'suppressed', reason: 'reconfirmation-overdue' });
+    expect(evaluateNotificationDelivery(input({
+      topic: advertising,
+      consent,
+      deployment: yearly('continue'),
+      at: '2027-10-12T03:00:00Z',
+    })).status).toBe('allowed');
+    // Without one, no deployment outside kr re-confirms.
+    expect(evaluateNotificationDelivery(input({
+      topic: advertising,
+      consent,
+      deployment: { advertisingRules: 'none' },
+      at: '2036-10-12T03:00:00Z',
+    })).status).toBe('allowed');
+    // Under kr the Korean rules fix the refresh.
+    expect(() => evaluateNotificationDelivery(input({
+      topic: advertising,
+      consent,
+      deployment: { ...kr, consentRefresh: { advertising: { intervalMonths: 12, noticeLeadDays: 30, onOverdue: 'continue' } } },
+    }))).toThrow(/fix the consent refresh/u);
   });
 
   it('step 6: under the Korean rules defers advertising in the night window without night consent', () => {
@@ -1132,6 +1270,45 @@ describe('notification consent notices', () => {
       .toEqual(['2030-10-11']);
   });
 
+  it('lists every overdue re-confirmation of a consent past two due dates, so giving them ends the pause', () => {
+    const records = [record('advertising', 'granted', { at: noon })];
+    const result = { kind: 'consent-result', record: { kind: 'advertising', at: noon }, dueBy: '2026-10-26' } as const;
+    const ordinal = (dueBy: string) =>
+      ({ kind: 'reconfirmation', record: { kind: 'advertising', at: noon }, dueBy }) as const;
+    const at = '2031-01-10T03:00:00Z';
+    const listed = (given: readonly NotificationNoticeIdentity[]) =>
+      listNotificationNotices(records, [result, ...given], at).map((notice) => notice.dueBy);
+    // Both due dates stay fixed from the consent date (decree art. 62-3).
+    expect(listed([])).toEqual(['2028-10-11', '2030-10-11']);
+    expect(listed([ordinal('2028-10-11')])).toEqual(['2030-10-11']);
+    expect(listed([ordinal('2030-10-11')])).toEqual(['2028-10-11']);
+    expect(listed([ordinal('2028-10-11'), ordinal('2030-10-11')])).toEqual([]);
+    const overdue = (given: readonly NotificationNoticeIdentity[]) =>
+      notificationOverdueConsentRefreshes(records, given, at, notificationKoreanConsentRefresh);
+    expect(overdue([])).toEqual(['advertising']);
+    expect(overdue([ordinal('2028-10-11')])).toEqual(['advertising']);
+    expect(overdue([ordinal('2030-10-11')])).toEqual(['advertising']);
+    // Giving every listed one, as the launch notices do, resumes advertising at once.
+    const gate = (given: readonly NotificationNoticeIdentity[]) =>
+      evaluateNotificationDelivery(input({ topic: advertising, consent: records, at, noticesGiven: given })).status;
+    expect(gate([ordinal('2028-10-11')])).toBe('suppressed');
+    expect(gate(listNotificationNotices(records, [], at).filter((notice) => notice.kind === 'reconfirmation')))
+      .toBe('allowed');
+    // The next one after those, 2032-10-11, is what a scheduler waits for.
+    expect(notificationUpcomingReconfirmations(records, [ordinal('2028-10-11'), ordinal('2030-10-11')], at)
+      .map((notice) => [notice.record.kind, notice.dueBy, notice.variant]))
+      .toEqual([['advertising', '2032-10-11', 'reconfirmation.advertising']]);
+    // Without given ones, the next not past due is the third.
+    expect(notificationUpcomingReconfirmations(records, [], at).map((notice) => notice.dueBy)).toEqual(['2032-10-11']);
+    expect(notificationUpcomingReconfirmations(records, [], '2026-11-01T03:00:00Z').map((notice) => notice.dueBy))
+      .toEqual(['2028-10-11']);
+    expect(notificationUpcomingReconfirmations(
+      [...records, record('advertising', 'withdrawn', { at: '2027-01-01T03:00:00Z' })],
+      [],
+      at,
+    )).toEqual([]);
+  });
+
   it('lists the re-confirmation of a 29 February consent from 60 days before its due date', () => {
     const at = '2024-02-29T03:00:00Z';
     const records = [record('advertising', 'granted', { at })];
@@ -1142,6 +1319,132 @@ describe('notification consent notices', () => {
     expect(notificationReconfirmationDueBy(at)).toBe('2026-02-27');
     expect(listed('2025-12-28T14:59:59Z')).toEqual([]);
     expect(listed('2025-12-28T15:00:00Z')).toEqual([['reconfirmation', '2026-02-27']]);
+  });
+
+  it('dates a consent refresh of any interval, the Korean one as before', () => {
+    for (const [at, ordinal] of [[noon, 1], [noon, 3], ['2028-02-29T03:00:00Z', 2], ['2026-03-01T03:00:00Z', 1]] as const) {
+      expect(notificationConsentRefreshDueBy(at, { intervalMonths: 24 }, ordinal))
+        .toBe(notificationReconfirmationDueBy(at, ordinal));
+    }
+    expect(notificationConsentRefreshDueBy(noon, { intervalMonths: 12 })).toBe('2027-10-11');
+    expect(notificationConsentRefreshDueBy(noon, { intervalMonths: 6 }, 3)).toBe('2028-04-11');
+    // A day the month reached lacks counts as its last day; 29 February counts as 28.
+    expect(notificationConsentRefreshDueBy('2026-08-31T03:00:00Z', { intervalMonths: 6 })).toBe('2027-02-27');
+    expect(notificationConsentRefreshDueBy('2027-08-31T03:00:00Z', { intervalMonths: 6 })).toBe('2028-02-28');
+    expect(notificationConsentRefreshDueBy('2028-02-29T03:00:00Z', { intervalMonths: 48 })).toBe('2032-02-27');
+    expect(() => notificationConsentRefreshDueBy(noon, { intervalMonths: 0 })).toThrow(/interval/u);
+    expect(() => notificationConsentRefreshDueBy(noon, { intervalMonths: 121 })).toThrow(/1 to 120/u);
+    expect(notificationConsentRefreshDueBy(noon, { intervalMonths: 120 })).toBe('2036-10-11');
+    // Years 0 to 99 are not read as 1900 to 1999.
+    expect(notificationConsentRefreshDueBy('0001-06-01T03:00:00Z', { intervalMonths: 24 })).toBe('0003-05-31');
+    expect(notificationConsentResultDueBy('0001-06-01T03:00:00Z')).toBe('0001-06-15');
+    expect(toSeoulCalendarDate('0001-06-01T03:00:00Z')).toBe('0001-06-01');
+    expect(() => notificationConsentRefreshDueBy(noon, { intervalMonths: 12 }, 0)).toThrow(/ordinal/u);
+  });
+
+  it('resolves the notices a deployment owes: the Korean preset under kr, its own refresh elsewhere', () => {
+    expect(resolveNotificationNoticePolicy(kr)).toBe(notificationKoreanNoticePolicy);
+    expect(notificationKoreanNoticePolicy).toEqual({ consentResults: true, refresh: notificationKoreanConsentRefresh });
+    const preset = { intervalMonths: 24, noticeLeadDays: 60, pushLeadDays: 7, onOverdue: 'pause' };
+    expect(notificationKoreanConsentRefresh).toEqual({ advertising: preset, night: preset });
+    expect(Object.isFrozen(notificationKoreanConsentRefresh.advertising)).toBe(true);
+    expect(resolveNotificationConsentRefresh(undefined)).toEqual({});
+    expect(resolveNotificationNoticePolicy({ advertisingRules: 'none' })).toBeUndefined();
+    expect(resolveNotificationNoticePolicy(undefined)).toBeUndefined();
+    const refresh = { advertising: { intervalMonths: 24, noticeLeadDays: 30, onOverdue: 'continue' } } as const;
+    expect(resolveNotificationNoticePolicy({ advertisingRules: 'none', consentRefresh: refresh }))
+      .toEqual({ consentResults: false, refresh });
+    expect(resolveNotificationNoticePolicy({ consentRefresh: refresh })).toEqual({ consentResults: false, refresh });
+    expect(() => resolveNotificationNoticePolicy({ ...kr, consentRefresh: refresh })).toThrow(/fix the consent refresh/u);
+    expect(notificationConsentRefreshIssues(notificationKoreanConsentRefresh)).toEqual([]);
+    // 31 January plus one month is due by 27 February: a 27-day lead lists it on the consent day.
+    expect(notificationConsentRefreshDueBy('2027-01-31T03:00:00Z', { intervalMonths: 1 })).toBe('2027-02-27');
+    expect(notificationConsentRefreshIssues({
+      advertising: { intervalMonths: 1, noticeLeadDays: 27, onOverdue: 'pause' },
+    }).map((issue) => issue.path)).toEqual(['deployment.consentRefresh.advertising.noticeLeadDays']);
+    expect(notificationConsentRefreshIssues({
+      advertising: { intervalMonths: 1, noticeLeadDays: 26, onOverdue: 'pause' },
+    })).toEqual([]);
+    expect(notificationConsentRefreshIssues({
+      advertising: { intervalMonths: 1, noticeLeadDays: 28, pushLeadDays: 29, onOverdue: 'pause' },
+    }, 'refresh').map((issue) => issue.path)).toEqual([
+      'refresh.advertising.pushLeadDays',
+      'refresh.advertising.noticeLeadDays',
+    ]);
+  });
+
+  it("requires only the variants a deployment's notices are given in", () => {
+    const everyButRefusals = notificationNoticeVariants.filter((variant) => !variant.endsWith('.refused'));
+    expect(notificationRequiredNoticeVariants(kr)).toEqual(everyButRefusals);
+    expect(notificationRequiredNoticeVariants(undefined)).toEqual(everyButRefusals);
+    expect(notificationRequiredNoticeVariants({ advertisingRules: 'none' })).toEqual(everyButRefusals);
+    const refresh = { intervalMonths: 24, noticeLeadDays: 30, onOverdue: 'pause' } as const;
+    expect(notificationRequiredNoticeVariants({ advertisingRules: 'none', consentRefresh: { advertising: refresh } }))
+      .toEqual(['reconfirmation.advertising']);
+    expect(notificationRequiredNoticeVariants({ consentRefresh: { advertising: refresh, night: refresh } }))
+      .toEqual(['reconfirmation.advertising', 'reconfirmation.night']);
+    // Under kr the rules fix the refresh: every variant, without throwing.
+    expect(notificationRequiredNoticeVariants({ ...kr, consentRefresh: { advertising: refresh } }))
+      .toEqual(everyButRefusals);
+    const text = { title: '광고 수신 동의 확인', body: '{{consentDate}}에 동의하셨어요.' };
+    const onlyReconfirmation = { ko: { 'reconfirmation.advertising': text } };
+    expect(notificationNoticeCopyIssues(onlyReconfirmation, 'ko', 'notices.copy', ['reconfirmation.advertising']))
+      .toEqual([]);
+    expect(notificationNoticeCopyIssues(onlyReconfirmation, 'ko').length).toBeGreaterThan(0);
+    // A variant that is not required is still checked when present.
+    expect(notificationNoticeCopyIssues(
+      { ko: { 'reconfirmation.advertising': text, 'consent-result.advertising.granted': { title: 't', body: 'b' } } },
+      'ko',
+      'notices.copy',
+      ['reconfirmation.advertising'],
+    ).map((issue) => issue.path)).toEqual(['notices.copy["ko"]["consent-result.advertising.granted"]']);
+  });
+
+  it('lists and pushes only re-confirmations under a consent refresh of its own', () => {
+    const policy = {
+      consentResults: false,
+      refresh: {
+        advertising: { intervalMonths: 24, noticeLeadDays: 30, pushLeadDays: 14, onOverdue: 'pause' },
+        night: { intervalMonths: 12, noticeLeadDays: 10, onOverdue: 'continue' },
+      },
+    } as const;
+    const records = [record('advertising', 'granted', { at: noon }), record('night', 'granted', { at: noon })];
+    const listed = (at: string, given: readonly NotificationNoticeIdentity[] = []) =>
+      listNotificationNotices(records, given, at, policy)
+        .map((notice) => [notice.kind, notice.record.kind, notice.dueBy, notice.variant]);
+    // No result notice outside the Korean rules.
+    expect(listed(noon)).toEqual([]);
+    // Night is due by 2027-10-11 and listed from 2027-10-01 KST.
+    expect(listed('2027-09-30T14:59:59Z')).toEqual([]);
+    expect(listed('2027-09-30T15:00:00Z')).toEqual([['reconfirmation', 'night', '2027-10-11', 'reconfirmation.night']]);
+    const night = { kind: 'reconfirmation', record: { kind: 'night', at: noon }, dueBy: '2027-10-11' } as const;
+    // Advertising is due by 2028-10-11 and listed from 2028-09-11 KST; the
+    // second night one is due the same day and listed from 2028-10-01 KST.
+    expect(listed('2028-09-10T15:00:00Z', [night])).toEqual([
+      ['reconfirmation', 'advertising', '2028-10-11', 'reconfirmation.advertising'],
+    ]);
+    expect(listed('2028-09-30T15:00:00Z', [night])).toEqual([
+      ['reconfirmation', 'advertising', '2028-10-11', 'reconfirmation.advertising'],
+      ['reconfirmation', 'night', '2028-10-11', 'reconfirmation.night'],
+    ]);
+    const [advertisingNotice, nightNotice] = listNotificationNotices(records, [night], '2028-09-30T15:00:00Z', policy);
+    expect(advertisingNotice && notificationNoticePushFrom(advertisingNotice, policy)).toBe('2028-09-27');
+    // A rule without pushLeadDays is never pushed, only listed.
+    expect(nightNotice && notificationNoticePushFrom(nightNotice, policy)).toBeUndefined();
+    expect(notificationNoticePushFrom({ ...night, kind: 'consent-result' }, policy)).toBeUndefined();
+    // The Korean policy pushes both kinds seven days before their due date.
+    expect(notificationNoticePushFrom(night)).toBe('2027-10-04');
+    expect(notificationNoticePushFrom({ ...night, kind: 'consent-result' })).toBe('2027-10-04');
+    // Overdue: the advertising rule pauses; the night rule continues but is still reported.
+    expect(notificationOverdueConsentRefreshes(records, [night], '2028-10-11T15:00:00Z', policy.refresh))
+      .toEqual(['advertising', 'night']);
+    expect(notificationOverdueConsentRefreshes(records, [night], '2028-10-11T14:59:59Z', policy.refresh))
+      .toEqual([]);
+    expect(notificationOverdueConsentRefreshes(records, [], '2040-01-01T00:00:00Z', {})).toEqual([]);
+    // A withdrawal ends the series: nothing is overdue or listed.
+    const withdrawn = [...records, record('advertising', 'withdrawn', { at: '2027-01-01T03:00:00Z' })];
+    expect(notificationOverdueConsentRefreshes(withdrawn, [night], '2030-01-01T03:00:00Z', policy.refresh))
+      .toEqual(['night']);
   });
 
   it('lists each notice with its copy variant, and a withdrawal that follows no consent as a refusal', () => {

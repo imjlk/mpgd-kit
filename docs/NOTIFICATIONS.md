@@ -235,6 +235,17 @@ brackets as the sender. The notice must name the same sender as
 one, change every `notices.copy` variant too. The settings screen also shows the notices the server lists and
 records them as given in the game, for players who are not reachable by push.
 
+**Overdue re-confirmations pause advertising.** Once a re-confirmation is
+past its due date and nobody recorded it (the push did not reach the
+player, and the game did not show it), the server stops advertising to that
+player: an advertising send answers `suppressed: reconfirmation-overdue`.
+Other sends go on. Showing the listed notice at the next launch and
+recording it (`notices.recordShown`), or a new advertising consent, resumes
+advertising at once. An overdue night re-confirmation stops only night-time
+advertising: the player is treated as having no night consent until it is
+recorded. This applies to every existing `kr` deployment: show the listed
+notices where the player will see them, such as on launch.
+
 **Which topics are advertising** is your decision, ideally with legal review.
 KISA's guide counts as advertising anything sent for the sender's economic
 benefit, including benefits handed out unasked, periodic use reminders,
@@ -243,6 +254,38 @@ requested, or that a contract or transaction obliges you to send, is not.
 The guide has no example about games: treating a message about another
 player's action (a friend's challenge) as `service` is the kit's reading of
 those exceptions, not the guide's.
+
+## Consent refresh outside Korea {#consent-refresh}
+
+A fixed periodic re-confirmation is a Korean rule. Outside `kr` nothing is
+re-confirmed unless `notifications/deployment.json` sets `consentRefresh`,
+per consent kind
+([RFC](specs/notifications/notifications-v2-rfc.md#consent-refresh)):
+
+```jsonc
+{
+  "advertisingRules": "none",
+  "consentRefresh": {
+    // Re-confirm advertising consent every 24 months: listed in the game 30
+    // days ahead, pushed 7 days ahead, and paused once overdue.
+    "advertising": { "intervalMonths": 24, "noticeLeadDays": 30, "pushLeadDays": 7, "onOverdue": "pause" }
+  }
+}
+```
+
+- Leave `pushLeadDays` out to list the notice in the game only.
+- `onOverdue: "continue"` keeps sending after the due date.
+- The server owes only the re-confirmations, so the catalog needs its
+  `notices` block, and `notices.copy` needs only the `reconfirmation.*`
+  texts of the kinds you refresh.
+- Under `kr` the Korean rules fix the refresh, and `consentRefresh` is
+  refused.
+
+This is guidance, not legal advice. Among the regimes checked (2026-11-01),
+the EDPB recommends refreshing consent at appropriate intervals as a best
+practice without setting a time limit (Guidelines 05/2020 on consent, paras
+110–111), and no fixed re-confirmation interval was found in the US
+CAN-SPAM Act or TCPA rules, or in Japan's 特定電子メール法.
 
 ## The starter topics
 

@@ -1,3 +1,4 @@
+import { mountStarterLaunchNotices } from '../platform/launchNoticesBanner';
 import {
   starterNotificationLabelsFor,
   type StarterNotificationSettings,
@@ -5,6 +6,7 @@ import {
 } from '../platform/notificationSettings';
 import {
   createStarterNotificationSettingsModel,
+  showStarterLaunchNotices,
   subscribeStarterNotificationOpens,
 } from '../platform/notifications';
 import type { StarterContext } from '../runtime/gameContext';
@@ -15,7 +17,8 @@ import type { StarterContext } from '../runtime/gameContext';
  * the advertising and night consent (`notificationSettings.ts` holds the
  * logic). Every change is a tap; no switch starts on. A notification open
  * whose route is the settings screen (the advertising opt-out action, a
- * consent notice) opens the panel too. Returns the disposer.
+ * consent notice) opens the panel too, and the listed consent notices show
+ * once per launch (`showStarterLaunchNotices`). Returns the disposer.
  */
 export function mountNotificationSettingsPanel(mount: HTMLElement, context: StarterContext): () => void {
   if (context.platform.notificationsV2 === undefined) {
@@ -192,8 +195,27 @@ export function mountNotificationSettingsPanel(mount: HTMLElement, context: Star
     mount.style.position = 'relative';
   }
   mount.append(openButton, panel);
+  // Once per launch, the listed consent notices in a box that does not pause
+  // the game, each recorded as given once the player can see it: an overdue
+  // re-confirmation pauses advertising under the Korean rules until the game
+  // records it.
+  const lifetime = new AbortController();
+  let disposeLaunchNotices: (() => void) | undefined;
+  void showStarterLaunchNotices(context.platform, {
+    locale: context.locale,
+    signal: lifetime.signal,
+    show: (notices, seen) => {
+      if (lifetime.signal.aborted) {
+        return false;
+      }
+      disposeLaunchNotices = mountStarterLaunchNotices(notices, context.locale, { onSeen: seen });
+      return true;
+    },
+  });
   return () => {
+    lifetime.abort();
     unsubscribe();
+    disposeLaunchNotices?.();
     openButton.remove();
     panel.remove();
   };

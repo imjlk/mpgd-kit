@@ -14,6 +14,8 @@ import { resolveStarterServerSession } from './serverSession';
 import { routeNotificationOpens, type NotificationOpenRoutes } from './notificationOpens';
 import {
   createStarterNotificationSettings,
+  readStarterLaunchNotices,
+  type StarterLaunchNotices,
   type StarterNotificationSettings,
 } from './notificationSettings';
 
@@ -177,6 +179,95 @@ export function createStarterNotificationSettingsModel(
       : { requestLogin: () => requestUpgrade({ reason: 'notifications' }) }),
     locale: input.locale,
   });
+}
+
+/** Gateways whose launch notices were read this launch. */
+const launchNoticesRead = new WeakSet<TargetConfiguredGateway>();
+
+/**
+ * Shows the consent notices the server lists, once per launch: once the
+ * runtime has started (or its start has taken 10 seconds), it reads the
+ * listed notices and, when there is one, calls `show` with them in the
+ * player's language, overdue ones first. `show` mounts them and calls
+ * `seen(index)` for each one the player can see; only those are recorded as
+ * given. Under the Korean rules advertising pauses while a re-confirmation
+ * is overdue, until the game records it, so a player who never opens the
+ * settings screen still ends the pause at the next launch.
+ *
+ * - **Signed out at launch.** With a server session whose player is not
+ *   signed in yet, it reads once a session becomes current
+ *   (`onAuthenticated`), while `signal` is not aborted.
+ * - **Never in the way.** It runs in the background: it never blocks the
+ *   game or throws. A target without notifications or a game without a
+ *   backend shows nothing. When `show` answers `false` (the game went away),
+ *   nothing is recorded, and a later call in this process reads again.
+ */
+export function showStarterLaunchNotices(
+  platform: TargetConfiguredGateway,
+  input: {
+    readonly locale: string;
+    readonly show: (
+      notices: StarterLaunchNotices['notices'],
+      seen: (index: number) => void,
+    ) => boolean;
+    /** Aborted when the game goes away: a pending sign-in read is dropped. */
+    readonly signal?: AbortSignal;
+  },
+): Promise<void> {
+  if (launchNoticesRead.has(platform) || input.signal?.aborted === true) {
+    return Promise.resolve();
+  }
+  const backend = starterNotificationBackend(platform);
+  if (backend === undefined) {
+    return Promise.resolve();
+  }
+  launchNoticesRead.add(platform);
+  const session = hostedBackendFor(platform) ? undefined : resolveStarterServerSession();
+  if (session !== undefined && session.current() === undefined) {
+    // Signed out at launch: read once a player signs in, while the game runs.
+    launchNoticesRead.delete(platform);
+    let stop: (() => void) | undefined;
+    const retry = (): void => {
+      stop?.();
+      input.signal?.removeEventListener('abort', cancel);
+      void showStarterLaunchNotices(platform, input);
+    };
+    const cancel = (): void => stop?.();
+    stop = session.onAuthenticated(retry);
+    input.signal?.addEventListener('abort', cancel, { once: true });
+    return Promise.resolve();
+  }
+  return (async () => {
+    const launch = await readStarterLaunchNotices({
+      runtime: backend.runtime,
+      provider: platform.notificationsV2,
+      ...(backend.started === undefined ? {} : { started: backend.started }),
+      ...(starterNotificationCatalog.notices === undefined
+        ? {}
+        : { noticeCopy: starterNotificationCatalog.notices.copy }),
+      defaultLocale: starterNotificationCatalog.defaultLocale,
+      locale: input.locale,
+    });
+    if (launch === undefined) {
+      return;
+    }
+    const shown = input.signal?.aborted !== true
+      && input.show(launch.notices, (index) => {
+        void launch.record([index]);
+      });
+    if (!shown) {
+      // Not on screen: nothing was given, so a later mount may read again.
+      launchNoticesRead.delete(platform);
+    }
+  })().catch((error: unknown) => {
+    console.warn('[notifications] the launch notices could not be shown.', error);
+  });
+}
+
+/** Whether this gateway's notifications run over a hosted backend (Devvit), which needs no game session. */
+function hostedBackendFor(platform: TargetConfiguredGateway): boolean {
+  return platform.notificationsV2 !== undefined
+    && resolveStarterHostedNotificationBackend(platform.configTarget) !== undefined;
 }
 
 /**

@@ -9,7 +9,9 @@ import { bridgedD1Database, d1BridgeScript } from './testing/d1Bridge.js';
 import {
   asWorkerNotificationRpcResult,
   deliverWorkerNotificationBulk,
+  workerNotificationBulkBatchQueryReserve,
   workerNotificationBulkLimits,
+  workerNotificationBulkQueryBudget,
 } from './notificationsHandler.js';
 
 // A bulk send of 2,500 Apps in Toss recipients through the Worker on local D1
@@ -341,6 +343,186 @@ try {
       assert.equal(
         queued?.send.rows.filter((row) => row.state.status === 'in-flight').length,
         devices - fcmSends.length,
+      );
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  }
+  // CR1: an FCM advertising bulk under the Korean rules, whose refresh pauses
+  // advertising once a re-confirmation is overdue. Every player consented
+  // 25 months ago, so each check also reads the notices given; half recorded
+  // the re-confirmation and are sent, half did not and are paused. The extra
+  // reads share the call's batches.
+  {
+    setClock('2030-01-15T03:00:00.000Z');
+    const keys = await crypto.subtle.generateKey(
+      {
+        name: 'RSASSA-PKCS1-v1_5',
+        modulusLength: 2048,
+        publicExponent: new Uint8Array([1, 0, 1]),
+        hash: 'SHA-256',
+      },
+      true,
+      ['sign', 'verify'],
+    );
+    const pkcs8 = new Uint8Array(await crypto.subtle.exportKey('pkcs8', keys.privateKey));
+    const label = ['PRIVATE', 'KEY'].join(' ');
+    let fcmSends = 0;
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url === 'https://oauth2.googleapis.com/token') {
+        return Response.json({ access_token: 'bulk-test-token', expires_in: 3600 });
+      }
+      if (url === 'https://fcm.googleapis.com/v1/projects/mpgd-bulk-test/messages:send') {
+        fcmSends += 1;
+        return Response.json({ name: `projects/mpgd-bulk-test/messages/${fcmSends}` });
+      }
+      return realFetch(input, init);
+    }) as typeof fetch;
+    try {
+      const noticeText = (title: string) => ({
+        title: `[Game] ${title}`,
+        body: '{{consentDate}} 안내',
+      });
+      const advertisingEnv = {
+        MPGD_STORE: 'd1',
+        DB: counted.db,
+        GAME_SERVICES_ACCOUNT_DELETION_TOMBSTONE_KEY: 'k'.repeat(48),
+        FCM_SERVICE_ACCOUNT: JSON.stringify({
+          type: 'service_account',
+          project_id: 'mpgd-bulk-test',
+          private_key_id: 'bulk-test-key',
+          private_key: `-----BEGIN ${label}-----\n${btoa(String.fromCharCode(...pkcs8))}\n-----END ${label}-----\n`,
+          client_email: 'sender@mpgd-bulk-test.iam.gserviceaccount.com',
+        }),
+        MPGD_NOTIFICATIONS_DEPLOYMENT: JSON.stringify({
+          advertisingRules: 'kr',
+          advertisingSender: { name: 'Game', contact: '080-1234-5678' },
+        }),
+        MPGD_NOTIFICATIONS_CATALOG: {
+          version: '2026-11-01',
+          defaultLocale: 'ko',
+          notices: {
+            topic: 'consent-notice',
+            copy: {
+              ko: {
+                'consent-result.advertising.granted': noticeText('동의 결과'),
+                'consent-result.advertising.withdrawn': noticeText('철회 결과'),
+                'consent-result.night.granted': noticeText('야간 동의 결과'),
+                'consent-result.night.withdrawn': noticeText('야간 철회 결과'),
+                'reconfirmation.advertising': noticeText('동의 확인'),
+                'reconfirmation.night': noticeText('야간 동의 확인'),
+              },
+            },
+          },
+          topics: [
+            {
+              id: 'events',
+              purpose: 'advertising',
+              channels: ['remote'],
+              route: '/?entry=events',
+              optOutRoute: '/?entry=notification-settings',
+              copy: { ko: { title: '이벤트', body: '새 이벤트가 시작됐어요.' } },
+              targets: { ios: {} },
+            },
+            {
+              id: 'consent-notice',
+              purpose: 'service',
+              channels: ['remote'],
+              route: '/?entry=notification-settings',
+              targets: { ios: {} },
+            },
+          ],
+        },
+      } satisfies GameServicesWorkerEnv;
+      const setup = createD1NotificationStore(raw);
+      /**
+       * One advertising bulk to 2,500 players, half of whom are sent. The
+       * baseline's consents are recent, so no check reads the notices given,
+       * and its other half never consented; the paused run's consents are 25
+       * months old, so every check reads the notices given, and its other
+       * half did not record the re-confirmation.
+       */
+      const advertisingRun = async (name: string, overdue: boolean) => {
+        const players = audience(name);
+        for (const [index, { player }] of players.entries()) {
+          await setup.putEndpoint({
+            provider: 'fcm',
+            installationId: `install-${player}`,
+            player,
+            address: { kind: 'fcm-token', value: `token-${player}` },
+            permission: 'granted',
+            target: 'ios',
+            sessionId: `session-${player}`,
+            lastRegisteredAt: new Date().toISOString(),
+          });
+          const sent = index % 2 === 0;
+          if (!overdue && !sent) {
+            continue;
+          }
+          const record = await setup.appendConsent({
+            player,
+            record: { kind: 'advertising', state: 'granted', source: 'player', textVersion: '1' },
+            at: overdue ? '2027-12-01T03:00:00.000Z' : '2029-12-01T03:00:00.000Z',
+          });
+          if (overdue && sent) {
+            // Due by 2029-11-30; recorded in the game.
+            await setup.addNoticeGiven({
+              kind: 'reconfirmation',
+              record: { kind: 'advertising', at: record.at },
+              dueBy: '2029-11-30',
+              player,
+              channel: 'in-game',
+              at: '2029-11-20T03:00:00.000Z',
+            });
+          }
+        }
+        fcmSends = 0;
+        counted.reset();
+        const answer = await asWorkerNotificationRpcResult(() =>
+          deliverWorkerNotificationBulk(advertisingEnv, {
+            idempotencyKey: `event-${name}`,
+            provider: 'fcm',
+            topic: 'events',
+            recipients: players,
+          }),
+        );
+        assert.ok(answer.ok, JSON.stringify(answer));
+        const measured = counted.snapshot();
+        console.info(`event-${name}:`, measured, answer.value.summary, { sent: fcmSends });
+        // Even indexes are sent: half, rounded up for an odd count.
+        const sentCount = Math.ceil(recipientsPerCall / 2);
+        assert.equal(answer.value.summary.delivered, sentCount);
+        assert.equal(answer.value.summary.suppressed, recipientsPerCall - sentCount);
+        assert.equal(fcmSends, sentCount);
+        const reasons = new Set(
+          answer.value.recipients.flatMap((recipient) =>
+            recipient.status === 'answered' && recipient.outcome.status === 'suppressed'
+              ? [recipient.outcome.reason]
+              : [],
+          ),
+        );
+        assert.deepEqual(
+          [...reasons],
+          [overdue ? 'reconfirmation-overdue' : 'advertising-consent-missing'],
+        );
+        return measured.queries;
+      };
+      const baseline = await advertisingRun('advertising-fresh', false);
+      const paused = await advertisingRun('advertising-overdue', true);
+      // The notices-given reads share the call's batches: the paused run stays
+      // within the budget less the reserve for a batch in flight (600 of
+      // D1's 1,000), and close to the baseline. One device per player sends
+      // through FCM one by one, so these calls cost more than an Apps in
+      // Toss bulk call, which cannot carry advertising.
+      assert.ok(
+        paused <= workerNotificationBulkQueryBudget - workerNotificationBulkBatchQueryReserve,
+        `${paused} D1 queries for ${recipientsPerCall} advertising recipients under kr`,
+      );
+      assert.ok(
+        paused <= baseline + Math.ceil(baseline / 5),
+        `${paused} D1 queries with the notices-given reads, ${baseline} without`,
       );
     } finally {
       globalThis.fetch = realFetch;

@@ -1,0 +1,5 @@
+---
+npm/@mpgd/cli: minor (Added)
+---
+
+A game created with `--providers notifications` shows the consent notices the server lists once per launch. After the notifications runtime starts (10 seconds at most), `showStarterLaunchNotices` reads the listed notices and shows them, overdue ones first, in a small box at the top that never pauses the game (`src/platform/launchNoticesBanner.ts`), and records each one as given once the player can see it, on screen while the page is visible. A player who signs in after launch gets the read when the session becomes current. The Phaser template calls it from `createGame` (`showNotificationLaunchNotices`), and the lite panel calls it when it mounts. Under the Korean rules advertising to a player now pauses while a re-confirmation is past its due date and unrecorded, so this is how a player who never opens the settings screen ends the pause. `StarterNotificationBackend` carries `started`, which settles once the runtime has started, and `readStarterLaunchNotices` and `createStarterNoticeVisibility` hold the shared logic.

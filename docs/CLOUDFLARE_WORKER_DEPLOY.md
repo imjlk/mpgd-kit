@@ -610,7 +610,12 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
     Measured on local D1 with account-deletion tombstones bound, 2,500 Apps
     in Toss recipients took 96 D1 queries in one `send-bulk-message` call,
     5 for the same call retried, and 96 inside the hold window, one
-    `send-message` call each (before this, 45 recipients took 856). A batch
+    `send-message` call each (before this, 45 recipients took 856). An FCM
+    advertising call to 2,500 players, one device each and half of them
+    sent, took 475 queries; under the Korean rules, where an overdue
+    re-confirmation pauses advertising, the same call to players whose
+    re-confirmation came due reads each one's notices given in the same
+    batches and took 500. A batch
     of a call, or a round of its players' further FCM devices, starts only
     while 300 of the call's 900 queries are left; devices left over stay
     queued for the scheduler.
