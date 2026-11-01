@@ -1,5 +1,11 @@
 # @mpgd/target-config
 
+## 0.24.9 — 2026-11-01
+
+### Patch changes
+
+- Updated dependencies: @mpgd/catalog@0.15.2, @mpgd/i18n@0.6.31, @mpgd/platform@0.36.0
+
 ## 0.24.8 — 2026-11-01
 
 ### Patch changes

@@ -1,5 +1,14 @@
 # @mpgd/platform
 
+## 0.36.0 — 2026-11-01
+
+### Added
+
+- [f005417e](https://github.com/imjlk/mpgd-kit/commit/f005417e35f9032216aa3b8b8b3debf1eb82a82c) Three conformance vectors join the notifications contract that providers run with `@mpgd/platform/notifications-conformance`: `endpoint-registration-refresh` (a read more than 7 days after the last acknowledged registration sends it again, so a device in use stays reachable past the 60-day stale rule), `endpoint-unbind-until-register` (`unregister()` cancels the pending local reminders and the installation stays unbound across a restart and a read until `register()`), and `duplicate-topics-once` (a topic listed twice in one call is asked and recorded once). A provider that runs every vector now runs 53.
+  
+  The notifications runtime (`@mpgd/platform/notifications-runtime`) asks the backend for the player's consent records less often: `getPermission` reuses its own read for the local reminder sweep after it, unless the runtime recorded something since, so it lists the records at most twice instead of three times. Writing records still lists them afresh, so another device's record is never hidden from the write. When the host fails a batch `cancelLocal`, the runtime cancels each key alone, so one reminder the host cannot cancel no longer keeps the others pending; if the first single-key call fails too, the host is taken to be failing every call and the rest are not tried. A batch failure whose keys all cancel alone is reported through `onError` and the next `runUntilIdle`, and the sweep succeeds. When the backend's records cannot be read during a local reminder sweep, the reminders whose permission the host reports as not granted are still cancelled, and the read's error is thrown after. — Thanks @imjlk!
+- [370cc1b1](https://github.com/imjlk/mpgd-kit/commit/370cc1b18ac7204dc915baff9a6456ecfe67d889) The notifications policy gate takes the copy a server-side resolver chose for a recipient (`resolvedCopy`, a `NotificationResolvedCopy`). Where the content comes from copy (neither a mapping's own title and body nor a host template, as the new `notificationContentSource` reports), `{ copy }` is rendered as catalog copy is, placeholders and the Korean advertising rendering included, and `{}` answers the new `unavailable: copy-missing` reason (gate step 9), so a send is never made with empty text. Without `resolvedCopy` the gate behaves as before. `notificationNoticeTextIssues` checks one notice text by the `notices.copy` rules. The conformance vector schema lists `copy-missing`; a consumer that validates delivery outcomes against a closed reason list should accept it. — Thanks @imjlk!
+
 ## 0.35.1 — 2026-11-01
 
 ### Fixed
