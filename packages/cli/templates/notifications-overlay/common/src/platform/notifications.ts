@@ -14,6 +14,8 @@ import { resolveStarterServerSession } from './serverSession';
 import { routeNotificationOpens, type NotificationOpenRoutes } from './notificationOpens';
 import {
   createStarterNotificationSettings,
+  readStarterLaunchNotices,
+  type StarterLaunchNotices,
   type StarterNotificationSettings,
 } from './notificationSettings';
 
@@ -176,6 +178,56 @@ export function createStarterNotificationSettingsModel(
       ? {}
       : { requestLogin: () => requestUpgrade({ reason: 'notifications' }) }),
     locale: input.locale,
+  });
+}
+
+/** Gateways whose launch notices were read this launch. */
+const launchNoticesRead = new WeakSet<TargetConfiguredGateway>();
+
+/**
+ * Shows the consent notices the server lists, once per launch: once the
+ * runtime has started (the game needs its server session first), it reads
+ * the listed notices and, when there is one, calls `show` with them in the
+ * player's language, overdue ones first, then records them as given. Under
+ * the Korean rules advertising pauses while a re-confirmation is overdue,
+ * until the game records it, so a player who never opens the settings screen
+ * still ends the pause at the next launch. It runs in the background: it
+ * never blocks the game or throws, and a target without notifications or a
+ * game without a backend shows nothing.
+ */
+export function showStarterLaunchNotices(
+  platform: TargetConfiguredGateway,
+  input: {
+    readonly locale: string;
+    readonly show: (notices: StarterLaunchNotices['notices']) => void;
+  },
+): Promise<void> {
+  if (launchNoticesRead.has(platform)) {
+    return Promise.resolve();
+  }
+  const backend = starterNotificationBackend(platform);
+  if (backend === undefined) {
+    return Promise.resolve();
+  }
+  launchNoticesRead.add(platform);
+  return (async () => {
+    const launch = await readStarterLaunchNotices({
+      runtime: backend.runtime,
+      provider: platform.notificationsV2,
+      ...(backend.started === undefined ? {} : { started: backend.started }),
+      ...(starterNotificationCatalog.notices === undefined
+        ? {}
+        : { noticeCopy: starterNotificationCatalog.notices.copy }),
+      defaultLocale: starterNotificationCatalog.defaultLocale,
+      locale: input.locale,
+    });
+    if (launch === undefined) {
+      return;
+    }
+    input.show(launch.notices);
+    await launch.record();
+  })().catch((error: unknown) => {
+    console.warn('[notifications] the launch notices could not be shown.', error);
   });
 }
 

@@ -156,6 +156,7 @@ function harness(options: {
   readonly topics?: readonly NotificationTopicDeclaration[];
   readonly deployment?: NotificationDeployment;
   readonly notices?: boolean;
+  readonly noticeCopy?: NotificationNoticeCopy;
   readonly answers?: NotificationRemoteDeliveryAnswer[];
   readonly fcmEntry?: NotificationDeliveryProviderEntry;
   readonly extra?: readonly NotificationProviderRegistration[];
@@ -180,7 +181,9 @@ function harness(options: {
     ]),
     catalog: {
       defaultLocale: 'ko',
-      ...(options.notices === true ? { notices: { topic: noticeTopic.id, copy: noticeCopy } } : {}),
+      ...(options.notices === true
+        ? { notices: { topic: noticeTopic.id, copy: options.noticeCopy ?? noticeCopy } }
+        : {}),
       topicsFor: () => topics,
     },
     ...(options.deployment === undefined ? {} : { deployment: options.deployment }),
@@ -2603,7 +2606,27 @@ const pending = (h: Harness) =>
       advertising: { intervalMonths: 12, noticeLeadDays: 30, pushLeadDays: 3, onOverdue: 'pause' },
     },
   };
-  const h = harness({ topics: [weekend, noticeTopic], deployment: yearly, notices: true });
+  // Its notices.copy needs only the re-confirmation text: no result notice is given.
+  const reconfirmationOnly = {
+    ko: { 'reconfirmation.advertising': noticeCopy['ko']?.['reconfirmation.advertising'] },
+  } as unknown as NotificationNoticeCopy;
+  assert.throws(
+    () =>
+      harness({
+        topics: [weekend, noticeTopic],
+        deployment: kr,
+        notices: true,
+        noticeCopy: reconfirmationOnly,
+      }),
+    /consent-result\.advertising\.granted/u,
+    'kr still needs every result text',
+  );
+  const h = harness({
+    topics: [weekend, noticeTopic],
+    deployment: yearly,
+    notices: true,
+    noticeCopy: reconfirmationOnly,
+  });
   await register(h, 'p-1');
   await h.service.recordConsent(session('p-1'), {
     kind: 'advertising',

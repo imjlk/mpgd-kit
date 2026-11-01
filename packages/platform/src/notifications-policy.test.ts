@@ -40,6 +40,7 @@ import {
   notificationReconfirmationDueBy,
   notificationReconfirmationListDays,
   notificationRegistryMismatch,
+  notificationRequiredNoticeVariants,
   notificationReservedKeyPrefix,
   notificationSendFingerprint,
   notificationTemplateDataIssue,
@@ -1316,6 +1317,33 @@ describe('notification consent notices', () => {
       'refresh.advertising.pushLeadDays',
       'refresh.advertising.noticeLeadDays',
     ]);
+  });
+
+  it("requires only the variants a deployment's notices are given in", () => {
+    const everyButRefusals = notificationNoticeVariants.filter((variant) => !variant.endsWith('.refused'));
+    expect(notificationRequiredNoticeVariants(kr)).toEqual(everyButRefusals);
+    expect(notificationRequiredNoticeVariants(undefined)).toEqual(everyButRefusals);
+    expect(notificationRequiredNoticeVariants({ advertisingRules: 'none' })).toEqual(everyButRefusals);
+    const refresh = { intervalMonths: 24, noticeLeadDays: 30, onOverdue: 'pause' } as const;
+    expect(notificationRequiredNoticeVariants({ advertisingRules: 'none', consentRefresh: { advertising: refresh } }))
+      .toEqual(['reconfirmation.advertising']);
+    expect(notificationRequiredNoticeVariants({ consentRefresh: { advertising: refresh, night: refresh } }))
+      .toEqual(['reconfirmation.advertising', 'reconfirmation.night']);
+    // Under kr the rules fix the refresh: every variant, without throwing.
+    expect(notificationRequiredNoticeVariants({ ...kr, consentRefresh: { advertising: refresh } }))
+      .toEqual(everyButRefusals);
+    const text = { title: '광고 수신 동의 확인', body: '{{consentDate}}에 동의하셨어요.' };
+    const onlyReconfirmation = { ko: { 'reconfirmation.advertising': text } };
+    expect(notificationNoticeCopyIssues(onlyReconfirmation, 'ko', 'notices.copy', ['reconfirmation.advertising']))
+      .toEqual([]);
+    expect(notificationNoticeCopyIssues(onlyReconfirmation, 'ko').length).toBeGreaterThan(0);
+    // A variant that is not required is still checked when present.
+    expect(notificationNoticeCopyIssues(
+      { ko: { 'reconfirmation.advertising': text, 'consent-result.advertising.granted': { title: 't', body: 'b' } } },
+      'ko',
+      'notices.copy',
+      ['reconfirmation.advertising'],
+    ).map((issue) => issue.path)).toEqual(['notices.copy["ko"]["consent-result.advertising.granted"]']);
   });
 
   it('lists and pushes only re-confirmations under a consent refresh of its own', () => {

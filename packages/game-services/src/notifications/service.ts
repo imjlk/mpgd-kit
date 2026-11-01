@@ -23,6 +23,7 @@ import {
   notificationOverdueConsentRefreshes,
   notificationProviderCarriesNotices,
   notificationRefreshedConsentKinds,
+  notificationRequiredNoticeVariants,
   notificationReservedKeyPrefix,
   notificationSendFingerprint,
   notificationShellRenderedAdvertisingTargets,
@@ -568,7 +569,13 @@ export function createNotificationService(input: CreateNotificationServiceInput)
   const customCopy = input.resolveCopy !== undefined;
   const noticeTopic = catalog.notices?.topic;
   if (catalog.notices !== undefined) {
-    const issues = notificationNoticeCopyIssues(catalog.notices.copy, catalog.defaultLocale);
+    // Only the variants the deployment's notices are given in.
+    const issues = notificationNoticeCopyIssues(
+      catalog.notices.copy,
+      catalog.defaultLocale,
+      'notices.copy',
+      notificationRequiredNoticeVariants(deployment),
+    );
     if (typeof noticeTopic !== 'string' || noticeTopic.length === 0 || issues.length > 0) {
       throw new TypeError(
         `The catalog's notices block needs its topic and copy by the catalog rules: ${issues

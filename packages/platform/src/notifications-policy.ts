@@ -2314,6 +2314,13 @@ export const notificationNoticeVariantFallbacks: Readonly<
   'consent-result.night.refused': 'consent-result.night.withdrawn',
 });
 
+/** Every notice variant but a refusal, which falls back to the withdrawal's text. */
+const everyRequiredNoticeVariant: readonly NotificationNoticeVariant[] = Object.freeze(
+  notificationNoticeVariants.filter(
+    (variant) => notificationNoticeVariantFallbacks[variant] === undefined,
+  ),
+);
+
 /**
  * One locale of `notices.copy`: a title and a body for each notice variant.
  * A refusal's text is optional; without it a refusal is given in the
@@ -2362,8 +2369,10 @@ function isPlainObject(value: unknown): value is Readonly<Record<string, unknown
  *
  * - an object of locales that includes `defaultLocale`, matched without
  *   regard to case;
- * - per locale, a title and a body for each notice variant, a refusal's
- *   optional (`notificationNoticeVariantFallbacks`), and no other key;
+ * - per locale, a title and a body for each variant in `required` (by
+ *   default every notice variant but a refusal, which has a fallback in
+ *   `notificationNoticeVariantFallbacks`; `notificationRequiredNoticeVariants`
+ *   gives a deployment's), any other variant optional, and no other key;
  * - each title and body a string that is not blank, with no placeholder but
  *   `{{consentDate}}` and no brace outside one; and `{{consentDate}}` in the
  *   title or the body, because a notice states the date of the act it
@@ -2373,6 +2382,7 @@ export function notificationNoticeCopyIssues(
   copy: unknown,
   defaultLocale: string,
   path = 'notices.copy',
+  required: readonly NotificationNoticeVariant[] = everyRequiredNoticeVariant,
 ): NotificationTopicIssue[] {
   if (copy === undefined) {
     return [{
@@ -2401,8 +2411,8 @@ export function notificationNoticeCopyIssues(
       });
       continue;
     }
-    for (const variant of notificationNoticeVariants) {
-      if (texts[variant] === undefined && notificationNoticeVariantFallbacks[variant] === undefined) {
+    for (const variant of required) {
+      if (texts[variant] === undefined) {
         issues.push({
           path: `${at}[${JSON.stringify(variant)}]`,
           message: `every locale needs a title and a body for each notice variant; ${locale} lacks ${variant}`,
@@ -2901,6 +2911,29 @@ export function resolveNotificationNoticePolicy(
   return notificationRefreshedConsentKinds.some((kind) => refresh[kind] !== undefined)
     ? { consentResults: false, refresh }
     : undefined;
+}
+
+/**
+ * The variants `notices.copy` must give for a deployment
+ * (`notificationNoticeCopyIssues`): under `kr`, and wherever no consent
+ * refresh of its own applies, every variant but a refusal; with a
+ * `consentRefresh` outside `kr`, only the re-confirmation of each kind it
+ * refreshes, the only notices that policy lists. Unlike
+ * `resolveNotificationConsentRefresh` it never throws: a `consentRefresh`
+ * under `kr` is reported where the deployment is checked.
+ */
+export function notificationRequiredNoticeVariants(
+  deployment: Pick<NotificationDeployment, 'advertisingRules' | 'consentRefresh'> | undefined,
+): readonly NotificationNoticeVariant[] {
+  if (deployment?.advertisingRules === 'kr') {
+    return everyRequiredNoticeVariant;
+  }
+  const kinds = notificationRefreshedConsentKinds.filter(
+    (kind) => deployment?.consentRefresh?.[kind] !== undefined,
+  );
+  return kinds.length === 0
+    ? everyRequiredNoticeVariant
+    : kinds.map((kind): NotificationNoticeVariant => `reconfirmation.${kind}`);
 }
 
 /**

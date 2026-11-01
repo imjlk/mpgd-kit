@@ -86,6 +86,7 @@ for (const added of [
   'src/platform/capacitorNotifications.ts',
   'src/platform/notificationSettings.ts',
   'src/platform/notificationOpens.ts',
+  'src/platform/launchNoticesBanner.ts',
   'src/scenes/NotificationSettingsScene.ts',
   'tools/validate-notifications.ts',
 ]) {
@@ -139,6 +140,15 @@ assert.match(
   byPath(phaser, 'src/runtime/createGame.ts'),
   /routeNotificationSettingsOpens\(game, input\.context\);/u,
 );
+// The listed consent notices show once per launch (an overdue re-confirmation pauses advertising under kr).
+assert.match(
+  byPath(phaser, 'src/runtime/createGame.ts'),
+  /showNotificationLaunchNotices\(game, input\.context\);/u,
+);
+assert.match(
+  byPath(phaser, 'src/scenes/NotificationSettingsScene.ts'),
+  /showStarterLaunchNotices\(context\.platform/u,
+);
 assert.match(
   byPath(phaser, 'src/scenes/LobbyScene.ts'),
   /context\.platform\.notificationsV2 === undefined/u,
@@ -190,6 +200,11 @@ assert.equal(
 const liteGame = byPath(lite, 'src/runtime/createGame.ts');
 assert.match(liteGame, /mountNotificationSettingsPanel\(mount, input\.context\)/u);
 assert.match(liteGame, /disposeNotificationSettings\(\);/u);
+assert.match(
+  byPath(lite, 'src/lite/notificationSettingsPanel.ts'),
+  /showStarterLaunchNotices\(context\.platform/u,
+);
+byPath(lite, 'src/platform/launchNoticesBanner.ts');
 
 // A template whose anchor moved fails loudly instead of generating a half-wired game.
 assert.throws(

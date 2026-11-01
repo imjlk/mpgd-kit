@@ -17,6 +17,7 @@ import {
   notificationNoticePushFrom,
   notificationNoticeTopic,
   notificationProviderCarriesNotices,
+  notificationRequiredNoticeVariants,
   notificationReservedKeyPrefix,
   notificationSendFingerprint,
   notificationTemplateDataIssue,
@@ -1050,9 +1051,15 @@ export function createNotificationConformanceBackend(
     );
   }
   // A notice says only its variant of `notices.copy`, so the copy follows the
-  // catalog's rules: every variant in every locale, and the consent date.
+  // catalog's rules: every variant the deployment's notices are given in, in
+  // every locale, and the consent date.
   if (input.notices !== undefined) {
-    const issues = notificationNoticeCopyIssues(input.notices.copy, input.defaultLocale);
+    const issues = notificationNoticeCopyIssues(
+      input.notices.copy,
+      input.defaultLocale,
+      'notices.copy',
+      notificationRequiredNoticeVariants(input.deployment),
+    );
     if (issues.length > 0) {
       throw new TypeError(
         `The catalog's notices.copy breaks the catalog rules: ${issues

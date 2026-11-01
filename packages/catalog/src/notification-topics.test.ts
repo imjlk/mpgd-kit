@@ -977,6 +977,22 @@ assert.deepEqual(
   }).map((issue) => issue.split(':')[0]),
   ['deployment.consentRefresh'],
 );
+// Outside kr a consent refresh lists re-confirmations alone, so notices.copy
+// needs only their texts; under kr every result text is still required.
+const reconfirmationCopy = {
+  ko: { 'reconfirmation.advertising': koNotices['reconfirmation.advertising'] },
+};
+const withReconfirmationCopy = {
+  ...(withNotices('consent-notice', advertisingTopic, advertisingNotice) as Record<string, unknown>),
+  notices: { topic: 'consent-notice', copy: reconfirmationCopy },
+};
+assert.deepEqual(issuesOf(withReconfirmationCopy, yearlyRefresh), []);
+assert.ok(
+  issuesOf(withReconfirmationCopy, krDeployment).some((issue) =>
+    issue.startsWith('notices.copy["ko"]["consent-result.advertising.granted"]'),
+  ),
+  'kr still requires the result notice texts',
+);
 // The refresh is checked without an advertising topic too.
 assert.deepEqual(
   issuesOf(catalogWith(baseTopic), { ...krDeployment, consentRefresh: yearlyPolicy }).map(

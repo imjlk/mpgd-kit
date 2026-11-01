@@ -140,6 +140,7 @@ export {
   notificationReconfirmationDueBy,
   notificationReconfirmationListDays,
   notificationRefreshedConsentKinds,
+  notificationRequiredNoticeVariants,
   notificationRegistryMismatch,
   notificationReservedKeyPrefix,
   notificationReservedKeyPrefixes,

@@ -732,7 +732,7 @@ function combinedState(
  */
 function renderNotices(
   listed: readonly NotificationNotice[],
-  input: StarterNotificationSettingsInput,
+  input: Pick<StarterNotificationSettingsInput, 'noticeCopy' | 'locale' | 'defaultLocale'>,
 ): readonly { readonly notice: NotificationNotice; readonly text: { readonly title: string; readonly body: string } }[] {
   const noticeCopy = input.noticeCopy;
   if (noticeCopy === undefined) {
@@ -758,4 +758,82 @@ function renderNotices(
       },
     ];
   });
+}
+
+/**
+ * The consent notices shown once at launch, so a player who never opens the
+ * settings screen still sees them: under the Korean rules advertising pauses
+ * while a re-confirmation is overdue, until the game records it (notifications
+ * RFC "Consent refresh").
+ */
+export interface StarterLaunchNotices {
+  /** In the player's language, overdue ones (past their `dueBy`) first. */
+  readonly notices: readonly { readonly title: string; readonly body: string; readonly overdue: boolean }[];
+  /** Records the notices as given in the game; call once they are on screen. Never throws. */
+  record(): Promise<void>;
+}
+
+export interface StarterLaunchNoticesInput {
+  /** The game's notifications runtime; nothing is read without one. */
+  readonly runtime: NotificationRuntime | undefined;
+  /** `gateway.notificationsV2`; nothing is read on a target without notifications. */
+  readonly provider: NotificationProvider | undefined;
+  /** Settles once the runtime has started; the notices are read after it. */
+  readonly started?: Promise<unknown>;
+  /** `notices.copy` of the catalog; without it no notice can be shown. */
+  readonly noticeCopy?: NotificationNoticeCopy;
+  readonly defaultLocale: string;
+  readonly locale: string;
+  /** The clock that says which notices are overdue; the device's by default. */
+  readonly now?: () => string;
+}
+
+/**
+ * Reads the listed notices once the runtime has started and renders them, or
+ * `undefined` when there is nothing to show (no runtime, no provider, no
+ * copy, no notice, or a read that failed, which is logged). It never
+ * throws and never prompts: the game goes on while it reads.
+ */
+export async function readStarterLaunchNotices(
+  input: StarterLaunchNoticesInput,
+): Promise<StarterLaunchNotices | undefined> {
+  const { runtime } = input;
+  if (runtime === undefined || input.provider === undefined || input.noticeCopy === undefined) {
+    return undefined;
+  }
+  try {
+    await input.started;
+    const shown = renderNotices(await runtime.notices.list(), input);
+    if (shown.length === 0) {
+      return undefined;
+    }
+    const today = toSeoulCalendarDate(input.now?.() ?? new Date().toISOString());
+    const ordered = shown
+      .map((entry) => ({ ...entry, overdue: entry.notice.dueBy < today }))
+      // Overdue first; the list's own order (by dueBy) otherwise.
+      .sort((left, right) => Number(right.overdue) - Number(left.overdue));
+    let recorded = false;
+    return {
+      notices: ordered.map(({ text, overdue }) => ({ ...text, overdue })),
+      async record() {
+        if (recorded) {
+          return;
+        }
+        recorded = true;
+        // `async` so a runtime that throws synchronously is a rejection here too.
+        const results = await Promise.allSettled(
+          ordered.map(async ({ notice }) => runtime.notices.recordShown(notice)),
+        );
+        for (const result of results) {
+          if (result.status === 'rejected') {
+            // The settings screen lists it again, and the server may push it.
+            console.warn('[notifications] a launch notice could not be recorded.', result.reason);
+          }
+        }
+      },
+    };
+  } catch (error) {
+    console.warn('[notifications] the launch notices could not be read.', error);
+    return undefined;
+  }
 }

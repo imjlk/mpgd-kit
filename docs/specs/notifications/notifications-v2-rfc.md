@@ -1365,9 +1365,10 @@ dates, as for every notice, whatever the deployment's zone.
   owes only those re-confirmations, never the result notices only the
   Korean rules require, and lists, records, pushes, and pauses them as
   under `kr`. The catalog validator then requires the `notices` block, its
-  topic mapped on every target that maps an advertising topic.
-  `notices.copy` still needs every variant, although only the
-  `reconfirmation.*` ones are given there.
+  topic mapped on every target that maps an advertising topic, and
+  `notices.copy` needs only the `reconfirmation.*` texts of the kinds it
+  refreshes (`notificationRequiredNoticeVariants`); the result texts are
+  optional there.
 - **Overdue.** A re-confirmation is overdue from the Asia/Seoul day after its
   `dueBy` while it is not recorded (`notificationOverdueConsentRefreshes`).
   Recording it moves the series to the next one, and a new consent restarts
@@ -1400,6 +1401,14 @@ dates, as for every notice, whatever the deployment's zone.
   reads them only for a send that may be advertising, under a policy that
   pauses, and only when a re-confirmation could be overdue within a day,
   once per invocation.
+- **Migration note for direct gate callers.** A backend that calls
+  `evaluateNotificationDelivery` itself under `kr` and upgrades to CR1
+  without passing `noticesGiven` pauses advertising for every player whose
+  latest advertising (or night) consent is older than 24 months. The fix is
+  one line in the gate input: `noticesGiven: await
+  store.listNoticesGiven(player)`, the notices it recorded through
+  `notices.recordShown` and delivered notice pushes. The default stays fail
+  closed. `@mpgd/game-services`' service passes them.
 - **Reminders.** A server reminder's set-time check (steps 3 to 5) does not
   apply the pause: the player may record the notice before it fires. The
   gate applies it when the reminder fires.
@@ -3360,10 +3369,16 @@ re-confirmation one preset of a general [consent refresh](#consent-refresh).
   fit.
 - The vector `advertising-reconfirmation-overdue`.
 - No migration: notices given are already stored per player.
-- **Left open.**
-  - `notices.copy` still needs the result variants under a refresh outside
-    `kr`, which never sends them.
-  - Notice dates stay Asia/Seoul dates under every policy.
+- **Migration.** A backend that calls the pure gate itself under `kr` passes
+  `noticesGiven`, or it pauses advertising for every player whose consent
+  is older than 24 months (see [Consent refresh](#consent-refresh)).
+- Under a refresh outside `kr`, `notices.copy` needs only the
+  `reconfirmation.*` texts (`notificationRequiredNoticeVariants`, the
+  `required` argument of `notificationNoticeCopyIssues`).
+- The CLI starter shows the listed notices once per launch, after the
+  runtime starts, and records them as given, so a player who never opens
+  the settings screen still ends a pause.
+- **Left open.** Notice dates stay Asia/Seoul dates under every policy.
 
 All of N1–C1 is the first release wave. Releases follow N3, S2, and C1. The
 v1 adapter and the deprecated delivery aliases go away in the major release

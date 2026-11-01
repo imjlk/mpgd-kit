@@ -6,6 +6,7 @@ import {
   notificationNoticeCopyIssues,
   notificationProviderCarriesNotices,
   notificationRefreshedConsentKinds,
+  notificationRequiredNoticeVariants,
   notificationShellRenderedAdvertisingTargets,
   notificationTopicDefinitionIssues,
   notificationTopicNeedsNoAgreement,
@@ -224,10 +225,12 @@ export function validateNotificationTopicCatalog(
       }
     }
   });
-  issues.push(...noticeIssues(catalog, ids, targetProviders));
+  issues.push(...noticeIssues(catalog, ids, targetProviders, options.deployment));
   issues.push(...deploymentIssues(catalog, options.deployment, targetProviders));
-  // With no issue, `notices.copy` has every variant for every locale: the
-  // catalog has the declared type.
+  // With no issue, `notices.copy` has every variant the deployment's notices
+  // are given in for every locale: the declared type, except that under a
+  // consent refresh outside kr the result variants, which no notice of that
+  // policy reads, may be missing.
   return issues.length === 0
     ? { valid: true, catalog: catalog as NotificationTopicCatalog, issues }
     : { valid: false, issues };
@@ -459,13 +462,21 @@ function noticeIssues(
   catalog: NotificationTopicCatalogShape,
   ids: ReadonlyMap<string, number>,
   targetProviders: Readonly<Record<string, NotificationProviderRegistryEntry>>,
+  deployment: NotificationDeployment | undefined,
 ): NotificationTopicCatalogIssue[] {
   if (catalog.notices === undefined) {
     return [];
   }
   return [
     ...noticeTopicIssues(catalog, catalog.notices.topic, ids, targetProviders),
-    ...notificationNoticeCopyIssues(catalog.notices.copy, catalog.defaultLocale),
+    // Only the variants the deployment's notices can be given in: outside kr
+    // a consent refresh lists re-confirmations alone.
+    ...notificationNoticeCopyIssues(
+      catalog.notices.copy,
+      catalog.defaultLocale,
+      'notices.copy',
+      notificationRequiredNoticeVariants(deployment),
+    ),
   ];
 }
 

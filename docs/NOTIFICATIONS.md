@@ -275,8 +275,9 @@ per consent kind
 
 - Leave `pushLeadDays` out to list the notice in the game only.
 - `onOverdue: "continue"` keeps sending after the due date.
-- The server owes only the re-confirmations, in the `reconfirmation.*`
-  variants of `notices.copy`, so the catalog needs its `notices` block.
+- The server owes only the re-confirmations, so the catalog needs its
+  `notices` block, and `notices.copy` needs only the `reconfirmation.*`
+  texts of the kinds you refresh.
 - Under `kr` the Korean rules fix the refresh, and `consentRefresh` is
   refused.
 
