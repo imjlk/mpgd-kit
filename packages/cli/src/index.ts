@@ -137,11 +137,10 @@ import { formatPlayProductPlan } from './store-products-play.js';
 import {
   applyStorePresence,
   planStorePresence,
+  renderStorePresencePlan,
   saveStorePresencePlan,
   type StorePresenceStore,
 } from './store-presence-command.js';
-import { formatPlayPresencePlan } from './store-presence-play.js';
-import { formatAppStorePresencePlan } from './store-presence-app-store.js';
 import {
   applyAppStoreReleaseCommand,
   changeAppStorePhasedReleaseCommand,
@@ -1459,21 +1458,27 @@ const storeCommand = defineI18n({
             store: { type: 'string', required: true, description: 'google-play or app-store.' },
             presence: { type: 'string', required: false, description: 'Store presence file path, relative to the current directory; defaults to mpgd.store-presence.json in the game.' },
             out: { type: 'string', required: false, description: 'New plan JSON path for apply; existing files are not overwritten.' },
+            json: { type: 'boolean', required: false, description: 'Print the plan (warnings included) as one JSON document.' },
           },
           run: async (ctx) => {
             const presence = readOptionalString(ctx.values.presence);
+            const json = ctx.values.json === true;
             const result = await planStorePresence({
               game: readOptionalString(ctx.values.game) ?? '.',
               profile: readOptionalString(ctx.values.profile) ?? 'beta',
               store: readRequiredCliOption(ctx.values.store, '--store') as StorePresenceStore,
               ...(presence === undefined ? {} : { presenceFile: presence }),
             });
-            console.info(result.plan.store === 'google-play'
-              ? formatPlayPresencePlan(result.plan)
-              : formatAppStorePresencePlan(result.plan));
+            process.stdout.write(`${renderStorePresencePlan(result, json)}\n`);
             const out = readOptionalString(ctx.values.out);
             if (out !== undefined) {
-              console.info(`Wrote store presence plan: ${saveStorePresencePlan(out, result)}`);
+              // With --json, stdout carries only the JSON document.
+              const written = `Wrote store presence plan: ${saveStorePresencePlan(out, result)}`;
+              if (json) {
+                console.error(written);
+              } else {
+                console.info(written);
+              }
             }
           },
         }),
