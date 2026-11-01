@@ -1,5 +1,12 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { join, relative } from 'node:path';
 
 import type { WorkspacePackage } from './workspace';
@@ -26,6 +33,13 @@ export const packageBuildToolchainFiles = [
   'strip.config.js',
 ] as const;
 
+/**
+ * Gitignored native build output (SwiftPM `.build`, Gradle `build`) skipped at
+ * any depth of a package's input. It is large, depends on local build state
+ * and can hold symlinks that do not resolve.
+ */
+export const packageBuildOutputDirectories = ['.build', 'build'] as const;
+
 export interface InputFingerprintOptions {
   /** Repository files whose content changes every package build. */
   readonly toolchainFiles: readonly string[];
@@ -37,8 +51,9 @@ export interface InputFingerprintOptions {
 
 /**
  * Source fingerprints for package builds, computed before anything is built. A
- * package's input covers its own files (without dist and node_modules), the
- * toolchain files and the fingerprints of its workspace dependencies.
+ * package's input covers its own files (without dist, node_modules and native
+ * build output), the toolchain files and the fingerprints of its workspace
+ * dependencies.
  * `undefined` means "always rebuild" and propagates to dependents.
  */
 export function createInputFingerprints(
@@ -88,7 +103,10 @@ export function createInputFingerprints(
       }
     }
     const result = reusable
-      ? hashParts([...parts, hashTree(workspacePackage.dir, ['dist'])])
+      ? hashParts([
+          ...parts,
+          hashTree(workspacePackage.dir, ['dist'], packageBuildOutputDirectories),
+        ])
       : undefined;
     visiting.delete(name);
     memo.set(name, result);
@@ -145,8 +163,16 @@ export function recordBuild(
   );
 }
 
-/** Hashes every file under root; `skip` names top-level entries to leave out. */
-export function hashTree(root: string, skip: readonly string[] = []): string {
+/**
+ * Hashes every file under root without following symlinks; a link contributes
+ * its target string. `skip` names top-level entries to leave out and
+ * `skipDirectories` names directories to leave out at any depth.
+ */
+export function hashTree(
+  root: string,
+  skip: readonly string[] = [],
+  skipDirectories: readonly string[] = [],
+): string {
   const parts: string[] = [];
   visit(root);
   return hashParts(parts);
@@ -157,11 +183,19 @@ export function hashTree(root: string, skip: readonly string[] = []): string {
         continue;
       }
       const path = join(dir, entry);
-      if (statSync(path).isDirectory()) {
-        visit(path);
+      const stats = lstatSync(path);
+      if (stats.isDirectory()) {
+        if (!skipDirectories.includes(entry)) {
+          visit(path);
+        }
         continue;
       }
-      parts.push(`${relative(root, path).split('\\').join('/')}\0${hashFile(path)}`);
+      const relativePath = relative(root, path).split('\\').join('/');
+      parts.push(
+        stats.isSymbolicLink()
+          ? `${relativePath}\0link\0${readlinkSync(path)}`
+          : `${relativePath}\0${hashFile(path)}`,
+      );
     }
   }
 }

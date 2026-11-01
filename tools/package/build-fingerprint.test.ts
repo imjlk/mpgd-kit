@@ -1,5 +1,13 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -74,6 +82,28 @@ check('dist and node_modules do not affect the input fingerprint', () => {
   writeFileSync(join(core.dir, 'dist', 'index.js'), 'built');
   mkdirSync(join(core.dir, 'node_modules', 'x'), { recursive: true });
   writeFileSync(join(core.dir, 'node_modules', 'x', 'index.js'), 'dependency');
+  assert.equal(fingerprints()('@mpgd/core'), before);
+});
+
+check('native build output and dangling symlinks do not break the input fingerprint', () => {
+  const before = fingerprints()('@mpgd/core');
+  // SwiftPM leaves a relative symlink in resource bundles that does not resolve.
+  const bundle = join(core.dir, '.build', 'debug', 'OpenIAP_OpenIAP.bundle');
+  mkdirSync(bundle, { recursive: true });
+  symlinkSync('../../missing/openiap-versions.json', join(bundle, 'openiap-versions.json'));
+  writeFileSync(join(bundle, 'Info.plist'), 'built');
+  mkdirSync(join(core.dir, 'android', 'build', 'outputs'), { recursive: true });
+  writeFileSync(join(core.dir, 'android', 'build', 'outputs', 'plugin.aar'), 'built');
+  assert.equal(fingerprints()('@mpgd/core'), before);
+
+  const sourceLink = join(core.dir, 'src', 'dangling.ts');
+  symlinkSync('./missing.ts', sourceLink);
+  const linked = fingerprints()('@mpgd/core');
+  assert.notEqual(linked, before, 'a source symlink is part of the input');
+  rmSync(sourceLink);
+  symlinkSync('./elsewhere.ts', sourceLink);
+  assert.notEqual(fingerprints()('@mpgd/core'), linked, 'the link target is hashed');
+  rmSync(sourceLink);
   assert.equal(fingerprints()('@mpgd/core'), before);
 });
 
