@@ -134,7 +134,7 @@ export async function planPlayPresence(
   const local = readLocalGraphics(input.directory, play);
   const editId = await port.insertEdit(input.packageName, input.signal);
   try {
-    return await planInEdit(input, play, local, port, editId);
+    return await planInEdit(input, play, local, port, editId, true);
   } finally {
     await discardEdit(port, input.packageName, editId);
   }
@@ -185,6 +185,7 @@ async function planInEdit(
   local: LocalGraphics,
   port: PlayStoreListingPort,
   editId: string,
+  checkPublishing: boolean,
 ): Promise<PlayPresencePlan> {
   const { packageName, signal } = input;
   const [details, remoteListings] = await Promise.all([
@@ -250,7 +251,12 @@ async function planInEdit(
     );
   }
   const plannedDetails = planDetails(details, play, notes);
-  const warnings = defaultLanguage === undefined
+  if (checkPublishing && defaultLanguage === undefined) {
+    notes.push(
+      "Play reports no default language, so the listing's publishing graphics were not checked.",
+    );
+  }
+  const warnings = !checkPublishing || defaultLanguage === undefined
     ? []
     : await publishingWarnings({
       input,
@@ -475,8 +481,8 @@ function planDetails(
  *   must provide a feature graphic to publish your store listing."
  * - "You must provide a minimum of two screenshots across different device
  *   types to publish your store listing", and "up to 8 screenshots for each
- *   supported device type". The phone set is the one phones show, so the
- *   sync asks for two there.
+ *   supported device type". The help page does not say which device
+ *   types count; the sync asks for two in the phone set.
  * - Tablets (7-inch and 10-inch) and Chromebooks: "you can add a minimum of
  *   4 screenshots", 1,080 to 7,680 px, 16:9 or 9:16. That is a
  *   recommendation, not a publishing requirement; the help page states no
@@ -555,7 +561,8 @@ async function publishingWarnings(input: {
   if (phone < googlePlayPublishingGraphics.phoneScreenshots) {
     warnings.push(
       `${prefix} has ${phone} phoneScreenshots after apply; Play needs at least `
-      + `${googlePlayPublishingGraphics.phoneScreenshots} screenshots to publish the store listing.`,
+      + `${googlePlayPublishingGraphics.phoneScreenshots} screenshots across device types to publish the store `
+      + `listing, and the sync asks for ${googlePlayPublishingGraphics.phoneScreenshots} in the phone set.`,
     );
   }
   if (count('sevenInchScreenshots') === 0 && count('tenInchScreenshots') === 0) {
@@ -639,7 +646,8 @@ export async function applyPlayPresence(input: {
   // A commit that failed without a definitive answer may have landed.
   let commitUncertain = false;
   try {
-    const current = await planInEdit(input.plan, play, local, port, editId);
+    // Warnings never block apply, so apply does not read Play for them.
+    const current = await planInEdit(input.plan, play, local, port, editId, false);
     if (!current.changed) {
       await discardEdit(port, packageName, editId);
       return { packageName, status: 'unchanged', languages: [] };

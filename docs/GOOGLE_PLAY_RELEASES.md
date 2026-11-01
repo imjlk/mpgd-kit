@@ -295,8 +295,8 @@ them from `mpgd.store-presence.json` in one edit
 open edit, and committing any edit invalidates the others, so run `plan` and
 `apply` when no `deploy run`, `deploy promote` or `deploy rollout` is in
 progress. `plan` warns, without blocking `apply`, when the default language
-listing would lack the icon, feature graphic or 2 phone screenshots Play
-needs to publish, or any tablet screenshots
+listing would lack the icon or feature graphic Play needs to publish, 2
+phone screenshots, or any tablet screenshots
 ([publishing warnings](./STORE_PRESENCE_SYNC.md#publishing-warnings)).
 
 ## Verify on the first live run

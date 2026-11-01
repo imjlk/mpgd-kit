@@ -1111,6 +1111,29 @@ assert.equal(
       'ko-KR without graphics does not warn',
     );
 
+    // The default language is created by the apply: only the file's graphics count.
+    const empty = (): FakePlay => fakePlay({ details: { defaultLanguage: 'en-US' } });
+    assert.deepEqual(
+      (await planPlayPresence(
+        input(fixture, onlyEnglish({ ...complete, icon: 'store/icon.png', featureGraphic: 'store/feature.png' })),
+        empty().port,
+      )).warnings,
+      [],
+    );
+    const created = await planPlayPresence(
+      input(fixture, onlyEnglish({ phoneScreenshots: ['store/phone-1.png'] })),
+      empty().port,
+    );
+    assert.equal(created.languages[0]?.action, 'create');
+    assert.equal(created.warnings.length, 4, created.warnings.join('\n'));
+    // Without a default language nothing is checked, and the plan says so.
+    const unknown = await planPlayPresence(
+      input(fixture, onlyEnglish({})),
+      fakePlay({ listings: new Map([['en-US', { ...englishListing }]]), details: {} }).port,
+    );
+    assert.deepEqual(unknown.warnings, []);
+    assert.match(unknown.notes.join('\n'), /no default language/u);
+
     // Printed, carried by --json, and never block apply.
     const play = playWith({});
     const plan = await planPlayPresence(
@@ -1133,14 +1156,24 @@ assert.equal(
     const json = JSON.parse(renderStorePresencePlan(file, true)) as { plan: PlayPresencePlan };
     assert.deepEqual(json.plan.warnings, plan.warnings);
     assert.equal(renderStorePresencePlan(file, false), printed);
+    // Apply reads only the slots the file names: warnings are not computed there.
+    const reads: string[] = [];
+    const counting: PlayStoreListingPort = {
+      ...play.port,
+      listImages: async (target) => {
+        reads.push(target.imageType);
+        return play.port.listImages(target);
+      },
+    };
     const applied = await applyPlayPresence({
       saved: plan,
       plan: input(fixture, onlyEnglish({ phoneScreenshots: ['store/phone-1.png'] })),
-      port: play.port,
+      port: counting,
       approved: true,
     });
     assert.equal(applied.status, 'committed');
     assert.deepEqual(play.writes, ['upload en-US/phoneScreenshots phone-1.png']);
+    assert.deepEqual(reads, ['phoneScreenshots']);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
