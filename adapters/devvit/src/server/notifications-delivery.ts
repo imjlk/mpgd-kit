@@ -4,9 +4,12 @@ import {
   createNotificationService,
   createNotificationServiceCatalog,
   type CreateNotificationServiceInput,
+  type NotificationBulkDeliverOptions,
+  type NotificationBulkDeliveryResult,
   type NotificationProviderRegistry,
   type NotificationRemoteDeliveryAnswer,
   type NotificationRemoteDeliveryProvider,
+  type NotificationRemoteDeliveryRequest,
   type NotificationService,
   type NotificationServiceCatalog,
   type NotificationSession,
@@ -69,7 +72,24 @@ export interface DevvitNotificationsDeliveryClient {
     recipients: DevvitEnqueueRecipient[];
   }): Promise<DevvitEnqueueResponse>;
   isOptedIn(userId: `t2_${string}`): Promise<boolean>;
+  /**
+   * One page of the users opted in to notifications, oldest opt-in first
+   * (`ListOptedInUsersOptions`/`ListOptedInUsersResponse`); only
+   * `runDevvitNotificationBulkPage` needs it.
+   */
+  listOptedInUsers?(options: {
+    limit?: number;
+    after?: string | undefined;
+  }): Promise<{ readonly userIds: readonly string[]; readonly next?: string | undefined }>;
 }
+
+/**
+ * Recipients one `enqueue` call takes (`EnqueueOptions['recipients']`: "Max
+ * number of recipients is 1000" in `@devvit/notifications` 0.15.0), and
+ * users one `listOptedInUsers` page answers ("The default and maximum limit
+ * is 1,000" in the 0.15 push notification guide).
+ */
+export const devvitNotificationEnqueueMaxRecipients = 1_000;
 
 /**
  * How an `enqueue` failure is answered: a per-recipient error of the answer
@@ -128,6 +148,8 @@ export const devvitNotificationProviderCodes = Object.freeze({
   enqueueRejected: 'DEVVIT_ENQUEUE_REJECTED',
   enqueueUnanswered: 'DEVVIT_ENQUEUE_UNANSWERED',
   enqueueUnclassified: 'DEVVIT_ENQUEUE_UNCLASSIFIED',
+  /** A bulk `enqueue` counted some of the unnamed recipients as sent and some not, without naming them. */
+  enqueuePartial: 'DEVVIT_ENQUEUE_PARTIAL',
 } as const);
 
 /**
@@ -260,89 +282,267 @@ export function createDevvitNotificationDeliveryProvider(
     providerCode: string,
   ): NotificationRemoteDeliveryAnswer => ({ status: 'rejected', reason, providerCode });
 
+  /** The text, link, and recipient one send needs, or the answer that refuses it without a call. */
+  const precheck = (
+    request: NotificationRemoteDeliveryRequest,
+  ):
+    | { readonly answer: NotificationRemoteDeliveryAnswer }
+    | { readonly userId: string; readonly link: string; readonly title: string; readonly body: string } => {
+    if (request.recipient.kind !== 'platform-user') {
+      return { answer: rejected('configuration', devvitNotificationProviderCodes.deviceRecipient) };
+    }
+    const userId = request.recipient.id;
+    if (!devvitUserIdPattern.test(userId)) {
+      return { answer: rejected('recipient', devvitNotificationProviderCodes.recipientInvalid) };
+    }
+    const link = request.link;
+    if (link === undefined || !devvitNotificationLinkPattern.test(link)) {
+      return { answer: rejected('configuration', devvitNotificationProviderCodes.linkInvalid) };
+    }
+    const { title, body } = request.content;
+    if (title === undefined || body === undefined || title.trim() === '' || body.trim() === '') {
+      // A host template or an empty text: Devvit sends the title and body it is given.
+      return { answer: rejected('configuration', devvitNotificationProviderCodes.textMissing) };
+    }
+    if (devvitNotificationTextLength(title) > devvitNotificationTitleMaxLength) {
+      return { answer: rejected('configuration', devvitNotificationProviderCodes.titleTooLong) };
+    }
+    if (devvitNotificationTextLength(body) > devvitNotificationBodyMaxLength) {
+      return { answer: rejected('configuration', devvitNotificationProviderCodes.bodyTooLong) };
+    }
+    if (title.includes('{{') || body.includes('{{')) {
+      // From template data or from a catalog brace outside a `{{name}}`
+      // placeholder: either way the operator should see it.
+      return { answer: rejected('configuration', devvitNotificationProviderCodes.templateSyntax) };
+    }
+    return { userId, link, title, body };
+  };
+  /** Tells `onEnqueueError` about a failure; never changes the answer. */
+  const report = (
+    sendKey: string,
+    source: 'answer' | 'thrown',
+    message: string,
+    answer: NotificationRemoteDeliveryAnswer,
+  ): NotificationRemoteDeliveryAnswer => {
+    try {
+      input.onEnqueueError?.({
+        sendKey,
+        source,
+        message,
+        answer: answer.status,
+        ...reasonOf(answer),
+      });
+    } catch {
+      // A failing log never changes the answer.
+    }
+    return answer;
+  };
+  /** The answer for an `enqueue` failure after `classifyEnqueueError`, reported. */
+  const failure = (
+    sendKey: string,
+    source: 'answer' | 'thrown',
+    message: string,
+    fallback: 'rate-limited' | 'recipient' | 'configuration' | 'ambiguous',
+  ): NotificationRemoteDeliveryAnswer => {
+    let kind = fallback;
+    let note = '';
+    try {
+      kind = input.classifyEnqueueError?.(message, source) ?? fallback;
+    } catch (error) {
+      // A failing classifier keeps the default answer; the report says so.
+      note = ` (classifyEnqueueError threw: ${thrownMessage(error)})`;
+    }
+    // The provider code follows the final answer, after any override; a
+    // thrown call keeps DEVVIT_ENQUEUE_FAILED, which names its source.
+    let providerCode: string = devvitNotificationProviderCodes.enqueueRejected;
+    if (source === 'thrown') {
+      providerCode = devvitNotificationProviderCodes.enqueueFailed;
+    } else if (kind === 'ambiguous') {
+      providerCode = devvitNotificationProviderCodes.enqueueUnclassified;
+    }
+    let answer: NotificationRemoteDeliveryAnswer;
+    if (kind === 'rate-limited') {
+      // A daily limit lifts no sooner than an hour from now; any other
+      // waits the service's default first delay.
+      answer = dailyLimitWords.test(message)
+        ? { status: 'rate-limited', retryAfterSeconds: 3600 }
+        : { status: 'rate-limited' };
+    } else if (kind === 'ambiguous') {
+      answer = { status: 'ambiguous', providerCode };
+    } else {
+      answer = rejected(kind === 'recipient' ? 'recipient' : 'configuration', providerCode);
+    }
+    return report(sendKey, source, `${message}${note}`, answer);
+  };
+  /** The default answer for an error message: a rate limit, a text refusal, or, named for the user, their refusal. */
+  const fallbackOf = (
+    message: string,
+    named: boolean,
+  ): 'rate-limited' | 'recipient' | 'configuration' | 'ambiguous' => {
+    if (readsAsRateLimit(message)) {
+      return 'rate-limited';
+    }
+    if (readsAsSizeOrTextRefusal(message)) {
+      return 'configuration';
+    }
+    // Only an error that names this recipient proves a refusal of the user.
+    return named && readsAsUserRefusal(message) ? 'recipient' : 'ambiguous';
+  };
+
   return {
     id: devvitNotificationProviderId,
-    async send(request) {
-      if (request.recipient.kind !== 'platform-user') {
-        return rejected('configuration', devvitNotificationProviderCodes.deviceRecipient);
-      }
-      const userId = request.recipient.id;
-      if (!devvitUserIdPattern.test(userId)) {
-        return rejected('recipient', devvitNotificationProviderCodes.recipientInvalid);
-      }
-      const link = request.link;
-      if (link === undefined || !devvitNotificationLinkPattern.test(link)) {
-        return rejected('configuration', devvitNotificationProviderCodes.linkInvalid);
-      }
-      const { title, body } = request.content;
-      if (title === undefined || body === undefined || title.trim() === '' || body.trim() === '') {
-        // A host template or an empty text: Devvit sends the title and body it is given.
-        return rejected('configuration', devvitNotificationProviderCodes.textMissing);
-      }
-      if (devvitNotificationTextLength(title) > devvitNotificationTitleMaxLength) {
-        return rejected('configuration', devvitNotificationProviderCodes.titleTooLong);
-      }
-      if (devvitNotificationTextLength(body) > devvitNotificationBodyMaxLength) {
-        return rejected('configuration', devvitNotificationProviderCodes.bodyTooLong);
-      }
-      if (title.includes('{{') || body.includes('{{')) {
-        // From template data or from a catalog brace outside a `{{name}}`
-        // placeholder: either way the operator should see it.
-        return rejected('configuration', devvitNotificationProviderCodes.templateSyntax);
-      }
-      const report = (
-        source: 'answer' | 'thrown',
-        message: string,
-        answer: NotificationRemoteDeliveryAnswer,
-      ): NotificationRemoteDeliveryAnswer => {
+    bulk: {
+      maxRecipients: devvitNotificationEnqueueMaxRecipients,
+      perRecipientOutcomes: true,
+      // One title and body an `enqueue`: the service calls once per text, each just after its gate check.
+      callKey: (request) => JSON.stringify([request.content.title ?? '', request.content.body ?? '']),
+    },
+    /**
+     * One `enqueue` per distinct title and body (Devvit takes one title and
+     * body a call, with a link per recipient), each user once a call. Each
+     * recipient's answer comes from its own error, or from the counts:
+     * - an error that names the recipient classifies as for `send`;
+     * - the recipients no error names are `accepted` only when
+     *   `successCount` equals their number. With `successCount` 0 none of
+     *   them was queued, and the errors that name no user decide as for
+     *   `send` when they agree and `failureCount` counts every recipient of
+     *   the call (else `ambiguous`, replayed: nothing was queued). Any other count means some were queued and some not,
+     *   without saying which: `ambiguous` with `unattributed` (code
+     *   `DEVVIT_ENQUEUE_PARTIAL`), not replayed, since `enqueue` takes no
+     *   idempotency key and a replay would notify the queued ones again.
+     * - A call that throws is `ambiguous` for each of its recipients.
+     * - Past `startWithinMs` no further call starts: its recipients are
+     *   `not-sent` and are replayed shortly.
+     */
+    async sendBatch(requests, options = {}) {
+      const startedAt = globalThis.performance.now();
+      const answers: (NotificationRemoteDeliveryAnswer | undefined)[] = requests.map(() => undefined);
+      const calls: { readonly title: string; readonly body: string; readonly members: { index: number; userId: string; link: string }[] }[] = [];
+      requests.forEach((request, index) => {
+        const checked = precheck(request);
+        if ('answer' in checked) {
+          answers[index] = checked.answer;
+          return;
+        }
+        // The first call of this text that does not have the user yet.
+        let call = calls.find((candidate) =>
+          candidate.title === checked.title
+          && candidate.body === checked.body
+          && candidate.members.length < devvitNotificationEnqueueMaxRecipients
+          && !candidate.members.some((member) => member.userId === checked.userId));
+        if (call === undefined) {
+          call = { title: checked.title, body: checked.body, members: [] };
+          calls.push(call);
+        }
+        call.members.push({ index, userId: checked.userId, link: checked.link });
+      });
+      for (const call of calls) {
+        const keyOf = (index: number): string => requests[index]?.sendKey ?? '';
+        if (
+          options.startWithinMs !== undefined
+          && globalThis.performance.now() - startedAt >= options.startWithinMs
+        ) {
+          // Too late to start another call within the recipients' claims: nothing was sent to them.
+          for (const member of call.members) {
+            answers[member.index] = { status: 'not-sent' };
+          }
+          continue;
+        }
+        let response: DevvitEnqueueResponse;
         try {
-          input.onEnqueueError?.({
-            sendKey: request.sendKey,
-            source,
-            message,
-            answer: answer.status,
-            ...reasonOf(answer),
+          response = await input.notifications.enqueue({
+            title: call.title,
+            body: call.body,
+            recipients: call.members.map((member) => ({
+              userId: member.userId as `t2_${string}`,
+              link: member.link as `t1_${string}` | `t3_${string}`,
+              data: {},
+            })),
           });
-        } catch {
-          // A failing log never changes the answer.
-        }
-        return answer;
-      };
-      const failure = (
-        source: 'answer' | 'thrown',
-        message: string,
-        fallback: 'rate-limited' | 'recipient' | 'configuration' | 'ambiguous',
-      ): NotificationRemoteDeliveryAnswer => {
-        let kind = fallback;
-        let note = '';
-        try {
-          kind = input.classifyEnqueueError?.(message, source) ?? fallback;
         } catch (error) {
-          // A failing classifier keeps the default answer; the report says so.
-          note = ` (classifyEnqueueError threw: ${thrownMessage(error)})`;
+          const message = thrownMessage(error);
+          for (const member of call.members) {
+            answers[member.index] = failure(keyOf(member.index), 'thrown', message, 'ambiguous');
+          }
+          continue;
         }
-        // The provider code follows the final answer, after any override; a
-        // thrown call keeps DEVVIT_ENQUEUE_FAILED, which names its source.
-        let providerCode: string = devvitNotificationProviderCodes.enqueueRejected;
-        if (source === 'thrown') {
-          providerCode = devvitNotificationProviderCodes.enqueueFailed;
-        } else if (kind === 'ambiguous') {
-          providerCode = devvitNotificationProviderCodes.enqueueUnclassified;
+        const errors = Array.isArray(response?.errors) ? response.errors : [];
+        const users = new Set(call.members.map((member) => member.userId));
+        const unnamed = errors.filter((error) => typeof error?.userId !== 'string' || !users.has(error.userId));
+        const rest: typeof call.members = [];
+        for (const member of call.members) {
+          const ours = errors.find((error) => error?.userId === member.userId);
+          if (ours === undefined) {
+            rest.push(member);
+            continue;
+          }
+          const message = typeof ours.message === 'string' ? ours.message : '';
+          answers[member.index] = failure(keyOf(member.index), 'answer', message, fallbackOf(message, true));
         }
-        let answer: NotificationRemoteDeliveryAnswer;
-        if (kind === 'rate-limited') {
-          // A daily limit lifts no sooner than an hour from now; any other
-          // waits the service's default first delay.
-          answer = dailyLimitWords.test(message)
-            ? { status: 'rate-limited', retryAfterSeconds: 3600 }
-            : { status: 'rate-limited' };
-        } else if (kind === 'ambiguous') {
-          answer = { status: 'ambiguous', providerCode };
-        } else {
-          answer = rejected(kind === 'recipient' ? 'recipient' : 'configuration', providerCode);
+        if (rest.length === 0) {
+          continue;
         }
-        return report(source, `${message}${note}`, answer);
-      };
+        const succeeded = response?.successCount;
+        if (typeof succeeded === 'number' && succeeded === rest.length) {
+          for (const member of rest) {
+            answers[member.index] = { status: 'accepted' };
+          }
+          continue;
+        }
+        if (succeeded === 0) {
+          const messages = unnamed.map((error) => (typeof error?.message === 'string' ? error.message : ''));
+          const kinds = new Set(messages.map((message) => fallbackOf(message, false)));
+          const failed = typeof response?.failureCount === 'number' && response.failureCount > call.members.length - rest.length;
+          // Unnamed errors speak for every unnamed recipient only when Devvit
+          // counted a failure for each recipient of the call.
+          const accounted = typeof response?.failureCount === 'number' && response.failureCount >= call.members.length;
+          for (const member of rest) {
+            if (messages.length > 0 && !accounted) {
+              answers[member.index] = report(
+                keyOf(member.index),
+                'answer',
+                `${messages[0] ?? ''} (failureCount ${String(response?.failureCount)} for ${call.members.length} recipients)`,
+                { status: 'ambiguous', providerCode: devvitNotificationProviderCodes.enqueueUnclassified },
+              );
+            } else if (messages.length > 0) {
+              // Errors that agree decide for every unnamed recipient; errors that differ prove nothing for any one.
+              answers[member.index] = failure(
+                keyOf(member.index),
+                'answer',
+                messages[0] ?? '',
+                kinds.size === 1 ? ([...kinds][0] ?? 'ambiguous') : 'ambiguous',
+              );
+            } else if (failed) {
+              answers[member.index] = failure(keyOf(member.index), 'answer', '', 'ambiguous');
+            } else {
+              // Neither queued nor refused: Devvit may still have queued it.
+              answers[member.index] = report(keyOf(member.index), 'answer', '(no success and no error in the answer)', {
+                status: 'ambiguous',
+                providerCode: devvitNotificationProviderCodes.enqueueUnanswered,
+              });
+            }
+          }
+          continue;
+        }
+        for (const member of rest) {
+          answers[member.index] = report(
+            keyOf(member.index),
+            'answer',
+            `(successCount ${String(succeeded)} for ${rest.length} recipients no error names)`,
+            typeof succeeded === 'number'
+              ? { status: 'ambiguous', providerCode: devvitNotificationProviderCodes.enqueuePartial, unattributed: true }
+              : { status: 'ambiguous', providerCode: devvitNotificationProviderCodes.enqueueUnanswered },
+          );
+        }
+      }
+      return answers.map((answer): NotificationRemoteDeliveryAnswer => answer ?? { status: 'ambiguous' });
+    },
+    async send(request) {
+      const checked = precheck(request);
+      if ('answer' in checked) {
+        return checked.answer;
+      }
+      const { userId, link, title, body } = checked;
       let response: DevvitEnqueueResponse;
       try {
         response = await input.notifications.enqueue({
@@ -355,7 +555,7 @@ export function createDevvitNotificationDeliveryProvider(
           }],
         });
       } catch (error) {
-        return failure('thrown', thrownMessage(error), 'ambiguous');
+        return failure(request.sendKey, 'thrown', thrownMessage(error), 'ambiguous');
       }
       if (typeof response?.successCount === 'number' && response.successCount > 0) {
         return { status: 'accepted' };
@@ -367,7 +567,7 @@ export function createDevvitNotificationDeliveryProvider(
       if (ours === undefined && !failed) {
         // Neither queued nor refused: Devvit may still have queued it. No
         // error exists to classify, so the answer stays ambiguous.
-        return report('answer', '(no success and no error in the answer)', {
+        return report(request.sendKey, 'answer', '(no success and no error in the answer)', {
           status: 'ambiguous',
           providerCode: devvitNotificationProviderCodes.enqueueUnanswered,
         });
@@ -382,7 +582,7 @@ export function createDevvitNotificationDeliveryProvider(
         // Only an error that names this recipient proves a refusal of the user.
         fallback = 'recipient';
       }
-      return failure('answer', message, fallback);
+      return failure(request.sendKey, 'answer', message, fallback);
     },
     async readPermission({ player }): Promise<NotificationPermissionState> {
       const userId = userIdOf(player);
@@ -681,4 +881,119 @@ export async function runDevvitNotificationTask(
   }
   const counts = await service.purge();
   return { task, ...counts };
+}
+
+/** One page of a bulk send to the users opted in on Devvit. */
+export interface RunDevvitNotificationBulkPageInput {
+  readonly service: Pick<NotificationService, 'deliverBulk'>;
+  /** `notifications` from `@devvit/web/server`, for `listOptedInUsers`. */
+  readonly notifications: Pick<DevvitNotificationsDeliveryClient, 'listOptedInUsers'>;
+  /** The campaign's key; each user's send key is `<idempotencyKey>:<encodeURIComponent(userId)>`. */
+  readonly idempotencyKey: string;
+  readonly topic: string;
+  /** The post or comment every notification opens, unless the topic's `reddit` mapping has one. */
+  readonly link?: string;
+  readonly templateData?: Readonly<Record<string, string | number | boolean>>;
+  /** The cursor `next` answered for the page before; the first page without it. */
+  readonly after?: string;
+  /** Users per page, 1 to 1,000 (the most `listOptedInUsers` and `enqueue` take); 1,000 by default. */
+  readonly limit?: number;
+  /**
+   * The `pending` users an earlier run of this page answered: they are sent
+   * again without reading the list, and `next` is not answered.
+   */
+  readonly pending?: readonly string[];
+  readonly options?: NotificationBulkDeliverOptions;
+}
+
+export interface DevvitNotificationBulkPageResult {
+  /** The bulk send's answer for these users; `undefined` when there were none. */
+  readonly result?: NotificationBulkDeliveryResult;
+  /** The cursor of the next page; `undefined` once the list is done, and on a `pending` run. */
+  readonly next?: string;
+  /**
+   * The users still owed an attempt: not attempted (a budget or Devvit's
+   * daily app limit) or failed with a retryable error. Run again with them
+   * as `pending` before moving to `next`; users already sent answer from the
+   * ledger, and refused ones are not tried again.
+   */
+  readonly pending: readonly string[];
+  /** Whether `pending` is empty. */
+  readonly complete: boolean;
+}
+
+/**
+ * Sends one page of `listOptedInUsers` through `deliverBulk` (RFC open
+ * question 5): Devvit's opt-in list only picks the audience. The kit's gate
+ * still decides each user: it reads `isOptedIn` again at send time and the
+ * kit's own records (topic preference, frequency, quiet hours), so a user
+ * opted in on Devvit whom the gate refuses is not sent to. Devvit's limits
+ * hold per user (2 a day, the entry's provider limit, which suppresses the
+ * excess) and per app (25,000 a day, the entry's `rate`: users past it are
+ * `pending`, `not-attempted` with `provider-rate`, until the window frees).
+ * Run it from a scheduler task or a moderator action on the Devvit server,
+ * never from a player's request: run the `pending` users again until none
+ * are left, then the `next` page.
+ */
+export async function runDevvitNotificationBulkPage(
+  input: RunDevvitNotificationBulkPageInput,
+): Promise<DevvitNotificationBulkPageResult> {
+  const limit = input.limit ?? devvitNotificationEnqueueMaxRecipients;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > devvitNotificationEnqueueMaxRecipients) {
+    throw new RangeError(
+      `limit must be an integer from 1 to ${devvitNotificationEnqueueMaxRecipients}.`,
+    );
+  }
+  let userIds: readonly unknown[];
+  let next: string | undefined;
+  if (input.pending === undefined) {
+    const list = input.notifications.listOptedInUsers;
+    if (list === undefined) {
+      throw new TypeError('The Devvit notifications client has no listOptedInUsers.');
+    }
+    const page = await list.call(input.notifications, {
+      limit,
+      ...(input.after === undefined ? {} : { after: input.after }),
+    });
+    userIds = Array.isArray(page?.userIds) ? page.userIds : [];
+    next = typeof page?.next === 'string' && page.next.length > 0 && userIds.length > 0
+      ? page.next
+      : undefined;
+  } else {
+    userIds = input.pending.slice(0, limit);
+  }
+  const players = [
+    ...new Set(
+      userIds.filter((id): id is string => typeof id === 'string' && devvitUserIdPattern.test(id)),
+    ),
+  ];
+  const left = input.pending === undefined ? [] : input.pending.slice(limit);
+  if (players.length === 0) {
+    return { ...(next === undefined ? {} : { next }), pending: left, complete: left.length === 0 };
+  }
+  const result = await input.service.deliverBulk(
+    {
+      idempotencyKey: input.idempotencyKey,
+      provider: devvitNotificationProviderId,
+      topic: input.topic,
+      recipients: players.map((player) => ({ player })),
+      ...(input.link === undefined ? {} : { link: input.link }),
+      ...(input.templateData === undefined ? {} : { templateData: input.templateData }),
+    },
+    input.options,
+  );
+  const pending = [
+    ...result.recipients
+      .filter((recipient) =>
+        recipient.status === 'not-attempted'
+        || (recipient.status === 'failed' && recipient.error.retryable))
+      .map((recipient) => recipient.player),
+    ...left,
+  ];
+  return {
+    result,
+    ...(next === undefined ? {} : { next }),
+    pending,
+    complete: pending.length === 0,
+  };
 }

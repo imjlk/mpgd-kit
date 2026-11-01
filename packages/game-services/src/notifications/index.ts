@@ -6,6 +6,7 @@
  * delivery provider contract, with the FCM provider, and the copy resolver
  * port that chooses a send's localized title and body.
  */
+export * from './bulk.js';
 export * from './copy.js';
 export * from './delivery-provider.js';
 export * from './fcm.js';

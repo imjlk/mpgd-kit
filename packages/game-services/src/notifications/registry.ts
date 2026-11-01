@@ -18,6 +18,7 @@ import type {
   NotificationDeviceAddress,
   NotificationRemoteDeliveryProvider,
 } from './delivery-provider.js';
+import { assertNotificationBulkCapability } from './bulk.js';
 import { describeError as describe } from './text.js';
 
 /**
@@ -123,6 +124,15 @@ export function createNotificationProviderRegistry(
       throw new TypeError(
         `${at}: provider ${entry.provider} is server-readable but its delivery provider has no readPermission.`,
       );
+    }
+    const { bulk, sendBatch } = registration.delivery;
+    if ((bulk === undefined) !== (sendBatch === undefined)) {
+      throw new TypeError(
+        `${at}: provider ${entry.provider} declares a bulk capability and sendBatch together, or neither.`,
+      );
+    }
+    if (bulk !== undefined) {
+      assertNotificationBulkCapability(bulk, at);
     }
     for (const limit of entry.limits ?? []) {
       if (limit.windowSeconds > maxHistoryWindowSeconds) {

@@ -11,6 +11,7 @@ import {
   parseFcmServiceAccount,
   resolveCatalogNotificationCopy,
   type CreateNotificationServiceInput,
+  type NotificationBulkDeliveryResult,
   type NotificationCopyResolver,
   type NotificationCopyResolverInput,
   type NotificationDispatchJob,
@@ -161,6 +162,20 @@ export interface GameServicesNotificationsEnv {
    * Workers Paid subrequest cap (10,000 as of 2026-02-11, previously 1,000).
    */
   readonly MPGD_NOTIFICATIONS_SUBREQUEST_BUDGET?: string;
+  /**
+   * Deliveries one `deliverNotificationBulk` call attempts at most (one per
+   * FCM device); the rest answer `not-attempted` (`count-budget`), and a
+   * later call sends them. 50 by default, with the keys of at most 60
+   * recipients read (scaled with it): a recipient costs about 7 D1 queries
+   * to plan and an attempted delivery about 11 more. With account-deletion
+   * tombstones bound, which add a query to each new send and delivery
+   * record, 45 and 50. On D1 these are also the ceiling: a larger value
+   * is lowered to them. Either way a call stays under
+   * D1's 1,000 queries per Worker invocation (Workers
+   * Paid, https://developers.cloudflare.com/d1/platform/limits/, checked
+   * 2026-11-01). Raise it only with a store that is not bound by that limit.
+   */
+  readonly MPGD_NOTIFICATIONS_BULK_RECIPIENTS?: string;
 }
 
 export type WorkerNotifications =
@@ -888,6 +903,64 @@ export function createNotificationsFetchHandler(
 /** The send a game server makes through the service binding. */
 export async function deliverWorkerNotification(env: GameServicesNotificationsEnv, input: unknown): Promise<unknown> {
   return readyService(env).deliver(input);
+}
+
+/** Recipients one bulk call attempts by default (`MPGD_NOTIFICATIONS_BULK_RECIPIENTS`). */
+export const defaultWorkerNotificationBulkRecipients = 50;
+/**
+ * Recipients' keys one bulk call reads by default. A recipient the gate
+ * refuses costs about 7 D1 queries and no attempt, one already sent costs 1,
+ * and an attempted delivery about 11 more: 60 × 7 + 50 × 11 = 970.
+ */
+const defaultWorkerNotificationBulkLookups = 60;
+/**
+ * The defaults with D1 account-deletion tombstones bound, which add a query
+ * to each new send and each delivery record: 50 × 8 + 45 × 12 = 940.
+ */
+const defaultWorkerNotificationBulkRecipientsWithTombstones = 45;
+const defaultWorkerNotificationBulkLookupsWithTombstones = 50;
+
+/**
+ * The bulk send a game server or operator tool makes through the service
+ * binding (BK1), like `deliverWorkerNotification`: never a fetch route, so
+ * no client session can reach it. At most `MPGD_NOTIFICATIONS_BULK_RECIPIENTS`
+ * deliveries are attempted per call, and the keys of at most 60 recipients
+ * (scaled with it) are read.
+ */
+export async function deliverWorkerNotificationBulk(
+  env: GameServicesNotificationsEnv,
+  input: unknown,
+): Promise<NotificationBulkDeliveryResult> {
+  return readyService(env).deliverBulk(input, workerNotificationBulkLimits(env));
+}
+
+/**
+ * The bounds of one `deliverNotificationBulk` call. On D1 they keep a call
+ * under D1's 1,000 queries per invocation: 50 deliveries and 60 keys, or 45
+ * and 50 with account-deletion tombstones bound (a query more per new send
+ * and per delivery record), and `MPGD_NOTIFICATIONS_BULK_RECIPIENTS` may
+ * lower them but not raise them past that ceiling. Another store takes the
+ * setting as it is.
+ */
+export function workerNotificationBulkLimits(
+  env: GameServicesNotificationsEnv,
+): { readonly maxRecipients: number; readonly maxLookups: number } {
+  const declared = env.MPGD_NOTIFICATIONS_BULK_RECIPIENTS?.trim();
+  const asked = declared === undefined || declared === '' ? Number.NaN : Number(declared);
+  const d1 = env.MPGD_STORE === 'd1';
+  const tombstones = d1 && resolveAccountDeletionTombstones(env) !== undefined;
+  const attempts = tombstones
+    ? defaultWorkerNotificationBulkRecipientsWithTombstones
+    : defaultWorkerNotificationBulkRecipients;
+  const reads = tombstones
+    ? defaultWorkerNotificationBulkLookupsWithTombstones
+    : defaultWorkerNotificationBulkLookups;
+  const wanted = Number.isSafeInteger(asked) && asked >= 1 ? asked : attempts;
+  const maxRecipients = d1 ? Math.min(wanted, attempts) : wanted;
+  return {
+    maxRecipients,
+    maxLookups: Math.max(maxRecipients, Math.ceil((reads * maxRecipients) / attempts)),
+  };
 }
 
 /**

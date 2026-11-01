@@ -129,8 +129,9 @@ The current service binding methods are:
 - `recordLeaderboardScore(input)`
 - `recordVerifiedAttempt(input)` for trusted attempt coordinators
 - `getSnapshot(input)` for verified leaderboard reads
-- `deliverNotification(input)` and `endNotificationSession(input)` for
-  notifications v2 (see [Notifications v2](#notifications-v2))
+- `deliverNotification(input)`, `deliverNotificationBulk(input)`, and
+  `endNotificationSession(input)` for notifications v2 (see
+  [Notifications v2](#notifications-v2))
 
 The verified-attempt writer is intentionally available only through the
 private service binding. It is not routed through the public JSON or oRPC
@@ -592,6 +593,26 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
   code, message, retryable } }`, because an error's fields do not cross the
   RPC boundary. Any Worker bound to this one can send to any player, as
   with the other service-binding methods.
+- **Bulk sends** are `deliverNotificationBulk(input)` on the same binding,
+  never a client route: one topic to many players through one provider,
+  each player a single send with its own key and gate check (see the
+  [notifications guide](NOTIFICATIONS.md#bulk-sends)). It attempts at most
+  `MPGD_NOTIFICATIONS_BULK_RECIPIENTS` deliveries per call (50 by default,
+  one per FCM device) and reads the keys of at most 60 recipients (scaled
+  with it): planning a recipient costs about 7 D1 queries and an attempted
+  delivery about 11 more, which keeps a call under D1's 1,000 queries per
+  Worker invocation on Workers Paid. The rest answer `not-attempted`, and a
+  later call sends them. Only recipients the gate allows spend attempts,
+  so a call plans up to 60 and attempts the first 50 allowed: Apps in Toss
+  uses its bulk API (minimum 50) when at most 10 of them are refused, and
+  sends one by one otherwise. With account-deletion tombstones bound
+  (another query per new send and per delivery record) the defaults are
+  45 deliveries and 50 keys, so Apps in Toss sends one by one (raising
+  them needs the ledger's D1 queries batched, a follow-up). On D1 these
+  defaults are also the ceiling: a larger `MPGD_NOTIFICATIONS_BULK_RECIPIENTS`
+  is lowered to them. A large audience therefore takes several calls on the
+  Worker: bulk sends cut provider calls there, not D1 queries. It runs
+  inline, not through the queue.
 - **Scheduler.** Each cron run fires the due server reminders as sends
   through the policy gate, pushes the consent notices nobody recorded by
   seven days before they are due (Korean rules, through the catalog's

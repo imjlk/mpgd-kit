@@ -14,6 +14,7 @@ import {
   latestNotificationConsent,
   listNotificationNotices,
   normalizeNotificationTimestamp,
+  notificationContentSource,
   NotificationError,
   notificationKeyIssue,
   notificationNoticeCopyIssues,
@@ -40,15 +41,26 @@ import {
 } from '@mpgd/platform/notifications';
 
 import {
+  createNotificationBatchBarrier,
+  createNotificationLimiter,
+  isInsideNotificationHoldWindow,
+  parseNotificationBulkRequest,
+  type NotificationBulkDeliverOptions,
+  type NotificationBulkDeliveryResult,
+  type NotificationBulkNotAttemptedReason,
+  type NotificationBulkRecipientResult,
+} from './bulk.js';
+import {
   resolveCatalogNotificationCopy,
   resolveNotificationCopy,
+  resolveNotificationCopyByLocale,
   type NotificationCopyResolver,
 } from './copy.js';
-
 import {
   fcmInstallationIdRefusal,
   notificationExpiredProviderCode,
   type NotificationRemoteDeliveryAnswer,
+  type NotificationRemoteDeliveryRequest,
   type NotificationRemoteRecipient,
 } from './delivery-provider.js';
 import {
@@ -349,6 +361,25 @@ export interface NotificationService {
   ): Promise<void>;
   /** One send through the ledger, the gate, and the providers. */
   deliver(input: unknown): Promise<NotificationDeliveryOutcome>;
+  /**
+   * A bulk send (RFC open question 5): one topic to many players through one
+   * provider, each recipient a single send with its own key
+   * (`<idempotencyKey>:<encodeURIComponent(player)>`), ledger row, and gate
+   * check, made immediately before its batch's provider call. Recipients the
+   * gate refuses never reach the provider. A provider with a bulk capability
+   * gets one `sendBatch` call per batch of allowed recipients (one `send`
+   * each below its `minRecipients` or inside its hold window); any other
+   * provider gets one `send` per recipient. The same call retried answers
+   * recipients already sent from the ledger and sends only the rest.
+   *
+   * It is an operator action from the game's server, like `deliver`: never
+   * serve it to a client session. `options` are the host's bounds: no batch
+   * starts after `budgetMs`, and recipients past `maxRecipients` attempts, or
+   * past the provider's `rate` budget, answer `not-attempted`. A recipient
+   * answered from the ledger is no attempt, though its key is still read:
+   * resend only the `not-attempted` recipients to keep a retry small.
+   */
+  deliverBulk(input: unknown, options?: NotificationBulkDeliverOptions): Promise<NotificationBulkDeliveryResult>;
   /** Runs one queued dispatch job; a job that is no longer due does nothing. */
   dispatch(job: NotificationDispatchJob): Promise<void>;
   /**
@@ -463,6 +494,31 @@ interface Recipient {
 
 /** Copy resolver answers kept for one invocation (`copyFor`). */
 type NotificationCopyCache = Map<string, Promise<NotificationResolvedCopy>>;
+
+/** The cache key of one resolver answer: topic, provider, target, locale, notice variant, and template data. */
+function copyCacheKey(
+  topic: string,
+  provider: string,
+  target: string | undefined,
+  locale: string | undefined,
+  origin: NotificationSendOrigin,
+  templateData: NotificationTemplateData | undefined,
+): string {
+  return JSON.stringify([
+    topic,
+    provider,
+    target ?? null,
+    locale ?? null,
+    origin.kind === 'notice' ? origin.variant : null,
+    templateData === undefined
+      ? null
+      : Object.entries(templateData).sort(([left], [right]) => (left < right
+          ? -1
+          : left > right
+            ? 1
+            : 0)),
+  ]);
+}
 
 type RowChange =
   | { readonly kind: 'remove' }
@@ -595,20 +651,14 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     }
     const provider = recipient.provider.entry.provider;
     const locale = request.locale ?? recipient.locale;
-    const key = JSON.stringify([
+    const key = copyCacheKey(
       topic.id,
       provider,
-      recipient.target ?? null,
-      locale ?? null,
-      origin.kind === 'notice' ? origin.variant : null,
-      request.templateData === undefined
-        ? null
-        : Object.entries(request.templateData).sort(([left], [right]) => (left < right
-            ? -1
-            : left > right
-              ? 1
-              : 0)),
-    ]);
+      recipient.target,
+      locale,
+      origin,
+      request.templateData,
+    );
     let resolved = cache.get(key);
     if (resolved === undefined) {
       resolved = (async () => {
@@ -628,31 +678,113 @@ export function createNotificationService(input: CreateNotificationServiceInput)
           }
           throw new NotificationCopyUnavailableError(topic.id, { cause: error });
         }
-        const where = { sendKey: request.idempotencyKey, provider };
-        if (resolution.copy === undefined) {
-          // Reported, so a missing translation is not only a quiet copy-missing.
-          report(
-            new TypeError(`Topic ${topic.id}: ${resolution.issue ?? `no copy for ${locale ?? catalog.defaultLocale}`}.`),
-            'copy.resolve',
-            where,
-          );
-          return {};
-        }
-        if (customCopy) {
-          try {
-            fillNotificationTemplate(resolution.copy.title, request.templateData);
-            fillNotificationTemplate(resolution.copy.body, request.templateData);
-          } catch (error) {
-            // The project's text needs a value this send does not carry.
-            report(new TypeError(`Topic ${topic.id}: ${describe(error)}`), 'copy.resolve', where);
-            return {};
-          }
-        }
-        return { copy: resolution.copy };
+        return checkedCopy(resolution, topic.id, request.idempotencyKey, provider, locale, request.templateData);
       })();
       cache.set(key, resolved);
     }
     return resolved;
+  };
+  /** A resolver's answer as the gate takes it: no copy (reported) when it is missing or cannot be filled. */
+  const checkedCopy = (
+    resolution: Awaited<ReturnType<typeof resolveNotificationCopy>>,
+    topicId: string,
+    sendKey: string,
+    provider: string,
+    locale: string | undefined,
+    templateData: NotificationTemplateData | undefined,
+  ): NotificationResolvedCopy => {
+    const where = { sendKey, provider };
+    if (resolution.copy === undefined) {
+      // Reported, so a missing translation is not only a quiet copy-missing.
+      report(
+        new TypeError(
+          `Topic ${topicId}: ${resolution.issue ?? `no copy for ${locale ?? catalog.defaultLocale}`}.`,
+        ),
+        'copy.resolve',
+        where,
+      );
+      return {};
+    }
+    if (customCopy) {
+      try {
+        fillNotificationTemplate(resolution.copy.title, templateData);
+        fillNotificationTemplate(resolution.copy.body, templateData);
+      } catch (error) {
+        // The project's text needs a value this send does not carry.
+        report(new TypeError(`Topic ${topicId}: ${describe(error)}`), 'copy.resolve', where);
+        return {};
+      }
+    }
+    return { copy: resolution.copy };
+  };
+  /**
+   * A bulk send's copy, up front (BK1): one `resolveNotificationCopyByLocale`
+   * call for the locales its recipients name (the send's `locale`, or each
+   * recipient's own), stored in the invocation's `cache` under the keys
+   * `copyFor` reads, so planning, the provider call, and the flush-time
+   * gate check share each locale group's one answer. A recipient whose
+   * locale comes from its registration joins its group through the same
+   * cache. Only for a platform-user provider whose content comes from copy
+   * (a host template or a mapping's own text asks no resolver). It runs
+   * when the first recipient needs a send (`ensureCopies` in `deliverBulk`),
+   * so a retry whose recipients were all sent never asks the resolver. A
+   * resolver that throws here is reported and caches nothing: each locale
+   * group is then asked when a recipient the gate allows needs it, and a
+   * failure there fails that group's recipients, retryable.
+   */
+  const primeBulkCopies = async (
+    provider: RegisteredNotificationProvider,
+    request: { readonly topic: string; readonly idempotencyKey: string; readonly templateData?: NotificationTemplateData },
+    locales: readonly (string | undefined)[],
+    cache: NotificationCopyCache,
+  ): Promise<void> => {
+    if (provider.entry.addressing !== 'platform-user') {
+      return;
+    }
+    const origin: NotificationSendOrigin = { kind: 'send' };
+    const topic = topicFor(provider, undefined, request.topic, origin);
+    if (topic === undefined || notificationContentSource(topic, provider.entry.content) !== 'catalog') {
+      return;
+    }
+    const id = provider.entry.provider;
+    const keyOf = (locale: string | undefined) =>
+      copyCacheKey(topic.id, id, undefined, locale, origin, request.templateData);
+    const wanted = [...new Set(locales)].filter((locale) => !cache.has(keyOf(locale)));
+    if (wanted.length === 0) {
+      return;
+    }
+    let resolved: Awaited<ReturnType<typeof resolveNotificationCopyByLocale>>;
+    try {
+      resolved = await resolveNotificationCopyByLocale(resolveCopy, {
+        topic,
+        provider: id,
+        defaultLocale: catalog.defaultLocale,
+        ...(request.templateData === undefined ? {} : { templateData: request.templateData }),
+        locales: wanted,
+      });
+    } catch (error) {
+      // The up-front answers are an optimization: a failure caches nothing,
+      // so each locale group is asked again only when a recipient the gate
+      // allows needs it (`copyFor`), and a locale of refused recipients never
+      // fails the others.
+      report(error, 'copy.resolve.bulk', { sendKey: request.idempotencyKey, provider: id });
+      return;
+    }
+    for (const locale of wanted) {
+      cache.set(
+        keyOf(locale),
+        Promise.resolve(
+          checkedCopy(
+            resolved.get(locale) ?? {},
+            topic.id,
+            request.idempotencyKey,
+            id,
+            locale,
+            request.templateData,
+          ),
+        ),
+      );
+    }
   };
   const refuseNoticeTopic = (topic: string): void => {
     if (noticeTopic !== undefined && topic === noticeTopic) {
@@ -1019,13 +1151,14 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       state: { since: formatNotificationInstant(since), delaySeconds, attempts: attempts + 1 },
     };
   };
-  const callProvider = async (
+  /** What the provider is asked to send for one allowed recipient. */
+  const deliveryRequestOf = (
     recipient: Recipient,
     request: NotificationStoredSendRequest,
     topic: NotificationTopicDeclaration,
     decision: Extract<NotificationDeliveryDecision, { readonly status: 'allowed' }>,
     at: number,
-  ): Promise<NotificationRemoteDeliveryAnswer> => {
+  ): NotificationRemoteDeliveryRequest => {
     const mappedLink = topic.mapping?.['link'];
     const link = request.link ?? (typeof mappedLink === 'string' ? mappedLink : undefined);
     const target: NotificationRemoteRecipient = recipient.endpoint !== undefined
@@ -1036,39 +1169,58 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         }
       : { kind: 'platform-user', id: recipient.platformId ?? '' };
     const locale = request.locale ?? recipient.locale;
+    return {
+      idempotencyKey: recipient.rowKey,
+      sendKey: request.idempotencyKey,
+      provider: recipient.provider.entry.provider,
+      player: request.player,
+      topic,
+      recipient: target,
+      content: decision.content,
+      ...(decision.expiresAt === undefined ? {} : { expiresAt: decision.expiresAt }),
+      ...(request.templateData === undefined ? {} : { templateData: request.templateData }),
+      ...(request.data === undefined ? {} : { data: request.data }),
+      ...(link === undefined ? {} : { link }),
+      ...(locale === undefined ? {} : { locale }),
+      at: formatNotificationInstant(at),
+    };
+  };
+  /** One recipient's provider call (`send`), as one of the five answers. */
+  const sendOne = async (
+    provider: RegisteredNotificationProvider,
+    delivery: NotificationRemoteDeliveryRequest,
+  ): Promise<NotificationRemoteDeliveryAnswer> => {
     try {
-      const answer: unknown = await recipient.provider.delivery.send({
-        idempotencyKey: recipient.rowKey,
-        sendKey: request.idempotencyKey,
-        provider: recipient.provider.entry.provider,
-        player: request.player,
-        topic,
-        recipient: target,
-        content: decision.content,
-        ...(decision.expiresAt === undefined ? {} : { expiresAt: decision.expiresAt }),
-        ...(request.templateData === undefined ? {} : { templateData: request.templateData }),
-        ...(request.data === undefined ? {} : { data: request.data }),
-        ...(link === undefined ? {} : { link }),
-        ...(locale === undefined ? {} : { locale }),
-        at: formatNotificationInstant(at),
-      });
+      const answer: unknown = await provider.delivery.send(delivery);
       const known = deliveryAnswerOf(answer);
       if (known === undefined) {
         // A provider that broke the contract may still have sent it.
         report(
           new TypeError('The provider answered no known delivery answer.'),
           'provider.send',
-          request.idempotencyKey,
+          delivery.sendKey,
         );
         return { status: 'ambiguous' };
       }
       return known;
     } catch (error) {
       // The provider may have sent it: one rule for every failure it cannot prove.
-      report(error, 'provider.send', request.idempotencyKey, true);
+      report(error, 'provider.send', delivery.sendKey, true);
       return { status: 'ambiguous' };
     }
   };
+  const callProvider = (
+    recipient: Recipient,
+    request: NotificationStoredSendRequest,
+    topic: NotificationTopicDeclaration,
+    decision: Extract<NotificationDeliveryDecision, { readonly status: 'allowed' }>,
+    at: number,
+    // When the caller's claim on the row ends (epoch ms); a bulk batch checks it before its call.
+    _claimedUntil?: number,
+    // The gate again at a later instant; a bulk batch runs it just before its call.
+    _regate?: (when: number) => NotificationDeliveryDecision,
+  ): Promise<NotificationRemoteDeliveryAnswer> =>
+    sendOne(recipient.provider, deliveryRequestOf(recipient, request, topic, decision, at));
 
   /**
    * The rows a new send stores, after a first gate check per recipient:
@@ -1280,6 +1432,8 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     rowKey: string,
     mode: RunMode,
     copies: NotificationCopyCache = new Map(),
+    // A bulk send gathers its recipients' calls into one provider call.
+    call: typeof callProvider = callProvider,
   ): Promise<{ readonly refusal?: NotificationDeliveryRefusal }> => {
     let claimed: {
       readonly send: NotificationStoredSend;
@@ -1360,6 +1514,8 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     let evaluated: ReturnType<typeof decide>;
     let recipient: Recipient;
     let at: number;
+    // The same gate at a later instant, with the inputs read now: a bulk batch checks it again before its call.
+    let regate: (when: number) => NotificationDeliveryDecision;
     try {
       recipient = await recipientOfRow(registered, send.request, row, claimed.at);
       const consent = await store.listConsent(send.request.player);
@@ -1388,18 +1544,23 @@ export function createNotificationService(input: CreateNotificationServiceInput)
           resolvedCopy,
         );
       evaluated = early ?? evaluate(copyStandIn);
+      let gatedCopy: NotificationResolvedCopy = copyStandIn;
       // The copy resolver is asked only once the gate would allow the call.
       if (
         early === undefined
         && evaluated.decision.status === 'allowed'
         && evaluated.decision.content.source === 'catalog'
       ) {
-        const resolvedCopy = await copyFor(recipient, send.request, send.origin, copies);
+        gatedCopy = await copyFor(recipient, send.request, send.origin, copies);
         // The resolver took time: the gate decides again at the time of the
         // call, so a window that opened meanwhile (the night window) holds it.
         at = nowMs();
-        evaluated = evaluate(resolvedCopy);
+        evaluated = evaluate(gatedCopy);
       }
+      const gated = recipient;
+      const copy = gatedCopy;
+      regate = (when) =>
+        decide(send.request, send.origin, gated, consent, history, serverPermission, when, copy).decision;
     } catch (error) {
       if (error instanceof NotificationSendInputError) {
         // A send that cannot be made as asked fails once, not on every replay.
@@ -1459,7 +1620,15 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       await complete(sendKey, row, token, { kind: 'remove' }, nowMs());
       return {};
     }
-    const answer = await callProvider(recipient, send.request, topic, decision, at);
+    const answer = await call(
+      recipient,
+      send.request,
+      topic,
+      decision,
+      at,
+      row.state.status === 'in-flight' ? Date.parse(row.state.leaseUntil) : undefined,
+      regate,
+    );
     const answeredAt = nowMs();
     switch (answer.status) {
       case 'accepted':
@@ -1497,7 +1666,17 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         const leaseUntil = answeredAt + ambiguousLeaseMs(ambiguousAttempts);
         // The replay window started at the claim that reached the provider (or an earlier one).
         const firstAttemptedAt = row.firstAttemptedAt ?? formatNotificationInstant(at);
-        if (isNotificationRowAbandoned({ ...row, firstAttemptedAt }, leaseUntil)) {
+        if (answer.unattributed === true) {
+          report(
+            new Error(
+              `A bulk call reached some of its recipients without naming them${
+                answer.providerCode === undefined ? '' : ` (${answer.providerCode})`
+              }: the delivery stays in flight and is not replayed, so no recipient gets it twice.`,
+            ),
+            'dispatch.unattributed',
+            { sendKey, provider: row.provider, rowKey: row.key },
+          );
+        } else if (isNotificationRowAbandoned({ ...row, firstAttemptedAt }, leaseUntil)) {
           report(
             new Error(
               answer.providerCode === undefined
@@ -1519,6 +1698,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
               ...backoff,
               firstAttemptedAt,
               ...(ambiguousAttempts === 0 ? {} : { ambiguousAttempts }),
+              ...(answer.unattributed === true ? { unattributed: true } : {}),
               state: {
                 status: 'in-flight',
                 leaseUntil: formatNotificationInstant(leaseUntil),
@@ -1563,6 +1743,18 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         }
         await complete(sendKey, row, token, { kind: 'remove' }, answeredAt);
         return { refusal: { status: 'unavailable', reason: 'provider-rejected' } };
+      case 'not-sent':
+        // No call was made for it (a bulk batch left it out): the row goes
+        // back as it was before this claim, due again shortly. It is not a
+        // rate limit, so it neither backs off nor nears the 24-hour give-up.
+        await complete(
+          sendKey,
+          row,
+          token,
+          { kind: 'set', row: backedOff(before, answeredAt) },
+          answeredAt,
+        );
+        return {};
       case 'rate-limited': {
         // Nothing was sent: the claim is released and the row waits.
         const next = nextRateLimit(row.rateLimit, answer.retryAfterSeconds, answeredAt);
@@ -1830,6 +2022,13 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         budgets.set(provider, left - 1);
         return left > 0;
       },
+      /** Gives back one `take` that made no delivery after all. */
+      refund(provider: string): void {
+        const left = budgets.get(provider);
+        if (left !== undefined) {
+          budgets.set(provider, left + 1);
+        }
+      },
     };
   };
 
@@ -1848,9 +2047,14 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     const limit = batchLimit(options.limit);
     const keys = await store.listDueSends({ at: formatNotificationInstant(nowMs()), limit });
     const listed = keys.length;
-    const results: NotificationDueResult[] = [];
+    // Each listed send's result, in listing order; a failed one has none.
+    const slots = new Map<string, NotificationDueResult | undefined>();
     let failed = 0;
     let paced = 0;
+    // Sends whose due rows all go to one provider with a bulk path: replayed
+    // together through its `sendBatch` (BK1), each row still its own claim,
+    // gate check, and answer.
+    const gathered = new Map<string, { readonly provider: RegisteredNotificationProvider; readonly sends: { readonly key: string; readonly rows: NotificationSendRow[] }[] }>();
     for (const sendKey of keys) {
       try {
         const held = await store.getSend(sendKey);
@@ -1888,19 +2092,61 @@ export function createNotificationService(input: CreateNotificationServiceInput)
             failed += 1;
             report(error, 'queue.enqueue', sendKey);
           }
-          results.push({ sendKey, outcome: await settle(sendKey, []) });
+          slots.set(sendKey, { sendKey, outcome: await settle(sendKey, []) });
+          continue;
+        }
+        const only = due.every((row) => row.provider === due[0]?.provider)
+          ? registry.provider(due[0]?.provider ?? '')
+          : undefined;
+        if (only?.delivery.bulk !== undefined && only.delivery.sendBatch !== undefined) {
+          const group = gathered.get(only.entry.provider)
+            ?? { provider: only, sends: [] };
+          group.sends.push({ key: sendKey, rows: due });
+          gathered.set(only.entry.provider, group);
+          slots.set(sendKey, undefined);
           continue;
         }
         const ran = await runInline(sendKey, due, 'due', copies);
         if (ran.failed > 0) {
           failed += 1;
         }
-        results.push({ sendKey, outcome: await settle(sendKey, ran.refusals) });
+        slots.set(sendKey, { sendKey, outcome: await settle(sendKey, ran.refusals) });
       } catch (error) {
         failed += 1;
         report(error, 'dispatchDue', sendKey);
       }
     }
+    for (const { provider, sends } of gathered.values()) {
+      let answers: Awaited<ReturnType<typeof runBulkBatch>>;
+      try {
+        answers = await runBulkBatch(
+          provider,
+          sends.map((send) => ({ key: send.key, rows: send.rows, mode: 'due', refusals: [], wasDelivered: false })),
+          { batch: 0, single: 0 },
+          copies,
+        );
+      } catch (error) {
+        failed += sends.length;
+        report(error, 'dispatchDue', sends[0]?.key ?? '');
+        continue;
+      }
+      sends.forEach((send, index) => {
+        const answer = answers[index];
+        if (answer !== undefined && 'outcome' in answer) {
+          slots.set(send.key, { sendKey: send.key, outcome: answer.outcome });
+          return;
+        }
+        failed += 1;
+        report(
+          answer !== undefined && 'error' in answer ? answer.error : new Error('No answer.'),
+          'dispatchDue',
+          send.key,
+        );
+      });
+    }
+    const results = [...slots.values()].filter(
+      (result): result is NotificationDueResult => result !== undefined,
+    );
     return { results, failed, listed, paced };
   };
 
@@ -2683,6 +2929,702 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     return current;
   };
 
+  // Bulk sends (RFC open question 5, BK1).
+
+  /**
+   * One recipient of a bulk send, made ready the way `deliver` makes a
+   * send: answered from its key's state, or created, planned through the
+   * gate, and stored with the rows to run now.
+   */
+  const prepareBulkRecipient = async (
+    raw: Readonly<Record<string, unknown>>,
+    provider: string,
+    pace: ReturnType<typeof paceBudgets>,
+    // Recipients this call may still attempt; one answered from the ledger costs none.
+    work: { left: number },
+    // The call's copy answers, shared by every recipient of a locale group.
+    copies: NotificationCopyCache,
+    // Resolves the call's locale groups once, when the first recipient needs a send.
+    ensureCopies: () => Promise<void>,
+  ): Promise<
+    | { readonly done: BulkAnswer }
+    | {
+        readonly key: string;
+        readonly rows: readonly NotificationSendRow[];
+        readonly mode: RunMode;
+        readonly refusals: readonly NotificationDeliveryRefusal[];
+        readonly wasDelivered: boolean;
+      }
+  > => {
+    const request = sendRequestOf(raw);
+    const fingerprint = notificationSendFingerprint(request);
+    const key = request.idempotencyKey;
+    for (let attempt = 0; attempt < maxLedgerAttempts; attempt += 1) {
+      const at = nowMs();
+      const held = await lookup(key, at);
+      if (held !== undefined) {
+        if (held.send.fingerprint !== fingerprint) {
+          throw new NotificationError('NOTIFICATIONS_IDEMPOTENCY_CONFLICT', {
+            message: `Key ${key} is stored for another request.`,
+          });
+        }
+        const { send } = held;
+        if (send.rows.length === 0) {
+          if (send.claim !== undefined && Date.parse(send.claim.leaseUntil) > at) {
+            return { done: { outcome: { status: 'in-flight' } } };
+          }
+          await store.updateSend({ key, version: held.version, send: undefined });
+          continue;
+        }
+        const wasDelivered = notificationSendOutcome(send)?.status === 'delivered';
+        // A platform row whose lease ended (a call that stopped mid-way) is
+        // this call's to replay, as a retried `deliver` replays it.
+        const expired = send.rows.filter((row) => eligible('retry', row, at));
+        if (expired.length > 0) {
+          if (work.left <= 0) {
+            return { done: { notAttempted: 'count-budget' } };
+          }
+          // Each delivery row is an attempt: a player's devices each cost one.
+          work.left -= expired.length;
+          for (const row of expired) {
+            if (!await pace.take(row.provider)) {
+              return { done: { notAttempted: 'provider-rate' } };
+            }
+          }
+          return { key, rows: expired, mode: 'retry', refusals: [], wasDelivered };
+        }
+        const stored = notificationSendOutcome(send) ?? noEndpoint();
+        return {
+          done: {
+            outcome: stored.status === 'delivered'
+              ? { status: 'delivered', alreadyProcessed: true }
+              : stored,
+          },
+        };
+      }
+      // Spent out of the call's budget only once the gate allowed a row.
+      if (work.left <= 0) {
+        return { done: { notAttempted: 'count-budget' } };
+      }
+      // The copy is resolved only once a recipient needs a send, so a retry
+      // whose recipients were all sent never asks the resolver; a resolver
+      // that fails fails this recipient, retryable, before its key is made.
+      await ensureCopies();
+      const send: NotificationStoredSend = {
+        key,
+        fingerprint,
+        request,
+        origin: { kind: 'send' },
+        scheduled: false,
+        rows: [],
+        claim: { token: newToken(), leaseUntil: formatNotificationInstant(at + leaseMs) },
+        changedAt: formatNotificationInstant(at),
+      };
+      const version = await store.createSend(send);
+      if (version === undefined) {
+        // A concurrent send created the key first: answer from its state.
+        continue;
+      }
+      let planned: Awaited<ReturnType<typeof plan>>;
+      try {
+        planned = await plan(send.request, send.origin, at, undefined, copies);
+      } catch (error) {
+        // Nothing was sent: the key is released so a retry evaluates again.
+        await releaseQuietly(key, version);
+        if (error instanceof NotificationSendInputError) {
+          throw invalidInput(error.message, error);
+        }
+        throw error;
+      }
+      if (planned.rows.length === 0) {
+        await store.updateSend({ key, version, send: undefined });
+        return { done: { outcome: bestNotificationOutcome(planned.refusals) ?? noEndpoint() } };
+      }
+      // The call's and the provider's app-wide budgets are spent once the gate
+      // allowed a delivery, and before any row is stored: a recipient over
+      // either leaves nothing behind, and the same call retried sends it once
+      // the budget frees. A refused recipient spends neither.
+      const allowed = planned.rows.filter((row) => row.state.status === 'in-flight');
+      if (allowed.length > 0) {
+        // Taken at once, so recipients planned side by side cannot all pass it.
+        let over: NotificationBulkNotAttemptedReason | undefined;
+        if (work.left <= 0) {
+          over = 'count-budget';
+        } else {
+          work.left -= 1;
+          let paced: boolean;
+          try {
+            paced = await pace.take(provider);
+          } catch (error) {
+            // The rate could not be read (the store failed): nothing was
+            // sent, so the attempt goes back and the key is released.
+            work.left += 1;
+            await releaseQuietly(key, version);
+            throw error;
+          }
+          if (!paced) {
+            work.left += 1;
+            over = 'provider-rate';
+          }
+        }
+        if (over !== undefined) {
+          await releaseQuietly(key, version);
+          return { done: { notAttempted: over } };
+        }
+      }
+      const { claim: _claim, ...unclaimed } = send;
+      const stored: NotificationStoredSend = {
+        ...unclaimed,
+        rows: planned.rows,
+        changedAt: formatNotificationInstant(at),
+      };
+      if (!await store.updateSend({ key, version, send: stored })) {
+        // Another caller took the key over: this call delivers nothing for it,
+        // so the attempt and the provider's rate it reserved go back.
+        if (allowed.length > 0) {
+          work.left += 1;
+          pace.refund(provider);
+        }
+        return { done: { outcome: { status: 'in-flight' } } };
+      }
+      // The first allowed row was counted above; each further device is one
+      // more attempt and one more of the provider's rate. A device over
+      // either stays queued: the scheduler sends it at its own pace.
+      const now: NotificationSendRow[] = allowed.slice(0, 1);
+      for (const row of allowed.slice(1)) {
+        if (work.left <= 0) {
+          break;
+        }
+        work.left -= 1;
+        let paced = false;
+        try {
+          paced = await pace.take(row.provider);
+        } catch (error) {
+          // The device's row is stored: it stays queued for the scheduler.
+          report(error, 'deliverBulk.pace', {
+            sendKey: key,
+            provider: row.provider,
+            rowKey: row.key,
+          });
+        }
+        if (!paced) {
+          work.left += 1;
+          break;
+        }
+        now.push(row);
+      }
+      return {
+        key,
+        rows: now,
+        mode: 'job',
+        refusals: planned.refusals,
+        wasDelivered: false,
+      };
+    }
+    throw busy(key);
+  };
+
+  /**
+   * The flush of one batch: the requests in the provider's call groups
+   * (`bulk.callKey`, one title and body a call on Devvit), one `sendBatch`
+   * per group and `maxRecipients`, or one `send` per request below
+   * `minRecipients` and inside the provider's hold window. The gate runs
+   * again for each request as its call starts, and no call starts past the
+   * claims' deadline: a request the gate now refuses, or one past the
+   * deadline, answers `not-sent` (it is replayed shortly). Every answer is one of the five kinds; a
+   * missing or broken one, or a call that threw, is `ambiguous`.
+   */
+  const flushBulk = async (
+    provider: RegisteredNotificationProvider,
+    requests: readonly NotificationRemoteDeliveryRequest[],
+    calls: { batch: number; single: number },
+    // Milliseconds from now in which the last provider call may start, so every claim outlives the calls.
+    startWithinMs: number,
+    // Each request as the gate allows it at a later instant (undefined: no longer).
+    regates: readonly ((when: number) => NotificationRemoteDeliveryRequest | undefined)[] = [],
+  ): Promise<NotificationRemoteDeliveryAnswer[]> => {
+    const capability = provider.delivery.bulk;
+    const startedAt = nowMs();
+    const sendBatch = provider.delivery.sendBatch;
+    const answers: NotificationRemoteDeliveryAnswer[] = requests.map(() => ({
+      status: 'ambiguous',
+    }));
+    const notSent: NotificationRemoteDeliveryAnswer = { status: 'not-sent' };
+    /** The request as the gate allows it at `at`, or `undefined`. */
+    const current = (index: number, at: number): NotificationRemoteDeliveryRequest | undefined => {
+      const regate = regates[index];
+      try {
+        return regate === undefined ? requests[index] : regate(at);
+      } catch {
+        return undefined;
+      }
+    };
+    const singles = async (indexes: readonly number[]): Promise<void> => {
+      const limiter = createNotificationLimiter(bulkConcurrency);
+      await Promise.all(
+        indexes.map(async (index) => {
+          await limiter.acquire();
+          try {
+            const at = nowMs();
+            const request = at - startedAt >= startWithinMs ? undefined : current(index, at);
+            if (request === undefined) {
+              answers[index] = notSent;
+              return;
+            }
+            calls.single += 1;
+            answers[index] = await sendOne(provider, request);
+          } finally {
+            limiter.release();
+          }
+        }),
+      );
+    };
+    if (
+      capability === undefined
+      || sendBatch === undefined
+      || requests.length < (capability.minRecipients ?? 2)
+      || isInsideNotificationHoldWindow(capability.holdWindow, nowMs())
+    ) {
+      // Fewer than the minimum after the gate, or the hold window opened while the batch gathered.
+      await singles(requests.map((_, index) => index));
+      return answers;
+    }
+    const groups = new Map<string, number[]>();
+    requests.forEach((request, index) => {
+      let key = '';
+      try {
+        key = capability.callKey?.(request) ?? '';
+      } catch {
+        key = '';
+      }
+      const group = groups.get(key) ?? [];
+      group.push(index);
+      groups.set(key, group);
+    });
+    for (const group of groups.values()) {
+      for (let start = 0; start < group.length; start += capability.maxRecipients) {
+        const at = nowMs();
+        const left = startWithinMs - (at - startedAt);
+        const sending: { readonly index: number; readonly request: NotificationRemoteDeliveryRequest }[] = [];
+        for (const index of group.slice(start, start + capability.maxRecipients)) {
+          const request = left > 0 ? current(index, at) : undefined;
+          if (request === undefined) {
+            answers[index] = notSent;
+          } else {
+            sending.push({ index, request });
+          }
+        }
+        if (sending.length === 0) {
+          continue;
+        }
+        if (sending.length < (capability.minRecipients ?? 2)) {
+          await singles(sending.map((entry) => entry.index));
+          continue;
+        }
+        const slice = sending.map((entry) => entry.request);
+        calls.batch += 1;
+        let raw: unknown;
+        try {
+          raw = await sendBatch.call(provider.delivery, slice, { startWithinMs: left });
+        } catch (error) {
+          // The provider may have sent any of them: one rule for every failure it cannot prove.
+          report(
+            error,
+            'provider.sendBatch',
+            { sendKey: slice[0]?.sendKey ?? '', provider: provider.entry.provider },
+            true,
+          );
+          continue;
+        }
+        const list = Array.isArray(raw) ? raw as readonly unknown[] : [];
+        if (list.length !== slice.length) {
+          report(
+            new TypeError(
+              `The provider answered ${list.length} answers for a batch of ${slice.length}.`,
+            ),
+            'provider.sendBatch',
+            { sendKey: slice[0]?.sendKey ?? '', provider: provider.entry.provider },
+          );
+          continue;
+        }
+        sending.forEach(({ index, request }, position) => {
+          const known = deliveryAnswerOf(list[position]);
+          if (known === undefined) {
+            report(
+              new TypeError('The provider answered no known delivery answer.'),
+              'provider.sendBatch',
+              {
+                sendKey: request.sendKey,
+                provider: provider.entry.provider,
+                rowKey: request.idempotencyKey,
+              },
+            );
+          }
+          answers[index] = known ?? { status: 'ambiguous' };
+        });
+      }
+    }
+    return answers;
+  };
+
+  /**
+   * Runs the prepared recipients of one batch: each row through `runRow`
+   * (claim, gate, provider call, settle), with their provider calls
+   * gathered into `flushBulk` for a provider with a bulk capability. A
+   * send's rows run one after the other, in rounds, so two rows of one send
+   * never contend for its key. Answers each recipient as `deliver` would.
+   */
+  const runBulkBatch = async (
+    provider: RegisteredNotificationProvider,
+    prepared: readonly {
+      readonly key: string;
+      readonly rows: readonly NotificationSendRow[];
+      readonly mode: RunMode;
+      readonly refusals: readonly NotificationDeliveryRefusal[];
+      readonly wasDelivered: boolean;
+    }[],
+    calls: { batch: number; single: number },
+    copies: NotificationCopyCache,
+  ): Promise<BulkAnswer[]> => {
+    const limiter = createNotificationLimiter(bulkConcurrency);
+    const capability = provider.delivery.bulk;
+    const state = prepared.map((entry) => ({
+      refusals: [...entry.refusals],
+      errors: [] as { readonly error: unknown; readonly rowKey: string; readonly provider: string }[],
+      callerError: undefined as unknown,
+      settleFailed: false,
+    }));
+    const rounds = Math.max(0, ...prepared.map((entry) => entry.rows.length));
+    for (let round = 0; round < rounds; round += 1) {
+      const members = prepared
+        .map((entry, index) => ({ entry, index, row: entry.rows[round] }))
+        .filter((member): member is typeof member & { readonly row: NotificationSendRow } => member.row !== undefined);
+      // Only a provider with a bulk path gathers calls, for a round of at
+      // least its minimum and outside its hold window. Any other round sends
+      // each recipient as its gate allows it and settles it at once, so no
+      // claim waits on a queue of single calls past its lease.
+      const gathers = capability !== undefined
+        && provider.delivery.sendBatch !== undefined
+        && members.length >= (capability.minRecipients ?? 2)
+        && !isInsideNotificationHoldWindow(capability.holdWindow, nowMs());
+      const barrier = createNotificationBatchBarrier<
+        {
+          readonly request: NotificationRemoteDeliveryRequest;
+          readonly claimedUntil: number;
+          /** The request the gate allows at `when`, or `undefined` when it no longer does. */
+          readonly regate: (when: number) => NotificationRemoteDeliveryRequest | undefined;
+        },
+        NotificationRemoteDeliveryAnswer
+      >(members.length, async (items) => {
+        // A recipient whose claim has less than half a lease left (it may run
+        // out before the call answers, and another holder may then own its
+        // row) is not sent. Nothing was sent, so it waits a moment and is
+        // replayed (its own claim settles only while it still holds the row).
+        // The gate runs again for each recipient at the batch's own time
+        // (quiet hours or the night window may have begun while it gathered),
+        // with the inputs its first check read. A recipient it no longer
+        // allows is not sent either: it is replayed, and its replay's gate
+        // defers or refuses it.
+        const now = nowMs();
+        type Checked =
+          | { readonly item: (typeof items)[number]; readonly request: NotificationRemoteDeliveryRequest }
+          | { readonly item: (typeof items)[number]; readonly reason: string };
+        const checked = items.map((item): Checked => {
+          if (item.claimedUntil - now < leaseMs / 2) {
+            return { item, reason: 'has less than half a claim lease left' };
+          }
+          let request: NotificationRemoteDeliveryRequest | undefined;
+          try {
+            request = item.regate(now);
+          } catch {
+            request = undefined;
+          }
+          return request === undefined
+            ? { item, reason: 'is no longer allowed by the gate, or its gate inputs are too old' }
+            : { item, request };
+        });
+        const fresh = checked.flatMap((entry) => ('request' in entry ? [entry] : []));
+        // The last call starts while every fresh claim still has a quarter lease left.
+        const startWithinMs = Math.min(...fresh.map((entry) => entry.item.claimedUntil)) - leaseMs / 4 - now;
+        const answers = await flushBulk(
+          provider,
+          fresh.map((entry) => entry.request),
+          calls,
+          startWithinMs,
+          fresh.map((entry) => entry.item.regate),
+        );
+        let next = 0;
+        return checked.map((entry): NotificationRemoteDeliveryAnswer => {
+          if ('request' in entry) {
+            next += 1;
+            return answers[next - 1] ?? { status: 'ambiguous' };
+          }
+          report(
+            new Error(`A bulk recipient ${entry.reason} when its batch is sent; it is not sent now.`),
+            'dispatch.stale',
+            {
+              sendKey: entry.item.request.sendKey,
+              provider: provider.entry.provider,
+              rowKey: entry.item.request.idempotencyKey,
+            },
+          );
+          return { status: 'not-sent' };
+        });
+      });
+      await Promise.all(members.map(async ({ entry, index, row }) => {
+        const slot = state[index];
+        if (slot === undefined) {
+          return;
+        }
+        await limiter.acquire();
+        let holding = true;
+        let arrived = false;
+        const release = (): void => {
+          if (holding) {
+            holding = false;
+            limiter.release();
+          }
+        };
+        try {
+          const { refusal } = await runRow(entry.key, row.provider, row.key, entry.mode, copies, async (recipient, request, topic, decision, at, claimedUntil, regate) => {
+            arrived = true;
+            if (!gathers) {
+              calls.single += 1;
+              return callProvider(recipient, request, topic, decision, at);
+            }
+            // The slot goes back while the batch gathers, so the barrier never waits on a recipient that cannot run.
+            release();
+            const answer = await barrier.arrive({
+              request: deliveryRequestOf(recipient, request, topic, decision, at),
+              claimedUntil: claimedUntil ?? at,
+              regate: (when) => {
+                // The consent, history, and host permission were read at `at`: past a short age
+                // they may be stale, so the recipient is replayed with fresh reads instead.
+                if (when - at > bulkGateFreshMs) {
+                  return undefined;
+                }
+                const again = regate?.(when);
+                return again?.status === 'allowed'
+                  ? deliveryRequestOf(recipient, request, topic, again, when)
+                  : undefined;
+              },
+            });
+            await limiter.acquire();
+            holding = true;
+            return answer;
+          });
+          if (refusal !== undefined) {
+            slot.refusals.push(refusal);
+          }
+        } catch (error) {
+          if (error instanceof NotificationError && error.code === 'NOTIFICATIONS_INVALID_INPUT') {
+            slot.callerError ??= error;
+          } else {
+            slot.errors.push({ error, rowKey: row.key, provider: row.provider });
+            slot.settleFailed ||= error instanceof NotificationSettleError;
+          }
+        } finally {
+          if (!arrived) {
+            barrier.leave();
+          }
+          release();
+        }
+      }));
+    }
+    return Promise.all(prepared.map(async (entry, index): Promise<BulkAnswer> => {
+      const slot = state[index];
+      // Every row failed before its provider call: the first failure is the
+      // recipient's. A row whose answer could not be stored may have been
+      // delivered, so it answers from the ledger, as `deliver` does. Every
+      // other failure is reported here, as `runInline` reports it.
+      const errors = slot?.errors ?? [];
+      const thrown = slot?.callerError
+        ?? (errors.length > 0 && errors.length === entry.rows.length && slot?.settleFailed !== true
+          ? errors[0]?.error
+          : undefined);
+      for (const failure of errors) {
+        if (failure.error !== thrown) {
+          report(failure.error, 'dispatch', { sendKey: entry.key, provider: failure.provider, rowKey: failure.rowKey });
+        }
+      }
+      if (thrown !== undefined) {
+        return { error: thrown };
+      }
+      let settled: NotificationDeliveryOutcome;
+      try {
+        settled = await settle(entry.key, slot?.refusals ?? []);
+      } catch (error) {
+        // The read failed, not the send: this recipient alone answers it.
+        return { error };
+      }
+      return {
+        outcome: entry.wasDelivered && settled.status === 'delivered'
+          ? { status: 'delivered', alreadyProcessed: true }
+          : settled,
+      };
+    }));
+  };
+
+  const deliverBulk = async (
+    raw: unknown,
+    options: NotificationBulkDeliverOptions = {},
+  ): Promise<NotificationBulkDeliveryResult> => {
+    const { input: bulk, keys } = parseNotificationBulkRequest(raw);
+    refuseNoticeTopic(bulk.topic);
+    const provider = registry.provider(bulk.provider);
+    if (provider === undefined) {
+      throw invalidInput(`This backend has no notifications provider ${bulk.provider}.`);
+    }
+    const capability = provider.delivery.bulk;
+    const batchSize = Math.min(
+      bulk.batchSize ?? capability?.maxRecipients ?? defaultBulkBatchSize,
+      capability?.maxRecipients ?? maxNotificationRowsPerBulkBatch,
+    );
+    const budgetMs = typeof options.budgetMs === 'number' && Number.isFinite(options.budgetMs) && options.budgetMs > 0
+      ? options.budgetMs
+      : defaultSchedulerBudgetMs;
+    const work = {
+      left: typeof options.maxRecipients === 'number' && Number.isFinite(options.maxRecipients)
+        ? Math.max(0, Math.floor(options.maxRecipients))
+        : Number.POSITIVE_INFINITY,
+    };
+    const lookups = {
+      left: typeof options.maxLookups === 'number' && Number.isFinite(options.maxLookups)
+        ? Math.max(0, Math.floor(options.maxLookups))
+        : Number.POSITIVE_INFINITY,
+    };
+    const elapsed = input.elapsedMs ?? (() => globalThis.performance.now());
+    const startedAt = elapsed();
+    // Recipients are prepared concurrently: their takes are made one at a
+    // time, so the budget is read once and never spent twice.
+    const budgets = paceBudgets();
+    let paced: Promise<unknown> = Promise.resolve();
+    const pace: ReturnType<typeof paceBudgets> = {
+      take(provider) {
+        const taken = paced.then(() => budgets.take(provider));
+        paced = taken.catch(() => undefined);
+        return taken;
+      },
+      refund: (provider) => budgets.refund(provider),
+    };
+    const calls = { batch: 0, single: 0 };
+    // One copy answer per locale group for the whole call, shared by
+    // planning, the provider calls, and the flush-time gate checks. It is
+    // resolved once, when the first recipient needs a send.
+    const copies: NotificationCopyCache = new Map();
+    const lookupLimit = lookups.left;
+    let primed: Promise<void> | undefined;
+    const ensureCopies = (): Promise<void> =>
+      primed ??= primeBulkCopies(
+        provider,
+        {
+          topic: bulk.topic,
+          idempotencyKey: bulk.idempotencyKey,
+          ...(bulk.templateData === undefined ? {} : { templateData: bulk.templateData }),
+        },
+        // Only well-formed locales of recipients within the read budget: a
+        // malformed one fails its own recipient's request check, never the
+        // whole call through the resolver.
+        bulk.recipients
+          .slice(0, Number.isFinite(lookupLimit) ? lookupLimit : undefined)
+          .filter((recipient) => recipient.templateData === undefined)
+          .map((recipient) => recipient.locale ?? bulk.locale)
+          .filter((locale): locale is string => isBoundedText(locale)),
+        copies,
+      );
+    const answers: (BulkAnswer | undefined)[] = keys.map(() => undefined);
+    const shared = {
+      ...(bulk.templateData === undefined ? {} : { templateData: bulk.templateData }),
+      ...(bulk.data === undefined ? {} : { data: bulk.data }),
+      ...(bulk.locale === undefined ? {} : { locale: bulk.locale }),
+      ...(bulk.link === undefined ? {} : { link: bulk.link }),
+    };
+    for (let start = 0; start < keys.length; start += batchSize) {
+      const end = Math.min(start + batchSize, keys.length);
+      if (start > 0 && elapsed() - startedAt >= budgetMs) {
+        for (let index = start; index < keys.length; index += 1) {
+          answers[index] = { notAttempted: 'time-budget' };
+        }
+        break;
+      }
+      const ready: { readonly index: number; readonly prepared: Parameters<typeof runBulkBatch>[1][number] }[] = [];
+      const limiter = createNotificationLimiter(bulkConcurrency);
+      await Promise.all(bulk.recipients.slice(start, end).map(async (recipient, offset) => {
+        const index = start + offset;
+        // Every recipient's key is read once; past the read budget, none is.
+        if (lookups.left <= 0) {
+          answers[index] = { notAttempted: 'count-budget' };
+          return;
+        }
+        lookups.left -= 1;
+        await limiter.acquire();
+        try {
+          const made = await prepareBulkRecipient(
+            {
+              ...shared,
+              ...recipient,
+              idempotencyKey: keys[index] ?? '',
+              topic: bulk.topic,
+              provider: bulk.provider,
+            },
+            bulk.provider,
+            pace,
+            work,
+            copies,
+            ensureCopies,
+          );
+          if ('done' in made) {
+            answers[index] = made.done;
+          } else if (made.rows.length === 0) {
+            answers[index] = { outcome: await settle(made.key, [...made.refusals]) };
+          } else {
+            ready.push({ index, prepared: made });
+          }
+        } catch (error) {
+          answers[index] = { error };
+        } finally {
+          limiter.release();
+        }
+      }));
+      ready.sort((left, right) => left.index - right.index);
+      const ran = await runBulkBatch(
+        provider,
+        ready.map((entry) => entry.prepared),
+        calls,
+        copies,
+      );
+      ready.forEach((entry, position) => {
+        answers[entry.index] = ran[position] ?? { error: new Error('The batch answered no result.') };
+      });
+    }
+    const recipients = bulk.recipients.map((recipient, index): NotificationBulkRecipientResult => {
+      const base = { player: recipient.player, idempotencyKey: keys[index] ?? '' };
+      const answer = answers[index] ?? { notAttempted: 'time-budget' };
+      if ('outcome' in answer) {
+        return { ...base, status: 'answered', outcome: answer.outcome };
+      }
+      if ('notAttempted' in answer) {
+        return { ...base, status: 'not-attempted', reason: answer.notAttempted };
+      }
+      const { error } = answer;
+      if (!(error instanceof NotificationError)) {
+        report(error, 'deliverBulk', base.idempotencyKey);
+      }
+      return {
+        ...base,
+        status: 'failed',
+        error: error instanceof NotificationError
+          ? { code: error.code, message: error.message, retryable: error.retryable }
+          : {
+              code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+              message: 'The send failed before an answer could be stored; retry the bulk send.',
+              retryable: true,
+            },
+      };
+    });
+    return { recipients, summary: bulkSummaryOf(recipients), providerCalls: calls };
+  };
+
   return {
     providers: () => registry.snapshot(),
 
@@ -2943,6 +3885,8 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       }
       throw busy(key);
     },
+
+    deliverBulk,
 
     async dispatch(job) {
       if (
@@ -3675,6 +4619,8 @@ function deliveryAnswerOf(answer: unknown): NotificationRemoteDeliveryAnswer | u
         : { status: 'accepted' };
     case 'unregistered':
       return { status: 'unregistered' };
+    case 'not-sent':
+      return { status: 'not-sent' };
     case 'rate-limited':
       return typeof answer.retryAfterSeconds === 'number'
         ? { status: 'rate-limited', retryAfterSeconds: answer.retryAfterSeconds }
@@ -3691,10 +4637,73 @@ function deliveryAnswerOf(answer: unknown): NotificationRemoteDeliveryAnswer | u
           }
         : { status: 'rejected', reason: answer.reason };
     case 'ambiguous':
-      return typeof answer.providerCode === 'string'
-        ? { status: 'ambiguous', providerCode: answer.providerCode.slice(0, 64) }
-        : { status: 'ambiguous' };
+      return {
+        status: 'ambiguous',
+        ...(typeof answer.providerCode === 'string' ? { providerCode: answer.providerCode.slice(0, 64) } : {}),
+        ...(answer.unattributed === true ? { unattributed: true } : {}),
+      };
     default:
       return undefined;
   }
+}
+
+/** What one bulk recipient came to before it is reported. */
+type BulkAnswer =
+  | { readonly outcome: NotificationDeliveryOutcome }
+  | { readonly notAttempted: NotificationBulkNotAttemptedReason }
+  | { readonly error: unknown };
+
+/** Recipients prepared and run at once in a bulk batch (each one's ledger reads and writes). */
+const bulkConcurrency = 8;
+/**
+ * How old a bulk recipient's gate inputs (consent, history, host permission)
+ * may be when its call starts; an older one is replayed with fresh reads.
+ */
+const bulkGateFreshMs = 30_000;
+/** Recipients per batch for a provider that sends one by one. */
+const defaultBulkBatchSize = 100;
+/** The most recipients one bulk batch runs for a provider that sends one by one. */
+const maxNotificationRowsPerBulkBatch = 1_000;
+
+function bulkSummaryOf(recipients: readonly NotificationBulkRecipientResult[]) {
+  const summary = {
+    delivered: 0,
+    alreadyProcessed: 0,
+    deferred: 0,
+    inFlight: 0,
+    suppressed: 0,
+    unavailable: 0,
+    notAttempted: 0,
+    failed: 0,
+  };
+  for (const recipient of recipients) {
+    if (recipient.status === 'not-attempted') {
+      summary.notAttempted += 1;
+    } else if (recipient.status === 'failed') {
+      summary.failed += 1;
+    } else {
+      switch (recipient.outcome.status) {
+        case 'delivered':
+          if (recipient.outcome.alreadyProcessed) {
+            summary.alreadyProcessed += 1;
+          } else {
+            summary.delivered += 1;
+          }
+          break;
+        case 'deferred':
+          summary.deferred += 1;
+          break;
+        case 'in-flight':
+          summary.inFlight += 1;
+          break;
+        case 'suppressed':
+          summary.suppressed += 1;
+          break;
+        case 'unavailable':
+          summary.unavailable += 1;
+          break;
+      }
+    }
+  }
+  return summary;
 }

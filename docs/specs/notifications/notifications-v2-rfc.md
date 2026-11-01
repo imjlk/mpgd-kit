@@ -1597,6 +1597,24 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
 `failureCount` and `errors`. The request and ledger keys move from the closed
 `PlatformTarget`/`NotificationTopic` sets to open provider and topic ids.
 
+- **Unattributed answers (BK1).** A bulk answer may prove that some of its
+  recipients were reached without naming them (counts only). A recipient
+  it does not prove is `ambiguous` with `unattributed`: never `accepted`,
+  since nothing confirms it, and never `rate-limited` or `rejected`, since
+  some recipients did receive it and a retry would reach them again. The
+  row stays `in-flight` and is not replayed (neither by a retry of the key
+  nor by the scheduler) until its key's retention ends, and the backend
+  reports it. A recipient may miss the message; none gets it twice.
+  The row writes no delivery history, so the provider's app-wide pace
+  (the registry `rate`) never counts it, while the gate still counts it
+  toward the player's frequency caps and provider limits as an attempted
+  in-flight send.
+- **Not sent (BK1).** A batch may answer `not-sent` for a request it made
+  no call for (a call group that would start past the claims' deadline,
+  or a recipient the batch's final gate check left out). The row goes
+  back as it was before the claim, due again a minute later; it is not a
+  rate limit, so it neither backs off nor nears the 24-hour give-up.
+
 ### Delivery providers {#remote-delivery}
 
 - **FCM** (Android and iOS).
@@ -1673,7 +1691,9 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
   - **Transport.** `send-message` (`sendFunctionalMessage`) over the
     partner API's mTLS client certificate, injected as a fetcher (a Workers
     mTLS binding), with the template set code and context, one recipient per
-    call in the first wave. The recipient is the platform user the backend
+    call. A bulk send (BK1, see [What BK1 landed](#pr-plan)) uses
+    `send-bulk-message` for 50 to 2,500 recipients, with each recipient's
+    key in the body. The recipient is the platform user the backend
     resolved from the player's authenticated identity; the deployment's
     `recipientKey` says whether that id is a Toss login user key
     (`x-toss-user-key`) or an anonymous key (`x-anon-key`).
@@ -1723,7 +1743,8 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
   `createDevvitNotificationDeliveryProvider` and
   `createDevvitNotificationService` in `@mpgd/adapter-devvit/server`.
   - **Transport.** `enqueue` with a title, a body, and the send's `link`, one
-    recipient per call in the first wave. The player id is the Reddit user id
+    recipient per call; a bulk send (BK1) puts up to 1,000 recipients that
+    share a title and body in one call. The player id is the Reddit user id
     (`t2_`, the Devvit server's `context.userId`), which is also the
     recipient; any other player id has no recipient (`no-endpoint`).
   - **What it sends.** The gate's filled title and body, with no template
@@ -2744,6 +2765,7 @@ publishable package carries a Sampo changeset.
 | DV1 | The `notifications.backend.*` bridge methods, `createDevvitNotificationsBackendBridgeHandler` in `@mpgd/adapter-devvit/server`, the webview's `createDevvitNotificationsBackend`, and the starter's runtime on Reddit | No notifications runtime on Reddit |
 | AR1 | Android advertising pushes the shell renders with the opt-out action: `rendersAdvertising`, `shellRendersAdvertising`, and the gate's `endpointShowsActions` in `@mpgd/platform`; the catalog switch; the FCM data message in `@mpgd/game-services`; the renderer and its messaging service in `@mpgd/capacitor-game-services`; the provider's renderer read in `@mpgd/adapter-capacitor`; the CLI's manifest wiring and the starter's Android mapping | No Android advertising |
 | LC1 | Server-side localized copy: the gate's `resolvedCopy`, `copy-missing`, and `notificationContentSource` in `@mpgd/platform`; the `NotificationCopyResolver` port and its catalog default in `@mpgd/game-services`; the Worker's copy binding | Open question 4 |
+| BK1 | Bulk sends: `deliverBulk` and the provider bulk capability in `@mpgd/game-services`, the Apps in Toss `send-bulk-message` path, the Devvit bulk `enqueue` and opted-in page helper in `@mpgd/adapter-devvit`, and the Worker's `deliverNotificationBulk` binding method | One provider call per recipient |
 
 **What S1 landed.**
 
@@ -3059,7 +3081,151 @@ resolver for a send's title and body.
 - No migration: the locale is the registration's, which the endpoint and
   platform-user registration rows already keep.
 - Left to follow-ups: bulk sends (open question 5) take the copy resolved
-  per locale group as input rather than look it up themselves.
+  per locale group as input rather than look it up themselves (landed in
+  BK1, below).
+
+**What BK1 landed.** BK1 resolves open question 5: bulk sends for live-ops
+announcements and event pushes.
+
+- `@mpgd/game-services/notifications`:
+  - **`NotificationService.deliverBulk(input, options)`.** One topic to up
+    to 10,000 players through one named provider. Each player is a single
+    send keyed `<idempotencyKey>:<encodeURIComponent(player)>`.
+    - It is answered from its key's state (a retry answers players already
+      sent, `delivered` with `alreadyProcessed`, and replays only platform
+      rows whose lease ended) or planned through the gate, then stored.
+    - The gate runs again per row immediately before the batch's provider
+      call. A batch gathers its calls only when it has at least the
+      provider's minimum and is outside its hold window; otherwise each
+      recipient is sent and settled on its own, so no claim waits past its
+      lease on a queue of single calls.
+    - When the batch is sent, the gate runs once more for each recipient at
+      that instant, with the inputs its check read, so quiet hours or the
+      night window that began while the batch gathered still hold it. A
+      recipient the gate no longer allows, whose gate inputs (consent,
+      history, the host's permission) were read more than 30 seconds
+      before its call, or whose claim has less than half a lease left
+      (another holder may own its row by the time the call answers), is not
+      sent with the batch: it answers `not-sent`, which puts the row back
+      as it was, due again a minute later, without the rate-limit backoff
+      or its 24-hour give-up, and its replay reads the inputs again and
+      runs the gate.
+    - A refused player never reaches the provider and has its own
+      answer.
+    - **Copy (with LC1).** The copy resolver is asked once per locale
+      group for the whole call: one `resolveNotificationCopyByLocale` call,
+      made when the first recipient needs a send, for the locales the send
+      or its recipients name (well-formed ones, within the read budget),
+      kept in the
+      call's copy cache (LC1's per-invocation cache, keyed by topic,
+      provider, target, locale, and template data), which planning, the
+      provider calls, and the flush-time gate checks share; a recipient
+      whose locale comes from its registration joins its group through the
+      same cache. The gate renders the group's copy for each recipient, as
+      for a single send, so a single send and a bulk send render the same
+      text. A group with no copy is `unavailable: copy-missing`. A resolver
+      that throws fails every recipient still owed a send, retryable, with
+      nothing stored for them; a retry whose recipients were all sent never
+      asks it. The scheduler's grouped replays share one cache per run.
+  - **Budgets.** The call's attempt budget and the provider's `rate` are
+    spent only for a recipient the gate allowed, before its row is stored;
+    a refused recipient spends neither. Each device of a device provider is
+    one attempt and one of the `rate`: a device past either stays queued,
+    and the scheduler sends it at its pace. A single call that falls back
+    to one `send` per recipient runs the gate again as each call starts,
+    and so does each of a provider's call groups (`bulk.callKey`: one
+    title and body a call on Devvit, one template a call on Apps in Toss),
+    one `sendBatch` per group.
+  - **Answers.** Per recipient: `answered` with the outcome `deliver` would
+    give, `not-attempted` (`time-budget`, `count-budget`, or
+    `provider-rate`: the registry `rate` has no room, as the scheduler's
+    pace reads it), or `failed` with the code `deliver` would throw. A
+    summary counts them. A not-attempted player leaves no ledger state, so
+    the same call later sends it.
+  - **Capability.** `NotificationRemoteBulkCapability` on a delivery
+    provider, with `sendBatch`. It declares `maxRecipients`,
+    `minRecipients` (2 by default), `perRecipientOutcomes`, and an optional
+    `holdWindow`, in which the service sends one by one. The registry
+    checks it.
+  - **Batches.** The service chunks the audience into the provider's
+    batches, bounded by a wall-time budget (20 seconds) and the host's
+    `maxRecipients` attempts. A batch below the minimum, or inside the hold
+    window, goes one `send` per recipient. A provider without the
+    capability (FCM) sends one by one through the same path.
+  - **Scheduler replays.** When the scheduler sends due rows inline, the
+    sends whose due rows all go to one provider with a bulk path are
+    replayed together through the same batches (call groups, minimum,
+    maximum, hold window, and the gate checks above), each row still its
+    own claim and answer. Through the queue, each row stays one job.
+  - **`ambiguous` with `unattributed`** (see [Provider
+    answers](#provider-answers)), kept on the row as `unattributed`, which
+    `notificationSendDueAt` never makes due. Rows are JSON in every store,
+    so no migration was needed.
+- **Apps in Toss** (`createAitFunctionalMessageDeliveryProvider`):
+  - **API.** `sendBatch` over `POST
+    /api-partner/v1/apps-in-toss/messenger/send-bulk-message` with `{
+    templateSetCode, contextList: [{ userKey | anonKey, context }] }`. The
+    documentation (checked 2026-11-01) says the API is meant for 50 or more
+    recipients and takes at most 2,500 a call. It holds messages requested
+    from 21:00 to before 08:00 until 08:00, and it is limited to 3,000
+    calls per minute per app. The answer has the `send-message` shape
+    (per-channel counts and lists of `contentId` and `reachedFailReason`)
+    and names no recipient.
+  - **Capability.** `{ maxRecipients: 2500, minRecipients: 50,
+    perRecipientOutcomes: false, holdWindow: 20:55 to 08:00 Asia/Seoul }`:
+    the window opens five minutes before the host's hold, so a call in
+    flight never lands in it.
+  - **Answers.** Every recipient of a call gets the call's answer:
+    - `accepted` when one channel's sent count equals the recipients (the
+      kit reads a channel as reaching a recipient at most once per message,
+      which the documentation does not state), or when the channels' sent
+      counts add up to exactly the recipients (read as each recipient
+      reached on at most one channel per message, also not stated);
+    - `rejected` (`recipient`) when every count is zero;
+    - otherwise `ambiguous` with `unattributed` (`BULK_PARTIAL`).
+    - A failure of the whole call maps as for `send-message`, except that
+      an `agreement` code reads as `recipient`: no player can be named as
+      the one who has not agreed.
+  - **Refusals.** A `userKey` that is not decimal digits, an `advertising`
+    topic, and a request `send` would refuse are `rejected` without a call.
+- **Devvit** (`createDevvitNotificationDeliveryProvider`):
+  - **API.** `sendBatch` makes one `enqueue` per distinct title and body,
+    up to 1,000 recipients, each user once a call (`EnqueueOptions` in
+    `@devvit/notifications` 0.15.0: "Max number of recipients is 1000").
+  - **Answers.** An error that names a user classifies as for `send`. The
+    other users are `accepted` only when `successCount` equals their
+    number. When `successCount` is 0, unnamed errors that agree decide for
+    all of them. Any other count is `ambiguous` with `unattributed`
+    (`DEVVIT_ENQUEUE_PARTIAL`). A throw is `ambiguous` for each.
+  - **`runDevvitNotificationBulkPage`.** It sends one `listOptedInUsers`
+    page (at most 1,000 users, oldest opt-in first, resumed with the `next`
+    cursor; "The default and maximum limit is 1,000" in the 0.15 guide)
+    through `deliverBulk`, and answers the users still owed an attempt
+    (not attempted, or failed with a retryable error) as `pending`, which a
+    later run sends without reading the list again. The kit's gate, with its send-time `isOptedIn`
+    read and the kit's own records, stays authoritative. Devvit's limits
+    hold: 2 per user per day (the provider limit suppresses the excess)
+    and 25,000 per app per day (the `rate`: the excess is `not-attempted`).
+- **The game-services Worker.** `deliverNotificationBulk(input)` on the
+  service binding, beside `deliverNotification`, is never a fetch route. It
+  attempts at most `MPGD_NOTIFICATIONS_BULK_RECIPIENTS` deliveries a call
+  (50 by default) and reads at most 60 recipients' keys (`maxLookups`), to
+  stay under D1's 1,000 queries per Worker invocation, and runs inline.
+  Only recipients the gate allows spend attempts, so a call plans up to 60
+  recipients and attempts the first 50 it allows: it reaches the Apps in
+  Toss minimum of 50 when at most 10 of the 60 are refused, and sends one
+  by one otherwise. With account-deletion tombstones bound, which add a
+  query to each new send and delivery record, the defaults are 45 and 50,
+  below the Apps in Toss minimum. Raising either number needs the ledger's
+  D1 queries batched (`db.batch`), a follow-up. Devvit's backend bridge serves no bulk
+  method.
+- **Left to follow-ups.**
+  - Batching the ledger's D1 queries (`db.batch`), so one Worker call can
+    prepare more than about 50 deliveries under D1's 1,000 queries per
+    invocation.
+  - A live run against the Apps in Toss bulk API and Devvit with the
+    user's accounts.
+  - Confirmation from Apps in Toss of how its counts relate to recipients.
 
 All of N1–C1 is the first release wave. Releases follow N3, S2, and C1. The
 v1 adapter and the deprecated delivery aliases go away in the major release
@@ -3239,11 +3405,12 @@ that also removes commerce v1.
 @link ../../../packages/game-services/src/notifications/service.ts#createNotificationService Asks the copy resolver only where the content comes from copy.
 @link ../../../apps/game-services-worker/src/notificationsHandler.ts#workerNotificationCopyResolver The binding answers first, the catalog's copy otherwise.
 -->
-5. **Bulk sends.** The first wave sends one recipient per call. Bulk paths
-   are a follow-up: the Apps in Toss bulk API for 50 or more recipients, and
-   Devvit `enqueue` with up to 1,000 recipients, with opt-in read from
-   `listOptedInUsers` pages. They need per-recipient keys and outcomes in one
-   provider call.
+5. **Bulk sends.** Resolved in BK1 (see What BK1 landed). The first wave
+   sent one recipient per call. `deliverBulk` sends many single sends
+   through shared provider calls: the Apps in Toss bulk API for 50 to 2,500
+   recipients, and Devvit `enqueue` with up to 1,000, with the audience
+   read from `listOptedInUsers` pages. Each recipient keeps its own key,
+   gate check, ledger row, and outcome.
 6. **Notices for players without push.** A player who never grants delivery
    permission and does not open the game cannot receive a re-confirmation
    notice through the kit, which has no other medium. Decide whether games

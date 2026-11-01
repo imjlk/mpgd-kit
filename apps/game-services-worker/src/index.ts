@@ -26,6 +26,7 @@ import {
   asWorkerNotificationRpcResult,
   consumeNotificationDispatchBatch,
   deliverWorkerNotification,
+  deliverWorkerNotificationBulk,
   endWorkerNotificationSession,
   runScheduledNotifications,
 } from './notificationsHandler.js';
@@ -71,6 +72,17 @@ export class GameServicesWorker extends WorkerEntrypoint<GameServicesWorkerEnv> 
    */
   async deliverNotification(input: unknown) {
     return asWorkerNotificationRpcResult(() => deliverWorkerNotification(this.env, input));
+  }
+
+  /**
+   * A notifications bulk send for a game server or an operator tool (never
+   * a client route): one topic to many players through one provider, each
+   * a single send with its own key, gate check, and answer (BK1). The same
+   * binding rule as `deliverNotification`; at most
+   * `MPGD_NOTIFICATIONS_BULK_RECIPIENTS` recipients are attempted per call.
+   */
+  async deliverNotificationBulk(input: unknown) {
+    return asWorkerNotificationRpcResult(() => deliverWorkerNotificationBulk(this.env, input));
   }
 
   /** The identity Worker ends a session: the endpoints it registered are unbound. */
