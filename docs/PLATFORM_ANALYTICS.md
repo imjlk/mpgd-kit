@@ -49,8 +49,8 @@ never forwarded with a parameter removed.
 | `logName` | Lowercase snake_case, 2 to 64 characters, starting with a letter. Prefix it with the game, such as `nem_play_start`. |
 | `logType` | `screen`, `event`, `click` or `impression`. |
 | `params` | A plain object of at most 8 entries; optional. |
-| Parameter name | Lowercase snake_case, up to 32 characters. Not `log_name`, `log_type` or `params`. Not `id`, `ids`, `uid`, `uuid`, `key`, `token`, `email`, `score` or `scores`, alone or after `_` at the end of the name (`room_id`, `anonymous_key`, `best_score`). |
-| Parameter value | A finite number, a boolean, or a string of up to 64 characters without a control character, `@`, `://`, a run of 16 or more hex digits, or a 32-character run of letters, digits, `_` and `-` that contains a digit. |
+| Parameter name | Lowercase snake_case, up to 32 characters. Not `log_name`, `log_type` or `params`. No `id`, `ids`, `uid`, `uuid`, `key(s)`, `token(s)`, `email` or `score(s)` as a `_`-separated part (`room_id`, `user_id_hash`, `anonymous_key`, `score_band`), no name ending in `score(s)` (`highscore`), and no `userid`, `roomid` or similar. |
+| Parameter value | A finite number, a boolean, or a string of up to 64 characters without a control character, `@`, `://`, a run of 16 or more hex digits and `-` that contains a digit, or a 32-character run of letters, digits, `_` and `-` that contains a digit. Numbers must stay below 1e15 in magnitude; nothing else about them is checked. |
 
 Never send account ids, player ids, room or match ids, invite codes, scores,
 or free text a player typed. The checks above refuse the common shapes of those
@@ -88,8 +88,9 @@ checks `isMinVersionSupported` and `getStatus()` lists only the types the app
 sends. The host calls the SDK without waiting for it, and a thrown or rejected
 call only drops the log. The SDK adds the player's `anonymous_key` to every log
 itself; the game does not send it. In the Toss sandbox the SDK prints logs to
-the console instead of sending them, and the kit's local SDK mock (`pnpm
-dev:ait` in a browser) prints them with `console.debug`.
+the console instead of sending them. The kit's local SDK mock (`pnpm dev:ait`
+in a browser) acts as a Toss app older than 5.208.0: it prints `screen`,
+`click` and `impression` logs with `console.debug` and drops `event` logs.
 
 A host bridge from a release before platform analytics answers the
 `analytics.*` methods with an error, which the gateway reads as `unsupported`.

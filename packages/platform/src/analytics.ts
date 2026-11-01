@@ -83,18 +83,30 @@ export interface PlatformAnalyticsSink {
 
 export const platformAnalyticsParamLimit = 8;
 export const platformAnalyticsStringMaxLength = 64;
+/** Numbers must stay below this magnitude (15 digits). */
+export const platformAnalyticsNumberLimit = 1e15;
 
 const logNamePattern = /^[a-z][a-z0-9_]{1,63}$/u;
+const providerPattern = /^[a-z][a-z0-9-]{0,63}$/u;
 const paramKeyPattern = /^[a-z][a-z0-9_]{0,31}$/u;
 /** Names a host SDK reserves next to the parameters. */
 const reservedParamKeys = new Set(['log_name', 'log_type', 'params']);
-/** Parameter names that hold an identifier or a score, whatever their prefix. */
-const identifyingParamKeyPattern = /(?:^|_)(?:id|ids|uid|uuid|key|token|email|score|scores)$/u;
+/**
+ * Parameter names that hold an identifier or a score: such a word as a whole
+ * `_`-separated segment anywhere in the name (`room_id`, `user_id_hash`), a
+ * name ending in `score(s)` (`highscore`), or a person or place noun joined to
+ * `id` (`userid`, `roomid`).
+ */
+const identifyingParamKeyPatterns: readonly RegExp[] = [
+  /(?:^|_)(?:id|ids|uid|uuid|key|keys|token|tokens|email|score|scores)(?:_|$)/u,
+  /scores?$/u,
+  /(?:user|player|account|member|room|match|session|device|game|invite)ids?$/u,
+];
 const controlCharacterPattern = /[\u0000-\u001f\u007f]/u;
 /** A run of hex digits long enough to be a numeric or hashed identifier. */
-const hexIdentifierPattern = /[0-9a-f-]{16,}/iu;
+const hexIdentifierPattern = /[0-9a-f-]{16,}/giu;
 /** An opaque token: a long run of word characters that contains a digit. */
-const opaqueTokenPattern = /[a-z0-9_-]{32,}/iu;
+const opaqueTokenPattern = /[a-z0-9_-]{32,}/giu;
 
 /**
  * The log a sink may forward, or `undefined` when any part of it is invalid:
@@ -102,13 +114,17 @@ const opaqueTokenPattern = /[a-z0-9_-]{32,}/iu;
  * log has a known `logType`, a `logName` matching lowercase snake_case of 2 to
  * 64 characters, and `params` as a plain object of at most eight entries whose
  * keys are lowercase snake_case of up to 32 characters and whose values are
- * finite numbers, booleans, or strings of up to 64 characters.
+ * finite numbers below 1e15 in magnitude, booleans, or strings of up to 64
+ * characters.
  *
- * Refused as identifiers: keys `log_name`, `log_type`, and `params`, keys that
- * are, or end in `_` and, `id`, `ids`, `uid`, `uuid`, `key`, `token`, `email`,
- * `score`, or `scores` (`id`, `room_id`, `anonymous_key`, `best_score`), and
- * string values that contain `@` or `://`, a control character, a run of 16 or
- * more hex digits, or a 32-character run of word characters with a digit in it.
+ * Refused as identifiers: keys `log_name`, `log_type`, and `params`; keys with
+ * `id`, `ids`, `uid`, `uuid`, `key(s)`, `token(s)`, `email`, or `score(s)` as a
+ * `_`-separated segment (`id`, `room_id`, `user_id_hash`, `anonymous_key`), keys
+ * ending in `score(s)` (`highscore`), and keys such as `userid` or `roomid`;
+ * and string values that contain `@` or `://`, a control character, a run of
+ * 16 or more hex digits with a digit in it, or a 32-character run of word
+ * characters with a digit in it. Numbers are checked only for magnitude: a
+ * score under a neutral name passes, so the game must not send one.
  *
  * The result is a fresh frozen copy that always has `params`.
  */
@@ -140,7 +156,7 @@ export function readPlatformAnalyticsStatus(value: unknown): PlatformAnalyticsSt
       return undefined;
     }
     const { provider, state, logTypes } = value;
-    if (typeof provider !== 'string' || provider.length === 0 || provider.length > 64
+    if (typeof provider !== 'string' || !providerPattern.test(provider)
       || (state !== 'available' && state !== 'unsupported') || !Array.isArray(logTypes)) {
       return undefined;
     }
@@ -195,7 +211,7 @@ function readParams(params: unknown): PlatformAnalyticsParams | undefined {
 function isParamKey(key: string): boolean {
   return paramKeyPattern.test(key)
     && !reservedParamKeys.has(key)
-    && !identifyingParamKeyPattern.test(key);
+    && !identifyingParamKeyPatterns.some((pattern) => pattern.test(key));
 }
 
 function isParamValue(value: unknown): value is PlatformAnalyticsParamValue {
@@ -203,7 +219,8 @@ function isParamValue(value: unknown): value is PlatformAnalyticsParamValue {
     return true;
   }
   if (typeof value === 'number') {
-    return Number.isFinite(value);
+    // Sixteen or more digits look like an id, as a string of them does.
+    return Number.isFinite(value) && Math.abs(value) < platformAnalyticsNumberLimit;
   }
   return typeof value === 'string'
     && value.length <= platformAnalyticsStringMaxLength
@@ -213,13 +230,11 @@ function isParamValue(value: unknown): value is PlatformAnalyticsParamValue {
     && !containsIdentifierRun(value);
 }
 
+/** Every run is checked: a digit-free first run must not hide a later identifier. */
 function containsIdentifierRun(value: string): boolean {
-  const hex = hexIdentifierPattern.exec(value)?.[0];
-  if (hex !== undefined && /\d/u.test(hex)) {
-    return true;
-  }
-  const token = opaqueTokenPattern.exec(value)?.[0];
-  return token !== undefined && /\d/u.test(token);
+  return [hexIdentifierPattern, opaqueTokenPattern].some((pattern) =>
+    Array.from(value.matchAll(pattern), (match) => match[0]).some((run) => /\d/u.test(run)),
+  );
 }
 
 function isLogType(value: unknown): value is PlatformAnalyticsLogType {

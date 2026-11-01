@@ -64,6 +64,8 @@ describe('readPlatformAnalyticsLog', () => {
       { big: 10n },
       { infinite: Number.POSITIVE_INFINITY },
       { nan: Number.NaN },
+      { big_number: 1e15 },
+      { negative: -1234567890123456 },
       { text: 'x'.repeat(65) },
       { text: 'line\nbreak' },
     ];
@@ -72,6 +74,8 @@ describe('readPlatformAnalyticsLog', () => {
         .toBeUndefined();
     }
     expect(readPlatformAnalyticsLog({ logName: 'nem_play', logType: 'event', params: { text: 'x'.repeat(64) } }))
+      .toBeDefined();
+    expect(readPlatformAnalyticsLog({ logName: 'nem_play', logType: 'event', params: { duration_ms: 999_999_999_999_999 } }))
       .toBeDefined();
   });
 
@@ -88,6 +92,13 @@ describe('readPlatformAnalyticsLog', () => {
       'email',
       'score',
       'best_score',
+      'userid',
+      'roomid',
+      'accountids',
+      'highscore',
+      'user_id_hash',
+      'score_band_label',
+      'key_count',
       'log_name',
       'log_type',
       'params',
@@ -102,6 +113,8 @@ describe('readPlatformAnalyticsLog', () => {
       '123456789012345678',
       '550e8400-e29b-41d4-a716-446655440000',
       'room_Ab3dEf7hIj9kLm1nOp3qRs5tUv7wXy9z',
+      'aaaaaaaaaaaaaaaa 0123456789abcdef',
+      '---------------- 0123456789abcdef',
     ]) {
       expect(readPlatformAnalyticsLog({ logName: 'nem_play', logType: 'event', params: { kind: value } }), value)
         .toBeUndefined();
@@ -110,7 +123,7 @@ describe('readPlatformAnalyticsLog', () => {
       expect(readPlatformAnalyticsLog({ logName: 'nem_play', logType: 'event', params: { kind: value } }), value)
         .toBeDefined();
     }
-    for (const key of ['kind', 'theme', 'stage', 'outcome', 'idle', 'keyboard', 'player_count', 'score_band_label']) {
+    for (const key of ['kind', 'theme', 'stage', 'outcome', 'idle', 'keyboard', 'player_count', 'level_band', 'tokenless', 'idle_seconds']) {
       expect(readPlatformAnalyticsLog({ logName: 'nem_play', logType: 'event', params: { [key]: 1 } }), key)
         .toBeDefined();
     }
@@ -144,6 +157,8 @@ describe('readPlatformAnalyticsStatus', () => {
       {},
       { provider: '', state: 'available', logTypes: [] },
       { provider: 'x'.repeat(65), state: 'available', logTypes: [] },
+      { provider: 'apps\nin-toss', state: 'available', logTypes: [] },
+      { provider: 'https://example.com', state: 'available', logTypes: [] },
       { provider: 'apps-in-toss', state: 'ready', logTypes: [] },
       { provider: 'apps-in-toss', state: 'available', logTypes: 'event' },
     ]) {
