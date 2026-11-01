@@ -35,13 +35,14 @@ function readVector(file: string): unknown {
 }
 
 describe('notifications conformance vectors', () => {
-  it('ships the fifty-three RFC vectors', () => {
+  it('ships the fifty-four RFC vectors', () => {
     expect(vectorFiles).toEqual([
       'action-required-login.json',
       'advertising-needs-consent.json',
       'advertising-night-window.json',
       'advertising-notice-variants.json',
       'advertising-notices.json',
+      'advertising-reconfirmation-overdue.json',
       'advertising-rules-none.json',
       'advertising-sender-required.json',
       'advertising-unsupported-by-host.json',

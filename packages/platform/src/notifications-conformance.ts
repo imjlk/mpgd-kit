@@ -14,13 +14,14 @@ import {
   NotificationError,
   notificationKeyIssue,
   notificationNoticeCopyIssues,
-  notificationNoticeSendFrom,
+  notificationNoticePushFrom,
   notificationNoticeTopic,
   notificationProviderCarriesNotices,
   notificationReservedKeyPrefix,
   notificationSendFingerprint,
   notificationTemplateDataIssue,
   notificationTopicNeedsNoAgreement,
+  resolveNotificationNoticePolicy,
   toSeoulCalendarDate,
   type EvaluateNotificationDeliveryInput,
   type LocalNotificationEntry,
@@ -932,9 +933,12 @@ function noEndpoint(): NotificationDeliveryRefusal {
  *   records a notice only while that notice is listed, so a retried or early
  *   call changes nothing, and a pushed notice the game gave while the push
  *   waited is not sent again. Notices go out through `notices.topic` only on
- *   a target that declares it; a target that delivers advertising under the
- *   Korean rules must declare it, as the catalog validator requires, and
- *   `notices.copy` must follow the catalog's rules.
+ *   a target that declares it; a target that delivers advertising where
+ *   notices are owed (the Korean rules, or the deployment's consent refresh)
+ *   must declare it, as the catalog validator requires, and `notices.copy`
+ *   must follow the catalog's rules. Each advertising send reads the notices
+ *   given, so an overdue re-confirmation pauses it where the refresh policy
+ *   says so (`noticesGiven`).
  * - Endpoints: a device endpoint is keyed by provider and installation, keeps
  *   the latest address, permission, and `lastRegisteredAt`, and moves with the
  *   installation to a newly authenticated player. An address is unique per
@@ -962,10 +966,11 @@ function noEndpoint(): NotificationDeliveryRefusal {
  * - The scheduler processes due server reminders (as `reminder:` sends), due
  *   stored rows (deferred ones, and in-flight ones of scheduled sends or
  *   device endpoints after the lease, replayed through the gate without the
- *   key lookup), and, under the Korean rules, every unrecorded notice from the
- *   Asia/Seoul date seven days before it is due (as a `notice:` send of the
+ *   key lookup), and every unrecorded notice the deployment's notice policy
+ *   pushes, from the Asia/Seoul date `notificationNoticePushFrom` gives
+ *   (seven days before it is due under the Korean rules), as a `notice:` send of the
  *   notice topic in the variant of `notices.copy` it is listed with, filled
- *   with `{{consentDate}}`, and recorded with channel `push` once delivered),
+ *   with `{{consentDate}}`, and recorded with channel `push` once delivered,
  *   earliest first and within the registry entry's `rate`. Only a provider
  *   that can carry a notice (`notificationProviderCarriesNotices`) sends one,
  *   and never with its mapping's own text; a notice that cannot render is
@@ -986,7 +991,8 @@ export function createNotificationConformanceBackend(
   input: CreateNotificationConformanceBackendInput,
 ): NotificationConformanceFakeBackend {
   const { entry, clock } = input;
-  const rules = input.deployment?.advertisingRules ?? 'none';
+  // The notices the deployment owes: the Korean ones under kr, else its consent refresh.
+  const noticePolicy = resolveNotificationNoticePolicy(input.deployment);
   const topicOf = (id: string): NotificationTopicDeclaration | undefined =>
     input.catalog.find((topic) => topic.id === id);
   /**
@@ -1023,8 +1029,9 @@ export function createNotificationConformanceBackend(
   }
   const noticeTopic = input.notices?.topic;
   // Required only where the catalog validator requires it: declared, it is a
-  // remote service topic; a target that delivers advertising under the Korean
-  // rules must declare it. Another target sends no notice pushes.
+  // remote service topic; a target that delivers advertising where notices
+  // are owed (the Korean rules, or a consent refresh) must declare it.
+  // Another target sends no notice pushes.
   const noticeTopicHere = noticeTopic === undefined ? undefined : topicOf(noticeTopic);
   if (
     noticeTopicHere !== undefined
@@ -1035,7 +1042,7 @@ export function createNotificationConformanceBackend(
   if (
     noticeTopic !== undefined
     && noticeTopicHere === undefined
-    && rules === 'kr'
+    && noticePolicy !== undefined
     && input.catalog.some((topic) => topic.purpose === 'advertising')
   ) {
     throw new TypeError(
@@ -1124,14 +1131,12 @@ export function createNotificationConformanceBackend(
       record: assertNotificationConsentRecord({ ...record, at: formatInstant(at) }),
     });
   };
+  const givenTo = (player: string): readonly NotificationConformanceNoticeRecord[] =>
+    noticesGiven.filter((given) => given.player === player);
   const noticesOf = (player: string): readonly NotificationNotice[] =>
-    rules === 'kr'
-      ? listNotificationNotices(
-          recordsOf(player),
-          noticesGiven.filter((given) => given.player === player),
-          clock.now(),
-        )
-      : [];
+    noticePolicy === undefined
+      ? []
+      : listNotificationNotices(recordsOf(player), givenTo(player), clock.now(), noticePolicy);
   /** Whether `notice` is listed for `player` now; only a listed notice is recorded or sent. */
   const noticeListed = (player: string, notice: NotificationNoticeIdentity): boolean =>
     noticesOf(player).some((listed) => isSameNotificationNotice(listed, notice));
@@ -1322,6 +1327,7 @@ export function createNotificationConformanceBackend(
         recipientResolved: recipient.resolved,
         ...(request.link === undefined ? {} : { link: request.link }),
         consent,
+        noticesGiven: givenTo(request.player),
         ...(serverPermission === undefined ? {} : { serverPermission }),
         ...(recipient.endpoint === undefined
           ? {}
@@ -2045,7 +2051,7 @@ export function createNotificationConformanceBackend(
       // Only a provider that can carry a notice sends one; through any other
       // the notice is not sent, so it stays owed in the game.
       if (
-        rules === 'kr'
+        noticePolicy !== undefined
         && noticeTopic !== undefined
         && noticeTopicHere !== undefined
         && entry !== undefined
@@ -2054,8 +2060,9 @@ export function createNotificationConformanceBackend(
         const today = toSeoulCalendarDate(clock.now());
         for (const player of [...new Set(consentRows.map((row) => row.player))]) {
           for (const notice of noticesOf(player)) {
-            const from = notificationNoticeSendFrom(notice.dueBy);
-            if (from <= today) {
+            // A notice the policy never pushes stays the game's to show.
+            const from = notificationNoticePushFrom(notice, noticePolicy);
+            if (from !== undefined && from <= today) {
               due.push({
                 at: Date.parse(`${from}T00:00:00+09:00`),
                 run: () => sendNotice(player, notice, noticeTopic),

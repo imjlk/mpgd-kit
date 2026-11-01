@@ -12,10 +12,13 @@ import {
   listNotificationNotices,
   NotificationError,
   notificationBridgeMethods,
+  notificationKoreanConsentRefresh,
+  notificationKoreanNoticePolicy,
   notificationShellRenderedAdvertisingTargets,
   notificationsProtocol,
   notificationsProtocolVersion,
   referenceNotificationProviders,
+  resolveNotificationNoticePolicy,
   routeNotificationReminder,
   toNotificationSubscriptionAdapter,
 } from '@mpgd/platform/notifications';
@@ -113,6 +116,14 @@ assert.deepEqual(gate([advertisingConsent], '2026-10-12T13:00:00Z'), {
   until: '2026-10-12T23:00:00Z',
 });
 assert.equal(gate([advertisingConsent], '2026-10-12T13:00:00Z', { advertisingRules: 'none' }).status, 'allowed');
+// An overdue re-confirmation pauses advertising under the Korean preset (CR1).
+assert.deepEqual(gate([advertisingConsent], '2028-10-12T03:00:00Z'), {
+  status: 'suppressed',
+  reason: 'reconfirmation-overdue',
+});
+assert.equal(resolveNotificationNoticePolicy(kr), notificationKoreanNoticePolicy);
+assert.ok(Object.isFrozen(notificationKoreanConsentRefresh.night));
+assert.equal(resolveNotificationNoticePolicy({ advertisingRules: 'none' }), undefined);
 assert.deepEqual(
   evaluateNotificationDelivery({
     entry: referenceNotificationProviders.fcm,

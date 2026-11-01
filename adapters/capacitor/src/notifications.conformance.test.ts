@@ -175,6 +175,7 @@ describe('Capacitor notifications provider conformance', () => {
         'advertising-night-window',
         'advertising-notice-variants',
         'advertising-notices',
+        'advertising-reconfirmation-overdue',
         'advertising-rules-none',
         'advertising-sender-required',
       ] : []),

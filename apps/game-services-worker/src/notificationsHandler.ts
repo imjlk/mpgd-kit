@@ -32,7 +32,9 @@ import {
   assertNotificationDeployment,
   isNotificationTimestamp,
   NotificationError,
+  notificationRefreshedConsentKinds,
   notificationsProtocolVersion,
+  resolveNotificationNoticePolicy,
 } from '@mpgd/platform/notifications';
 
 import {
@@ -919,6 +921,40 @@ const defaultWorkerNotificationBulkLookups = 60;
  */
 const defaultWorkerNotificationBulkRecipientsWithTombstones = 45;
 const defaultWorkerNotificationBulkLookupsWithTombstones = 50;
+/**
+ * Recipients' keys one bulk call reads by default where an overdue
+ * re-confirmation pauses advertising (the Korean rules): an advertising
+ * recipient whose re-confirmation could be overdue costs one more query,
+ * the notices given, read once per call: 55 × 8 + 50 × 11 = 990. With
+ * tombstones the defaults above still fit: 50 × 9 + 45 × 12 = 990.
+ */
+const defaultWorkerNotificationBulkLookupsWithRefreshPause = 55;
+
+/**
+ * Whether the deployment's consent refresh pauses advertising on an overdue
+ * re-confirmation (CR1), so an advertising check may read the notices
+ * given. A deployment the service refuses sends nothing; it counts as
+ * pausing, the lower bound.
+ */
+function workerNotificationRefreshPauses(env: GameServicesNotificationsEnv): boolean {
+  try {
+    const declared = parseJsonVar(
+      env.MPGD_NOTIFICATIONS_DEPLOYMENT,
+      'MPGD_NOTIFICATIONS_DEPLOYMENT',
+    );
+    if (declared === undefined) {
+      return false;
+    }
+    const policy = resolveNotificationNoticePolicy(
+      assertNotificationDeployment(declared, { allowPlaceholders: true }),
+    );
+    return notificationRefreshedConsentKinds.some(
+      (kind) => policy?.refresh[kind]?.onOverdue === 'pause',
+    );
+  } catch {
+    return true;
+  }
+}
 
 /**
  * The bulk send a game server or operator tool makes through the service
@@ -936,9 +972,11 @@ export async function deliverWorkerNotificationBulk(
 
 /**
  * The bounds of one `deliverNotificationBulk` call. On D1 they keep a call
- * under D1's 1,000 queries per invocation: 50 deliveries and 60 keys, or 45
- * and 50 with account-deletion tombstones bound (a query more per new send
- * and per delivery record), and `MPGD_NOTIFICATIONS_BULK_RECIPIENTS` may
+ * under D1's 1,000 queries per invocation: 50 deliveries and 60 keys, 55
+ * keys where an overdue re-confirmation pauses advertising (the notices
+ * given are a query more per recipient that may be overdue), or 45 and 50
+ * with account-deletion tombstones bound (a query more per new send and
+ * per delivery record), and `MPGD_NOTIFICATIONS_BULK_RECIPIENTS` may
  * lower them but not raise them past that ceiling. Another store takes the
  * setting as it is.
  */
@@ -952,9 +990,12 @@ export function workerNotificationBulkLimits(
   const attempts = tombstones
     ? defaultWorkerNotificationBulkRecipientsWithTombstones
     : defaultWorkerNotificationBulkRecipients;
-  const reads = tombstones
-    ? defaultWorkerNotificationBulkLookupsWithTombstones
-    : defaultWorkerNotificationBulkLookups;
+  let reads = defaultWorkerNotificationBulkLookups;
+  if (tombstones) {
+    reads = defaultWorkerNotificationBulkLookupsWithTombstones;
+  } else if (d1 && workerNotificationRefreshPauses(env)) {
+    reads = defaultWorkerNotificationBulkLookupsWithRefreshPause;
+  }
   const wanted = Number.isSafeInteger(asked) && asked >= 1 ? asked : attempts;
   const maxRecipients = d1 ? Math.min(wanted, attempts) : wanted;
   return {

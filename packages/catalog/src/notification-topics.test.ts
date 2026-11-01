@@ -938,6 +938,45 @@ assert.deepEqual(
   }),
   [],
 );
+// A consent refresh of its own outside kr owes re-confirmation notices, so it
+// needs the notices block, mapped where advertising is; under kr the Korean
+// rules fix the refresh.
+const yearlyPolicy = {
+  advertising: { intervalMonths: 12, noticeLeadDays: 30, pushLeadDays: 7, onOverdue: 'pause' },
+} as const;
+const yearlyRefresh: NotificationDeployment = {
+  advertisingRules: 'none',
+  consentRefresh: yearlyPolicy,
+};
+assert.deepEqual(
+  issuesOf(catalogWith(advertisingTopic), yearlyRefresh).map((issue) => issue.split(':')[0]),
+  ['notices.topic'],
+);
+assert.deepEqual(
+  issuesOf(withNotices('consent-notice', advertisingTopic, advertisingNotice), yearlyRefresh),
+  [],
+);
+assertIssue(
+  withNotices('consent-notice', { ...advertising, targets: { android: {}, ios: {} } }, noticeTopic),
+  'notices.topic',
+  /consent-notice has no mapping for ios/u,
+  'a refresh pushes its notices where advertising is',
+  { ...yearlyRefresh, shellRendersAdvertising: true },
+);
+assert.deepEqual(
+  issuesOf(withNotices('consent-notice', advertisingTopic, advertisingNotice), {
+    advertisingRules: 'none',
+    consentRefresh: { night: { intervalMonths: 12, noticeLeadDays: 7, pushLeadDays: 30, onOverdue: 'pause' } },
+  }).map((issue) => issue.split(':')[0]),
+  ['deployment.consentRefresh.night.pushLeadDays'],
+);
+assert.deepEqual(
+  issuesOf(withNotices('consent-notice', advertisingTopic, advertisingNotice), {
+    ...krDeployment,
+    consentRefresh: yearlyPolicy,
+  }).map((issue) => issue.split(':')[0]),
+  ['deployment.consentRefresh'],
+);
 const noExpiry: NotificationProviderRegistryEntry = {
   ...referenceNotificationProviders.fcm,
   expiry: false,

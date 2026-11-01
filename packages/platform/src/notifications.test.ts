@@ -481,6 +481,30 @@ describe('notifications contract', () => {
     expect(() => assertNotificationDeployment({ advertisingRules: 'kr', noticeTopic: 'consent-notice' }))
       .toThrow();
     expect(() => assertNotificationDeployment({ advertisingRules: 'eu' })).toThrow();
+    // A consent refresh of its own outside kr, one the scheduler can follow; under kr the rules fix it.
+    const yearly = { advertising: { intervalMonths: 12, noticeLeadDays: 30, pushLeadDays: 7, onOverdue: 'pause' } };
+    expect(assertNotificationDeployment({ advertisingRules: 'none', consentRefresh: yearly }).consentRefresh)
+      .toEqual(yearly);
+    expect(() => assertNotificationDeployment({
+      advertisingRules: 'kr',
+      advertisingSender: { contact: '080-1234-5678' },
+      consentRefresh: yearly,
+    })).toThrow(/fix the consent refresh/u);
+    expect(() => assertNotificationDeployment({
+      consentRefresh: { night: { intervalMonths: 12, noticeLeadDays: 7, pushLeadDays: 30, onOverdue: 'pause' } },
+    })).toThrow(/consentRefresh\.night\.pushLeadDays/u);
+    expect(() => assertNotificationDeployment({
+      consentRefresh: { advertising: { intervalMonths: 1, noticeLeadDays: 28, onOverdue: 'continue' } },
+    })).toThrow(/noticeLeadDays/u);
+    for (const rule of [
+      { intervalMonths: 0, noticeLeadDays: 30, onOverdue: 'pause' },
+      { intervalMonths: 12, noticeLeadDays: -1, onOverdue: 'pause' },
+      { intervalMonths: 12, noticeLeadDays: 30, onOverdue: 'stop' },
+      { intervalMonths: 12, noticeLeadDays: 30 },
+    ]) {
+      expect(() => assertNotificationDeployment({ consentRefresh: { advertising: rule } }), JSON.stringify(rule))
+        .toThrow();
+    }
     expect(() => assertNotificationDeployment({ timeZone: 'Mars/Olympus_Mons' })).toThrow(/Unknown time zone/u);
     expect(() => assertNotificationDeployment({ advertisingSender: { name: 'Studio' } })).toThrow();
     // A starter's placeholder fails closed under the Korean rules: the backend

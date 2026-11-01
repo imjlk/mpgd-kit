@@ -28,11 +28,13 @@ import type {
 import {
   isNotificationPlaceholderText,
   isValidNotificationTimeZone,
+  notificationConsentRefreshIssues,
   notificationPermissionStateOf,
   notificationRouteError,
   notificationTimeFieldIssue,
   notificationTimeFields,
   notificationTopicDefinitionIssues,
+  resolveNotificationConsentRefresh,
   type NotificationConsentRecord,
   type NotificationDeliveryProviderEntry,
   type NotificationDeployment,
@@ -111,26 +113,33 @@ export {
   normalizeNotificationTimestamp,
   notificationAdvertisingOptOutActionId,
   notificationAdvertisingPrefix,
+  notificationConsentRefreshDueBy,
+  notificationConsentRefreshIssues,
   notificationConsentResultDueBy,
   notificationContentSource,
   notificationDefaultDeploymentTimeZone,
   notificationDefaultOptOutLine,
   notificationInputBounds,
   notificationKeyIssue,
+  notificationKoreanConsentRefresh,
+  notificationKoreanNoticePolicy,
   notificationNightWindow,
   notificationNoticeCopyIssues,
   notificationNoticeLeadDays,
+  notificationNoticePushFrom,
   notificationNoticeSendFrom,
   notificationNoticeTextIssues,
   notificationNoticeTopic,
   notificationNoticeVariantCopy,
   notificationNoticeVariantFallbacks,
   notificationNoticeVariants,
+  notificationOverdueConsentRefreshes,
   notificationPermissionConsentKind,
   notificationPermissionStateOf,
   notificationProviderCarriesNotices,
   notificationReconfirmationDueBy,
   notificationReconfirmationListDays,
+  notificationRefreshedConsentKinds,
   notificationRegistryMismatch,
   notificationReservedKeyPrefix,
   notificationReservedKeyPrefixes,
@@ -146,7 +155,9 @@ export {
   referenceNotificationTargetProviders,
   renderNotificationAdvertisement,
   resolveNotificationAdvertisingSettings,
+  resolveNotificationConsentRefresh,
   resolveNotificationContent,
+  resolveNotificationNoticePolicy,
   routeNotificationReminder,
   toSeoulCalendarDate,
   type EvaluateLocalNotificationReminderInput,
@@ -160,6 +171,8 @@ export {
   type NotificationClockTime,
   type NotificationConsentKind,
   type NotificationConsentRecord,
+  type NotificationConsentRefreshPolicy,
+  type NotificationConsentRefreshRule,
   type NotificationConsentSource,
   type NotificationConsentState,
   type NotificationDeferralReason,
@@ -177,12 +190,14 @@ export {
   type NotificationNoticeIdentity,
   type NotificationNoticeKind,
   type NotificationNoticeLocaleCopy,
+  type NotificationNoticePolicy,
   type NotificationNoticeSettings,
   type NotificationNoticeVariant,
   type NotificationProviderLimit,
   type NotificationProviderRegistryEntry,
   type NotificationQuietHours,
   type NotificationRecordablePermissionState,
+  type NotificationRefreshedConsentKind,
   type NotificationReminderRoute,
   type NotificationResolvedCopy,
   type NotificationReminderStatus,
@@ -846,6 +861,17 @@ export function assertNotificationDeployment(
   const deployment = assertNotificationDeploymentShape(input);
   if (deployment.timeZone !== undefined && !isValidNotificationTimeZone(deployment.timeZone)) {
     throw new TypeError(`Unknown time zone in the deployment: ${deployment.timeZone}`);
+  }
+  // Under kr the Korean rules fix the refresh; elsewhere it must be one the scheduler can follow.
+  const refreshIssues = notificationConsentRefreshIssues(
+    resolveNotificationConsentRefresh(deployment),
+  );
+  if (refreshIssues.length > 0) {
+    throw new TypeError(
+      `Invalid consent refresh in the deployment: ${refreshIssues
+        .map((issue) => `${issue.path}: ${issue.message}`)
+        .join('; ')}`,
+    );
   }
   const placeholders = options.allowPlaceholders === true
     ? []

@@ -1904,6 +1904,30 @@ try {
     workerNotificationBulkLimits({ MPGD_STORE: 'd1', MPGD_NOTIFICATIONS_BULK_RECIPIENTS: '20' }),
     { maxRecipients: 20, maxLookups: 24 },
   );
+  // Where an overdue re-confirmation pauses advertising, an advertising check
+  // may read the notices given too, so D1 reads fewer keys (CR1).
+  const krDeployment = JSON.stringify({
+    advertisingRules: 'kr',
+    advertisingSender: { contact: '080-1234-5678' },
+  });
+  assert.deepEqual(
+    workerNotificationBulkLimits({ MPGD_STORE: 'd1', MPGD_NOTIFICATIONS_DEPLOYMENT: krDeployment }),
+    { maxRecipients: 50, maxLookups: 55 },
+  );
+  assert.deepEqual(
+    workerNotificationBulkLimits({
+      MPGD_STORE: 'd1',
+      MPGD_NOTIFICATIONS_DEPLOYMENT: JSON.stringify({ advertisingRules: 'none' }),
+    }),
+    { maxRecipients: 50, maxLookups: 60 },
+  );
+  assert.deepEqual(
+    workerNotificationBulkLimits({
+      MPGD_STORE: 'memory',
+      MPGD_NOTIFICATIONS_DEPLOYMENT: krDeployment,
+    }),
+    { maxRecipients: 50, maxLookups: 60 },
+  );
   assert.deepEqual(
     workerNotificationBulkLimits({
       MPGD_STORE: 'memory',

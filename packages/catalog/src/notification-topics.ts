@@ -2,8 +2,10 @@ import type { tags } from 'typia';
 
 import {
   findNotificationCopy,
+  notificationConsentRefreshIssues,
   notificationNoticeCopyIssues,
   notificationProviderCarriesNotices,
+  notificationRefreshedConsentKinds,
   notificationShellRenderedAdvertisingTargets,
   notificationTopicDefinitionIssues,
   notificationTopicNeedsNoAgreement,
@@ -142,11 +144,15 @@ export type NotificationTopicCatalogValidation =
  *   topic on a free-form provider has its own text: `copy`, or a `title` and
  *   a `body` in the mapping, except the notice topic, whose text is
  *   `notices.copy`;
- * - given an `advertising` topic, the deployment settings: `advertisingRules`,
- *   and under `kr` the catalog's notice topic, mapped on every target that
- *   maps an advertising topic, and the advertising sender and opt-out line as
- *   gate step 8 reads them (`resolveNotificationAdvertisingSettings`): a
- *   contact, and no blank contact, name, or opt-out line.
+ * - given an `advertising` topic, the deployment settings: `advertisingRules`;
+ *   under `kr` no `consentRefresh` (the Korean rules fix it), and elsewhere
+ *   a `consentRefresh` the scheduler can follow
+ *   (`notificationConsentRefreshIssues`); where notices are owed (under `kr`,
+ *   or with a `consentRefresh` of its own) the catalog's notice topic, mapped
+ *   on every target that maps an advertising topic; and under `kr` the
+ *   advertising sender and opt-out line as gate step 8 reads them
+ *   (`resolveNotificationAdvertisingSettings`): a contact, and no blank
+ *   contact, name, or opt-out line.
  *
  * Issue paths spell locale and variant keys in brackets, such as
  * `notices.copy["ko-KR"]["reconfirmation.night"].title`.
@@ -536,14 +542,27 @@ function deploymentIssues(
     });
     return issues;
   }
-  if (deployment.advertisingRules === 'kr') {
+  const kr = deployment.advertisingRules === 'kr';
+  if (kr && deployment.consentRefresh !== undefined) {
+    issues.push({
+      path: 'deployment.consentRefresh',
+      message: 'the Korean rules fix the consent refresh (every two years, pausing advertising once overdue); leave consentRefresh out under kr',
+    });
+  } else if (deployment.consentRefresh !== undefined) {
+    issues.push(...notificationConsentRefreshIssues(deployment.consentRefresh));
+  }
+  const refreshes = !kr
+    && notificationRefreshedConsentKinds.some((kind) => deployment.consentRefresh?.[kind] !== undefined);
+  if (kr || refreshes) {
     const noticeTopic = catalog.notices === undefined
       ? undefined
       : catalog.topics.find((topic) => topic.id === catalog.notices?.topic);
     if (catalog.notices === undefined) {
       issues.push({
         path: 'notices.topic',
-        message: 'the Korean advertising rules send overdue consent notices through a service topic; declare notices.topic',
+        message: kr
+          ? 'the Korean advertising rules send overdue consent notices through a service topic; declare notices.topic'
+          : 'the consent refresh lists re-confirmation notices in the variants of notices.copy and pushes them through a service topic; declare notices',
       });
     } else if (noticeTopic !== undefined) {
       // A target that delivers advertising also delivers its notices. A
@@ -570,6 +589,8 @@ function deploymentIssues(
         });
       }
     }
+  }
+  if (kr) {
     // The sender and the opt-out line as gate step 8 reads them.
     issues.push(...resolveNotificationAdvertisingSettings(deployment).issues);
   }

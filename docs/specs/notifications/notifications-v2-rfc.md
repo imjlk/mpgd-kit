@@ -1235,7 +1235,10 @@ day the notice may be given:
     Silence after a notice keeps the consent, and the series continues.
   - A new consent restarts the count, and a withdrawal ends it.
 
-A listed notice stays listed after its `dueBy` until it is recorded.
+A listed notice stays listed after its `dueBy` until it is recorded. Once a
+re-confirmation is past its `dueBy` unrecorded, advertising to the player
+pauses until it is recorded or the player consents anew (see
+[Consent refresh](#consent-refresh)).
 
 A notice is named by its kind, the record it reports on (the record's kind
 and time), and its `dueBy`.
@@ -1333,6 +1336,87 @@ If a notice is not recorded by the start of the day seven days before
 - **A waiting push.** A push that waits, deferred or in flight, is dropped
   once the game records the notice. The player is not told twice.
 
+### Consent refresh {#consent-refresh}
+
+The re-confirmation above is one preset of a general rule, the consent
+refresh policy. A deployment's policy says, per consent kind (`advertising`,
+`night`), how the consent is re-confirmed
+(`NotificationConsentRefreshRule`):
+
+| Field | Meaning |
+| --- | --- |
+| `intervalMonths` | The n-th re-confirmation is due by the day before the date `n × intervalMonths` months after the latest consent of the kind. A 29 February consent date counts as 28 February, and a day the month reached does not have counts as its last day. |
+| `noticeLeadDays` | The re-confirmation is listed from this many days before its `dueBy`, the next one once the one before it is recorded. |
+| `pushLeadDays` | The scheduler pushes an unrecorded re-confirmation from the start of the day this many days before its `dueBy`, through `notices.topic`. Absent, it is never pushed, only listed. At most `noticeLeadDays`. |
+| `onOverdue` | `pause`: once past its `dueBy` unrecorded, the sends the consent covers pause. `continue`: they go on. |
+
+A kind without a rule is never re-confirmed. Dates are Asia/Seoul calendar
+dates, as for every notice, whatever the deployment's zone.
+
+- **The Korean preset.** Under `kr` the policy is
+  `notificationKoreanConsentRefresh`: for both kinds, every 24 months,
+  listed 60 days and pushed 7 days before `dueBy`, and `pause`. The dates,
+  names, keys, variants, and pushes are the ones the
+  [consent records](#consent-records) describe. The rules fix it: a
+  deployment under `kr` that sets `consentRefresh` is refused
+  (`assertNotificationDeployment`, the catalog validator).
+- **Elsewhere.** No refresh, unless the deployment sets `consentRefresh`
+  (for example a 24-month re-permission as good practice). Then the backend
+  owes only those re-confirmations, never the result notices only the
+  Korean rules require, and lists, records, pushes, and pauses them as
+  under `kr`. The catalog validator then requires the `notices` block, its
+  topic mapped on every target that maps an advertising topic.
+  `notices.copy` still needs every variant, although only the
+  `reconfirmation.*` ones are given there.
+- **Overdue.** A re-confirmation is overdue from the Asia/Seoul day after its
+  `dueBy` while it is not recorded (`notificationOverdueConsentRefreshes`).
+  Recording it moves the series to the next one, and a new consent restarts
+  the count, so either ends the overdue state at once. The next launch's
+  in-game notice is how a player catches up; recording it needs no push.
+- **Pause.** Under `pause`:
+  - An overdue `advertising` re-confirmation suppresses every advertising
+    send as `suppressed: reconfirmation-overdue` (gate step 5). Sends of
+    other purposes are unaffected.
+  - An overdue `night` re-confirmation counts as no night consent: it holds
+    only night-time advertising (gate step 6 defers it to 08:00, or
+    suppresses a topic that is not deferrable, and a day-time send carries
+    the expiry at the next 21:00).
+  - The pause holds whether or not the push reached the player, and the kit
+    collects no other contact to reach them.
+- **Why night pauses only night-time advertising.** Night consent is an
+  addition to advertising consent (§50③; see
+  [Advertising rules](#advertising-rules)): advertising outside the window
+  rests on the advertising consent alone, whose own re-confirmation is
+  tracked separately. An unconfirmed night consent therefore leaves the
+  player where a player without night consent stands, which the gate
+  already handles, rather than stopping the advertising the player's
+  confirmed consent covers.
+- **The gate's input.** The gate reads the notices given as `noticesGiven`;
+  absent, it reads none, so a backend that leaves it out pauses every player
+  whose re-confirmation is past its `dueBy` (it fails closed). The service
+  reads them only for a send that may be advertising, under a policy that
+  pauses, and only when a re-confirmation could be overdue within a day,
+  once per invocation.
+- **Reminders.** A server reminder's set-time check (steps 3 to 5) does not
+  apply the pause: the player may record the notice before it fires. The
+  gate applies it when the reminder fires.
+
+Other jurisdictions, as guidance and not legal advice: a fixed periodic
+re-confirmation is a Korean rule among the regimes checked for CR1
+(2026-11-01).
+
+- **EU.** The GDPR sets no time limit on consent, and the EDPB recommends,
+  as a best practice, refreshing it at appropriate intervals (Guidelines
+  05/2020 on consent, paras 110 and 111).
+- **US.** No fixed re-confirmation interval appears in the CAN-SPAM Act,
+  which is opt-out for commercial email (15 U.S.C. 7704), or in the TCPA
+  rules (47 CFR 64.1200).
+- **Japan.** 特定電子メール法 requires prior consent to advertising email
+  and a record of it (art. 3) but no periodic re-confirmation.
+
+Whether a regime covers app push at all is not decided here. A deployment
+that wants a periodic re-permission outside Korea sets `consentRefresh`.
+
 ### Policy gate {#policy-gate}
 
 Every send carries an idempotency key and a request: the player, an optional
@@ -1408,7 +1492,11 @@ client's declaration. The steps run in order and the first failure decides:
    (`preference-off`).
 5. **Advertising consent.** An `advertising` topic needs a latest
    `advertising` record of `granted`, or `suppressed:
-   advertising-consent-missing`.
+   advertising-consent-missing`. Where the deployment's
+   [consent refresh](#consent-refresh) pauses on an overdue
+   re-confirmation (the Korean rules do), an overdue `advertising`
+   re-confirmation is `suppressed: reconfirmation-overdue`, and an overdue
+   `night` one counts as no night consent in steps 6 and 8.
 6. **Time windows.**
    - **Night window (Korean rules).** It runs from 21:00 inclusive to 08:00
      exclusive in Asia/Seoul, judged when the provider call is made.
@@ -2364,6 +2452,9 @@ What the kit enforces for `advertising` topics under `kr`:
     the consent date. It gives the sender's name, the consent and its date,
     and how to keep or withdraw it (§50⑧, decree art. 62-3; pp.25–26,
     65–70).
+  - Once a re-confirmation is overdue, the kit pauses the advertising it
+    covers until the game records the notice or the player consents anew
+    ([Consent refresh](#consent-refresh), CR1).
 
 What the kit does not decide: whether a given topic is advertising. The guide
 has no example about games, rewards, energy, or attendance; its only game
@@ -2599,7 +2690,7 @@ How a real provider is judged:
 | `notices` | The catalog's `notices` block: `topic`, the notice topic, which `catalog` declares without copy, and `copy`, a title and a body per locale and notice variant, checked by the catalog's rules in the default locale `ko`. Without it the scheduler sends no notice. A `topic` that `catalog` declares as anything but a remote `service` topic, or leaves out while it declares an advertising topic under `kr`, fails the vector at `backend` |
 | `context` | `player`, `now`, and the device's `timeZone`, which the runtime registers |
 | `host` | Fake host settings: with `actionRequired: true`, the fixture provider reports `availability: 'action-required'` and `requiredAction: 'login'` until `completeAction`; `profile.capabilities` is its declaration afterwards |
-| `deployment` | Backend deployment settings: `advertisingRules` (`kr` or `none`), `advertisingSender` (`{ name?, contact }`), `advertisingOptOutLine`, and `timeZone` (Asia/Seoul when absent) |
+| `deployment` | Backend deployment settings: `advertisingRules` (`kr` or `none`), `advertisingSender` (`{ name?, contact }`), `advertisingOptOutLine`, `timeZone` (Asia/Seoul when absent), and outside `kr` an optional `consentRefresh` |
 | `steps` | Actor actions in order; a step may carry `returns` or `throws` (`{ code }`). `returns` is matched as a subset: objects by their listed keys, and arrays item by item with the same length |
 | `expect` | Final assertions; a key that is absent is not asserted, and a field set to `null` asserts that the field is absent |
 
@@ -2675,6 +2766,7 @@ listed fields of each item asserted:
 | `host-link-required` | A send without a link from the send or the mapping is `unavailable: link-missing` and reaches no provider; the send's link wins over the mapping's |
 | `requested-topic-needs-opt-in` | A `requested` topic is suppressed until the player turns it on |
 | `advertising-needs-consent` | Suppressed without consent; rendered with label, sender line, free opt-out line, opt-out action, and expiry; the result notice is listed, the first re-confirmation not yet |
+| `advertising-reconfirmation-overdue` | On the due date advertising goes; from the next Asia/Seoul day an unrecorded re-confirmation suppresses it as `reconfirmation-overdue` while a service send goes on; recording the listed notice resumes it; the next re-confirmation pauses it again once overdue; a new consent resumes it |
 | `advertising-notices` | An unrecorded result notice is sent through the notice topic; a re-confirmation is listed 60 days before its `dueBy`; recording it before then, recording a name that matches nothing, and recording it again after its `dueBy` change nothing; the next one is listed two years later |
 | `advertising-notice-variants` | Through one notice topic, each in its own variant of `notices.copy`, the scheduler pushes the results of an advertising and a night consent, both re-confirmations two years later, the withdrawal of each, and a second withdrawal of each, which is a refusal; the game lists each notice with its variant, and the advertising refusal, which the copy leaves out, is given in the withdrawal's text |
 | `advertising-night-window` | Deferred to 08:00 KST without night consent and sent with an expiry; immediate without expiry with it |
@@ -3227,6 +3319,49 @@ announcements and event pushes.
     user's accounts.
   - Confirmation from Apps in Toss of how its counts relate to recipients.
 
+**What CR1 landed.** CR1 resolves open question 6 and makes the Korean
+re-confirmation one preset of a general [consent refresh](#consent-refresh).
+
+- **Behaviour change under `kr`.** Advertising to a player whose
+  `advertising` re-confirmation is past its `dueBy` unrecorded is
+  `suppressed: reconfirmation-overdue` until the game records the notice or
+  the player consents anew; an overdue `night` one holds night-time
+  advertising only. Names, keys, variants, listing, and pushes are
+  unchanged, and so is every earlier vector.
+- `@mpgd/platform/notifications`:
+  - `NotificationConsentRefreshRule` and `NotificationConsentRefreshPolicy`,
+    `NotificationDeployment.consentRefresh`, and
+    `notificationKoreanConsentRefresh`;
+    `resolveNotificationConsentRefresh` refuses one under `kr`, and
+    `notificationConsentRefreshIssues` checks the rest, which
+    `assertNotificationDeployment` applies.
+  - `NotificationNoticePolicy`, `notificationKoreanNoticePolicy`, and
+    `resolveNotificationNoticePolicy`; `listNotificationNotices` takes a
+    policy (the Korean one by default), and `notificationNoticePushFrom`
+    gives a notice's first push day under it.
+  - `notificationConsentRefreshDueBy`, which
+    `notificationReconfirmationDueBy` now calls with 24 months, and
+    `notificationOverdueConsentRefreshes`.
+  - The gate input `noticesGiven` and the reason `reconfirmation-overdue`;
+    the vector and deployment schemas list them. The fake backend reads
+    its notice policy and passes the notices given.
+- `@mpgd/catalog`: under `kr` the validator reports a `consentRefresh`;
+  elsewhere it checks one and requires the `notices` block for it.
+- `@mpgd/game-services/notifications`: the service lists, records, pushes,
+  and compacts by the deployment's notice policy, and passes the notices
+  given to the gate for a send that may be advertising when a
+  re-confirmation could be overdue, read once per invocation.
+- The game-services Worker: where the refresh pauses, a D1 bulk call reads
+  55 recipients' keys instead of 60, since such a recipient may cost one
+  more query (55 × 8 + 50 × 11 = 990); with tombstones the bounds already
+  fit.
+- The vector `advertising-reconfirmation-overdue`.
+- No migration: notices given are already stored per player.
+- **Left open.**
+  - `notices.copy` still needs the result variants under a refresh outside
+    `kr`, which never sends them.
+  - Notice dates stay Asia/Seoul dates under every policy.
+
 All of N1–C1 is the first release wave. Releases follow N3, S2, and C1. The
 v1 adapter and the deprecated delivery aliases go away in the major release
 that also removes commerce v1.
@@ -3411,11 +3546,23 @@ that also removes commerce v1.
    recipients, and Devvit `enqueue` with up to 1,000, with the audience
    read from `listOptedInUsers` pages. Each recipient keeps its own key,
    gate check, ledger row, and outcome.
-6. **Notices for players without push.** A player who never grants delivery
-   permission and does not open the game cannot receive a re-confirmation
-   notice through the kit, which has no other medium. Decide whether games
-   must collect another contact or accept the in-game notice at the next
-   launch.
+6. **Notices for players without push.** Resolved in CR1 by the project
+   owner on 2026-11-01: accept the in-game notice at the next launch, and
+   pause advertising while a re-confirmation is overdue.
+   - **Decision.** Once a player's re-confirmation passes its `dueBy`
+     unrecorded, the gate refuses advertising to that player as
+     `suppressed: reconfirmation-overdue` until the game records the notice
+     or the player consents anew; an overdue night re-confirmation holds
+     only night-time advertising. Games collect no other contact. See
+     [Consent refresh](#consent-refresh).
+   - **Rationale.** A player without push permission cannot receive an
+     advertising push either, so for that player the pause changes nothing
+     until push comes back. The risk was a push permission turned on again
+     while the notice was still owed: advertising would have reached the
+     player before the re-confirmation did. Pausing closes that gap, and the
+     next launch's in-game notice ends the pause.
+   - **Behaviour change.** Existing `kr` deployments pause advertising for
+     players whose re-confirmation is overdue.
 
 ## References {#references}
 
