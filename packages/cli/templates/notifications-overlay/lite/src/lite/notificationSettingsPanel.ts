@@ -196,22 +196,24 @@ export function mountNotificationSettingsPanel(mount: HTMLElement, context: Star
   }
   mount.append(openButton, panel);
   // Once per launch, the listed consent notices in a box that does not pause
-  // the game, recorded as given: an overdue re-confirmation pauses
-  // advertising under the Korean rules until the game records it.
-  let disposed = false;
+  // the game, each recorded as given once the player can see it: an overdue
+  // re-confirmation pauses advertising under the Korean rules until the game
+  // records it.
+  const lifetime = new AbortController();
   let disposeLaunchNotices: (() => void) | undefined;
   void showStarterLaunchNotices(context.platform, {
     locale: context.locale,
-    show: (notices) => {
-      if (disposed) {
+    signal: lifetime.signal,
+    show: (notices, seen) => {
+      if (lifetime.signal.aborted) {
         return false;
       }
-      disposeLaunchNotices = mountStarterLaunchNotices(notices, context.locale);
+      disposeLaunchNotices = mountStarterLaunchNotices(notices, context.locale, { onSeen: seen });
       return true;
     },
   });
   return () => {
-    disposed = true;
+    lifetime.abort();
     unsubscribe();
     disposeLaunchNotices?.();
     openButton.remove();

@@ -46,6 +46,7 @@ import {
   notificationTemplateDataIssue,
   notificationTopicDefinitionIssues,
   notificationTopicNeedsNoAgreement,
+  notificationUpcomingReconfirmations,
   readNotificationTemplate,
   referenceNotificationProviders,
   referenceNotificationTargetProviders,
@@ -1269,6 +1270,45 @@ describe('notification consent notices', () => {
       .toEqual(['2030-10-11']);
   });
 
+  it('lists every overdue re-confirmation of a consent past two due dates, so giving them ends the pause', () => {
+    const records = [record('advertising', 'granted', { at: noon })];
+    const result = { kind: 'consent-result', record: { kind: 'advertising', at: noon }, dueBy: '2026-10-26' } as const;
+    const ordinal = (dueBy: string) =>
+      ({ kind: 'reconfirmation', record: { kind: 'advertising', at: noon }, dueBy }) as const;
+    const at = '2031-01-10T03:00:00Z';
+    const listed = (given: readonly NotificationNoticeIdentity[]) =>
+      listNotificationNotices(records, [result, ...given], at).map((notice) => notice.dueBy);
+    // Both due dates stay fixed from the consent date (decree art. 62-3).
+    expect(listed([])).toEqual(['2028-10-11', '2030-10-11']);
+    expect(listed([ordinal('2028-10-11')])).toEqual(['2030-10-11']);
+    expect(listed([ordinal('2030-10-11')])).toEqual(['2028-10-11']);
+    expect(listed([ordinal('2028-10-11'), ordinal('2030-10-11')])).toEqual([]);
+    const overdue = (given: readonly NotificationNoticeIdentity[]) =>
+      notificationOverdueConsentRefreshes(records, given, at, notificationKoreanConsentRefresh);
+    expect(overdue([])).toEqual(['advertising']);
+    expect(overdue([ordinal('2028-10-11')])).toEqual(['advertising']);
+    expect(overdue([ordinal('2030-10-11')])).toEqual(['advertising']);
+    // Giving every listed one, as the launch notices do, resumes advertising at once.
+    const gate = (given: readonly NotificationNoticeIdentity[]) =>
+      evaluateNotificationDelivery(input({ topic: advertising, consent: records, at, noticesGiven: given })).status;
+    expect(gate([ordinal('2028-10-11')])).toBe('suppressed');
+    expect(gate(listNotificationNotices(records, [], at).filter((notice) => notice.kind === 'reconfirmation')))
+      .toBe('allowed');
+    // The next one after those, 2032-10-11, is what a scheduler waits for.
+    expect(notificationUpcomingReconfirmations(records, [ordinal('2028-10-11'), ordinal('2030-10-11')], at)
+      .map((notice) => [notice.record.kind, notice.dueBy, notice.variant]))
+      .toEqual([['advertising', '2032-10-11', 'reconfirmation.advertising']]);
+    // Without given ones, the next not past due is the third.
+    expect(notificationUpcomingReconfirmations(records, [], at).map((notice) => notice.dueBy)).toEqual(['2032-10-11']);
+    expect(notificationUpcomingReconfirmations(records, [], '2026-11-01T03:00:00Z').map((notice) => notice.dueBy))
+      .toEqual(['2028-10-11']);
+    expect(notificationUpcomingReconfirmations(
+      [...records, record('advertising', 'withdrawn', { at: '2027-01-01T03:00:00Z' })],
+      [],
+      at,
+    )).toEqual([]);
+  });
+
   it('lists the re-confirmation of a 29 February consent from 60 days before its due date', () => {
     const at = '2024-02-29T03:00:00Z';
     const records = [record('advertising', 'granted', { at })];
@@ -1293,6 +1333,12 @@ describe('notification consent notices', () => {
     expect(notificationConsentRefreshDueBy('2027-08-31T03:00:00Z', { intervalMonths: 6 })).toBe('2028-02-28');
     expect(notificationConsentRefreshDueBy('2028-02-29T03:00:00Z', { intervalMonths: 48 })).toBe('2032-02-27');
     expect(() => notificationConsentRefreshDueBy(noon, { intervalMonths: 0 })).toThrow(/interval/u);
+    expect(() => notificationConsentRefreshDueBy(noon, { intervalMonths: 121 })).toThrow(/1 to 120/u);
+    expect(notificationConsentRefreshDueBy(noon, { intervalMonths: 120 })).toBe('2036-10-11');
+    // Years 0 to 99 are not read as 1900 to 1999.
+    expect(notificationConsentRefreshDueBy('0001-06-01T03:00:00Z', { intervalMonths: 24 })).toBe('0003-05-31');
+    expect(notificationConsentResultDueBy('0001-06-01T03:00:00Z')).toBe('0001-06-15');
+    expect(toSeoulCalendarDate('0001-06-01T03:00:00Z')).toBe('0001-06-01');
     expect(() => notificationConsentRefreshDueBy(noon, { intervalMonths: 12 }, 0)).toThrow(/ordinal/u);
   });
 
@@ -1311,6 +1357,14 @@ describe('notification consent notices', () => {
     expect(resolveNotificationNoticePolicy({ consentRefresh: refresh })).toEqual({ consentResults: false, refresh });
     expect(() => resolveNotificationNoticePolicy({ ...kr, consentRefresh: refresh })).toThrow(/fix the consent refresh/u);
     expect(notificationConsentRefreshIssues(notificationKoreanConsentRefresh)).toEqual([]);
+    // 31 January plus one month is due by 27 February: a 27-day lead lists it on the consent day.
+    expect(notificationConsentRefreshDueBy('2027-01-31T03:00:00Z', { intervalMonths: 1 })).toBe('2027-02-27');
+    expect(notificationConsentRefreshIssues({
+      advertising: { intervalMonths: 1, noticeLeadDays: 27, onOverdue: 'pause' },
+    }).map((issue) => issue.path)).toEqual(['deployment.consentRefresh.advertising.noticeLeadDays']);
+    expect(notificationConsentRefreshIssues({
+      advertising: { intervalMonths: 1, noticeLeadDays: 26, onOverdue: 'pause' },
+    })).toEqual([]);
     expect(notificationConsentRefreshIssues({
       advertising: { intervalMonths: 1, noticeLeadDays: 28, pushLeadDays: 29, onOverdue: 'pause' },
     }, 'refresh').map((issue) => issue.path)).toEqual([

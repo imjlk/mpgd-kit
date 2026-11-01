@@ -491,9 +491,11 @@ try {
         assert.ok(answer.ok, JSON.stringify(answer));
         const measured = counted.snapshot();
         console.info(`event-${name}:`, measured, answer.value.summary, { sent: fcmSends });
-        assert.equal(answer.value.summary.delivered, recipientsPerCall / 2);
-        assert.equal(answer.value.summary.suppressed, recipientsPerCall / 2);
-        assert.equal(fcmSends, recipientsPerCall / 2);
+        // Even indexes are sent: half, rounded up for an odd count.
+        const sentCount = Math.ceil(recipientsPerCall / 2);
+        assert.equal(answer.value.summary.delivered, sentCount);
+        assert.equal(answer.value.summary.suppressed, recipientsPerCall - sentCount);
+        assert.equal(fcmSends, sentCount);
         const reasons = new Set(
           answer.value.recipients.flatMap((recipient) =>
             recipient.status === 'answered' && recipient.outcome.status === 'suppressed'

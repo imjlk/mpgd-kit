@@ -769,8 +769,11 @@ function renderNotices(
 export interface StarterLaunchNotices {
   /** In the player's language, overdue ones (past their `dueBy`) first. */
   readonly notices: readonly { readonly title: string; readonly body: string; readonly overdue: boolean }[];
-  /** Records the notices as given in the game; call once they are on screen. Never throws. */
-  record(): Promise<void>;
+  /**
+   * Records the notices at these indexes of `notices` as given in the game,
+   * each at most once; call it for the ones the player has seen. Never throws.
+   */
+  record(indexes: readonly number[]): Promise<void>;
 }
 
 export interface StarterLaunchNoticesInput {
@@ -778,8 +781,14 @@ export interface StarterLaunchNoticesInput {
   readonly runtime: NotificationRuntime | undefined;
   /** `gateway.notificationsV2`; nothing is read on a target without notifications. */
   readonly provider: NotificationProvider | undefined;
-  /** Settles once the runtime has started; the notices are read after it. */
+  /**
+   * Settles once the runtime has started; the notices are read after it, or
+   * after `startTimeoutMs` at the latest, since `notices.list()` checks the
+   * session and the capability itself.
+   */
   readonly started?: Promise<unknown>;
+  /** How long the read waits for `started`; 10 seconds by default. */
+  readonly startTimeoutMs?: number;
   /** `notices.copy` of the catalog; without it no notice can be shown. */
   readonly noticeCopy?: NotificationNoticeCopy;
   readonly defaultLocale: string;
@@ -788,11 +797,15 @@ export interface StarterLaunchNoticesInput {
   readonly now?: () => string;
 }
 
+/** How long the launch read waits for the runtime to start, at most. */
+export const starterLaunchNoticesStartTimeoutMs = 10_000;
+
 /**
- * Reads the listed notices once the runtime has started and renders them, or
- * `undefined` when there is nothing to show (no runtime, no provider, no
- * copy, no notice, or a read that failed, which is logged). It never
- * throws and never prompts: the game goes on while it reads.
+ * Reads the listed notices once the runtime has started (or its start has
+ * taken `startTimeoutMs`) and renders them, or `undefined` when there is
+ * nothing to show (no runtime, no provider, no copy, no notice, or a read
+ * that failed, which is logged). It never throws and never prompts: the
+ * game goes on while it reads.
  */
 export async function readStarterLaunchNotices(
   input: StarterLaunchNoticesInput,
@@ -802,7 +815,15 @@ export async function readStarterLaunchNotices(
     return undefined;
   }
   try {
-    await input.started;
+    if (input.started !== undefined) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        input.started,
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, input.startTimeoutMs ?? starterLaunchNoticesStartTimeoutMs);
+        }),
+      ]).finally(() => clearTimeout(timer));
+    }
     const shown = renderNotices(await runtime.notices.list(), input);
     if (shown.length === 0) {
       return undefined;
@@ -812,17 +833,21 @@ export async function readStarterLaunchNotices(
       .map((entry) => ({ ...entry, overdue: entry.notice.dueBy < today }))
       // Overdue first; the list's own order (by dueBy) otherwise.
       .sort((left, right) => Number(right.overdue) - Number(left.overdue));
-    let recorded = false;
+    const recorded = new Set<number>();
     return {
       notices: ordered.map(({ text, overdue }) => ({ ...text, overdue })),
-      async record() {
-        if (recorded) {
-          return;
-        }
-        recorded = true;
+      async record(indexes) {
+        const fresh = [...new Set(indexes)].flatMap((index) => {
+          const entry = recorded.has(index) ? undefined : ordered[index];
+          if (entry === undefined) {
+            return [];
+          }
+          recorded.add(index);
+          return [entry.notice];
+        });
         // `async` so a runtime that throws synchronously is a rejection here too.
         const results = await Promise.allSettled(
-          ordered.map(async ({ notice }) => runtime.notices.recordShown(notice)),
+          fresh.map(async (notice) => runtime.notices.recordShown(notice)),
         );
         for (const result of results) {
           if (result.status === 'rejected') {
@@ -836,4 +861,46 @@ export async function readStarterLaunchNotices(
     console.warn('[notifications] the launch notices could not be read.', error);
     return undefined;
   }
+}
+
+/**
+ * Which launch notices the player has seen: one that is on screen while the
+ * page is visible. The banner reports each notice's intersection with the
+ * screen and each page visibility change; a notice on screen while the page
+ * is hidden counts once the page shows again. `onSeen` runs once per notice.
+ */
+export function createStarterNoticeVisibility(input: {
+  readonly pageVisible: () => boolean;
+  readonly onSeen: (index: number) => void;
+}): {
+  readonly intersecting: (index: number, onScreen: boolean) => void;
+  readonly pageVisibilityChanged: () => void;
+} {
+  const onScreen = new Set<number>();
+  const seen = new Set<number>();
+  const see = (index: number): void => {
+    if (!seen.has(index)) {
+      seen.add(index);
+      input.onSeen(index);
+    }
+  };
+  return {
+    intersecting(index, visible) {
+      if (!visible) {
+        onScreen.delete(index);
+        return;
+      }
+      onScreen.add(index);
+      if (input.pageVisible()) {
+        see(index);
+      }
+    },
+    pageVisibilityChanged() {
+      if (input.pageVisible()) {
+        for (const index of onScreen) {
+          see(index);
+        }
+      }
+    },
+  };
 }

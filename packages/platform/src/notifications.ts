@@ -148,6 +148,7 @@ export {
   notificationShellRenderedAdvertisingTargets,
   notificationSuppressionReasons,
   notificationTemplateDataIssue,
+  notificationUpcomingReconfirmations,
   notificationTopicDefinitionIssues,
   notificationTopicNeedsNoAgreement,
   readNotificationTemplate,

@@ -1869,7 +1869,7 @@ export function isValidNotificationTimeZone(timeZone: string): boolean {
 /** The Asia/Seoul calendar date of an instant, `YYYY-MM-DD`. */
 export function toSeoulCalendarDate(at: string): string {
   const wall = seoulZone.wall(parseInstant(at));
-  return formatCalendarDate(Date.UTC(wall.year, wall.month - 1, wall.day));
+  return formatCalendarDate(utcMidnight(wall.year, wall.month - 1, wall.day));
 }
 
 /**
@@ -2043,6 +2043,16 @@ function instantOf(match: RegExpExecArray): number {
   date.setUTCHours(hour, minute, second, Number((match[7] ?? '0').slice(0, 3).padEnd(3, '0')));
   const offsetMs = (offsetHours * 60 + offsetMinutes) * minuteMs;
   return date.getTime() - (match[8] === '-' ? -offsetMs : offsetMs);
+}
+
+/**
+ * UTC midnight of a date, with `Date.UTC`'s overflow (a day past the month's
+ * end rolls over) but without its remapping of years 0 to 99 to 1900 to 1999.
+ */
+function utcMidnight(year: number, monthIndex: number, day: number): number {
+  const midnight = new Date(0);
+  midnight.setUTCFullYear(year, monthIndex, day);
+  return midnight.getTime();
 }
 
 function daysInMonth(year: number, month: number): number {
@@ -2322,19 +2332,24 @@ const everyRequiredNoticeVariant: readonly NotificationNoticeVariant[] = Object.
 );
 
 /**
- * One locale of `notices.copy`: a title and a body for each notice variant.
- * A refusal's text is optional; without it a refusal is given in the
- * withdrawal's text (`notificationNoticeVariantFallbacks`).
+ * One locale of `notices.copy`: a title and a body per notice variant. Which
+ * variants a catalog must give depends on its deployment
+ * (`notificationRequiredNoticeVariants`), which `notificationNoticeCopyIssues`
+ * checks: under the Korean rules, and without a consent refresh of its own,
+ * every variant but a refusal, whose text falls back to the withdrawal's
+ * (`notificationNoticeVariantFallbacks`); under a consent refresh outside
+ * them, only the `reconfirmation.*` texts it lists. So each key is optional
+ * here, and a reader looks one up through `notificationNoticeVariantCopy`.
  */
 export interface NotificationNoticeLocaleCopy {
-  readonly 'consent-result.advertising.granted': NotificationTopicCopy;
+  readonly 'consent-result.advertising.granted'?: NotificationTopicCopy;
   readonly 'consent-result.advertising.refused'?: NotificationTopicCopy;
-  readonly 'consent-result.advertising.withdrawn': NotificationTopicCopy;
-  readonly 'consent-result.night.granted': NotificationTopicCopy;
+  readonly 'consent-result.advertising.withdrawn'?: NotificationTopicCopy;
+  readonly 'consent-result.night.granted'?: NotificationTopicCopy;
   readonly 'consent-result.night.refused'?: NotificationTopicCopy;
-  readonly 'consent-result.night.withdrawn': NotificationTopicCopy;
-  readonly 'reconfirmation.advertising': NotificationTopicCopy;
-  readonly 'reconfirmation.night': NotificationTopicCopy;
+  readonly 'consent-result.night.withdrawn'?: NotificationTopicCopy;
+  readonly 'reconfirmation.advertising'?: NotificationTopicCopy;
+  readonly 'reconfirmation.night'?: NotificationTopicCopy;
 }
 
 /**
@@ -2572,7 +2587,7 @@ export function notificationConsentResultDueBy(at: string): string {
 
 function consentResultDueByOf(instant: number): string {
   const wall = seoulZone.wall(instant);
-  return formatCalendarDate(Date.UTC(wall.year, wall.month - 1, wall.day + 14));
+  return formatCalendarDate(utcMidnight(wall.year, wall.month - 1, wall.day + 14));
 }
 
 /**
@@ -2604,8 +2619,8 @@ export function notificationConsentRefreshDueBy(
   if (!Number.isInteger(ordinal) || ordinal < 1) {
     throw new TypeError('A re-confirmation ordinal is a whole number from 1.');
   }
-  if (!Number.isInteger(rule.intervalMonths) || rule.intervalMonths < 1) {
-    throw new TypeError('A consent refresh interval is a whole number of months from 1.');
+  if (!Number.isInteger(rule.intervalMonths) || rule.intervalMonths < 1 || rule.intervalMonths > 120) {
+    throw new TypeError('A consent refresh interval is a whole number of months from 1 to 120.');
   }
   return refreshDueByOf(parseInstant(at), rule.intervalMonths, ordinal);
 }
@@ -2617,7 +2632,7 @@ function refreshDueByOf(instant: number, intervalMonths: number, ordinal: number
   const year = wall.year + Math.floor(months / 12);
   const month = months % 12;
   const day = Math.min(anchor, daysInMonth(year, month + 1));
-  return formatCalendarDate(Date.UTC(year, month, day - 1));
+  return formatCalendarDate(utcMidnight(year, month, day - 1));
 }
 
 /** Days before its `dueBy` from which a re-confirmation is listed under the Korean rules. */
@@ -2679,11 +2694,14 @@ function nextRefreshDueBy(
  *   `consent-result` notice for every record, which reports a refusal for a
  *   `withdrawn` record whose latest earlier record of its kind is not a
  *   consent;
- * - per kind the policy refreshes whose latest record is a consent, the
- *   first re-confirmation of that consent not given yet, from the rule's
+ * - per kind the policy refreshes whose latest record is a consent, every
+ *   re-confirmation of that consent past its `dueBy` that nobody gave, and
+ *   the first one not given that is not past due, from the rule's
  *   `noticeLeadDays` days before its `dueBy` (60 under the Korean rules).
- *   Each one follows the one before it, so silence keeps the series going,
- *   a new consent restarts it, and a withdrawal ends it.
+ *   The dates stay fixed from the consent date, so a consent past two due
+ *   dates lists both, and giving the listed ones ends an overdue pause at
+ *   once. Silence keeps the series going, a new consent restarts it, and a
+ *   withdrawal ends it.
  *
  * A listed notice stays listed after its `dueBy` until it is given.
  */
@@ -2740,8 +2758,11 @@ export function listNotificationNotices(
     if (rule === undefined || consent === undefined || consent.record.state !== 'granted') {
       continue;
     }
-    const dueBy = nextRefreshDueBy(kind, consent.instant, rule, givenNames);
-    if (calendarDaysBefore(dueBy, rule.noticeLeadDays) <= today) {
+    const series = refreshSeriesOf(kind, consent.instant, rule, givenNames, today);
+    const listed = calendarDaysBefore(series.next, rule.noticeLeadDays) <= today
+      ? [...series.overdue, series.next]
+      : series.overdue;
+    for (const dueBy of listed) {
       notices.push({
         kind: 'reconfirmation',
         record: { ...consent.record },
@@ -2752,6 +2773,69 @@ export function listNotificationNotices(
   }
   return notices.sort((left, right) =>
     left.dueBy.localeCompare(right.dueBy) || left.kind.localeCompare(right.kind));
+}
+
+/**
+ * A consent's re-confirmations at `today`: every one past its `dueBy` that
+ * nobody gave (`overdue`, oldest first), and the first one not given that
+ * is not past due (`next`), whether it is listed yet or not.
+ */
+function refreshSeriesOf(
+  kind: NoticeRecord['kind'],
+  instant: number,
+  rule: NotificationConsentRefreshRule,
+  givenNames: ReadonlySet<string>,
+  today: string,
+): { readonly overdue: readonly string[]; readonly next: string } {
+  const overdue: string[] = [];
+  // Ends at the first one not given that is not past due: the given notices are finite.
+  for (let ordinal = 1; ; ordinal += 1) {
+    const dueBy = refreshDueByOf(instant, rule.intervalMonths, ordinal);
+    if (givenNames.has(noticeNameOf('reconfirmation', kind, instant, dueBy))) {
+      continue;
+    }
+    if (dueBy >= today) {
+      return { overdue, next: dueBy };
+    }
+    overdue.push(dueBy);
+  }
+}
+
+/**
+ * Per kind the policy refreshes whose latest record is a consent, the first
+ * re-confirmation not given that is not past due at `at`, listed yet or not:
+ * with `listNotificationNotices` at `at`, every notice owed now or next, so
+ * a scheduler knows when the next one is first pushed.
+ */
+export function notificationUpcomingReconfirmations(
+  records: readonly NotificationConsentRecord[],
+  given: readonly NotificationNoticeIdentity[],
+  at: string,
+  policy: NotificationNoticePolicy = notificationKoreanNoticePolicy,
+): readonly NotificationNotice[] {
+  const today = toSeoulCalendarDate(at);
+  const givenNames = givenNoticeNames(given, 'reconfirmation');
+  return notificationRefreshedConsentKinds.flatMap((kind): NotificationNotice[] => {
+    const rule = policy.refresh[kind];
+    const latest = rule === undefined ? undefined : latestNotificationConsent(records, kind);
+    if (rule === undefined || latest === undefined || latest.kind !== kind || latest.state !== 'granted') {
+      return [];
+    }
+    const instant = parseInstant(latest.at);
+    return [
+      {
+        kind: 'reconfirmation',
+        record: {
+          kind,
+          state: 'granted',
+          at: formatNotificationTimestamp(instant),
+          textVersion: latest.textVersion,
+        },
+        dueBy: refreshSeriesOf(kind, instant, rule, givenNames, today).next,
+        variant: noticeVariantOf('reconfirmation', kind, 'granted'),
+      },
+    ];
+  });
 }
 
 /** Days before `dueBy` from which the scheduler sends a notice nobody recorded under the Korean rules. */
@@ -2851,8 +2935,9 @@ export function resolveNotificationConsentRefresh(
 /**
  * A refresh policy's issues, each under `path`: a push lead longer than the
  * notice lead (the scheduler pushes only a listed notice), and a notice lead
- * as long as the shortest interval it could span (28 days a month), which
- * would list each re-confirmation as soon as the one before it is given.
+ * as long as the shortest span from a consent to its re-confirmation's
+ * `dueBy` (`28 × intervalMonths − 1` days), which would list a
+ * re-confirmation as soon as its consent, or the one before it, is given.
  */
 export function notificationConsentRefreshIssues(
   policy: NotificationConsentRefreshPolicy,
@@ -2870,7 +2955,10 @@ export function notificationConsentRefreshIssues(
         message: 'the scheduler pushes only a listed notice; keep pushLeadDays at most noticeLeadDays',
       });
     }
-    if (rule.noticeLeadDays >= rule.intervalMonths * 28) {
+    // The shortest span from a consent to its re-confirmation's dueBy is
+    // `28 × intervalMonths − 1` days at most (31 January plus one month is
+    // due by 27 February), so a lead that long lists it on the consent day.
+    if (rule.noticeLeadDays >= rule.intervalMonths * 28 - 1) {
       issues.push({
         path: `${path}.${kind}.noticeLeadDays`,
         message: 'a notice lead as long as the interval lists each re-confirmation as soon as the one before it is given; shorten it',
@@ -2958,10 +3046,10 @@ export function notificationNoticePushFrom(
 /**
  * The consents whose re-confirmation is overdue at `at`: per kind the policy
  * refreshes whose latest record is a consent, the first re-confirmation not
- * given yet is past its `dueBy` (its Asia/Seoul day has ended). Recording it
- * moves the series to the next one, and a new consent restarts it, so
- * either ends the overdue state. The gate pauses a kind whose rule says
- * `pause`.
+ * given yet is past its `dueBy` (its Asia/Seoul day has ended).
+ * `listNotificationNotices` lists every overdue one, so recording the
+ * listed notices ends the overdue state at once, and a new consent restarts
+ * the count. The gate pauses a kind whose rule says `pause`.
  */
 export function notificationOverdueConsentRefreshes(
   records: readonly NotificationConsentRecord[],

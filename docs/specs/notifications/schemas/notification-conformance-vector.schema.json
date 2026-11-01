@@ -2466,16 +2466,9 @@
             "readOnly": true
           }
         },
-        "required": [
-          "consent-result.advertising.granted",
-          "consent-result.advertising.withdrawn",
-          "consent-result.night.granted",
-          "consent-result.night.withdrawn",
-          "reconfirmation.advertising",
-          "reconfirmation.night"
-        ],
+        "required": [],
         "additionalProperties": false,
-        "description": "One locale of `notices.copy`: a title and a body for each notice variant.\nA refusal's text is optional; without it a refusal is given in the\nwithdrawal's text (`notificationNoticeVariantFallbacks`)."
+        "description": "One locale of `notices.copy`: a title and a body per notice variant. Which\nvariants a catalog must give depends on its deployment\n(`notificationRequiredNoticeVariants`), which `notificationNoticeCopyIssues`\nchecks: under the Korean rules, and without a consent refresh of its own,\nevery variant but a refusal, whose text falls back to the withdrawal's\n(`notificationNoticeVariantFallbacks`); under a consent refresh outside\nthem, only the `reconfirmation.*` texts it lists. So each key is optional\nhere, and a reader looks one up through `notificationNoticeVariantCopy`."
       },
       "NotificationNoticeSettings": {
         "type": "object",

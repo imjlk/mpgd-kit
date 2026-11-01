@@ -1233,6 +1233,10 @@ day the notice may be given:
   - The first is listed from 60 days before its `dueBy`, and each later one
     from 60 days before its own `dueBy` once the one before it is recorded.
     Silence after a notice keeps the consent, and the series continues.
+  - The dates stay fixed from the consent date (decree art. 62-3 counts
+    every two years from it). Every re-confirmation past its `dueBy` that
+    was not recorded stays listed, so a consent past two due dates lists
+    both, and recording the listed ones ends a pause at once.
   - A new consent restarts the count, and a withdrawal ends it.
 
 A listed notice stays listed after its `dueBy` until it is recorded. Once a
@@ -1346,7 +1350,7 @@ refresh policy. A deployment's policy says, per consent kind (`advertising`,
 | Field | Meaning |
 | --- | --- |
 | `intervalMonths` | The n-th re-confirmation is due by the day before the date `n × intervalMonths` months after the latest consent of the kind. A 29 February consent date counts as 28 February, and a day the month reached does not have counts as its last day. |
-| `noticeLeadDays` | The re-confirmation is listed from this many days before its `dueBy`, the next one once the one before it is recorded. |
+| `noticeLeadDays` | The re-confirmation is listed from this many days before its `dueBy`, the next one once the one before it is recorded; one past its `dueBy` stays listed until it is recorded, so every overdue one is listed at once. At most `28 × intervalMonths − 2`, so none is listed on its consent's day. |
 | `pushLeadDays` | The scheduler pushes an unrecorded re-confirmation from the start of the day this many days before its `dueBy`, through `notices.topic`. Absent, it is never pushed, only listed. At most `noticeLeadDays`. |
 | `onOverdue` | `pause`: once past its `dueBy` unrecorded, the sends the consent covers pause. `continue`: they go on. |
 
@@ -1364,16 +1368,18 @@ dates, as for every notice, whatever the deployment's zone.
   (for example a 24-month re-permission as good practice). Then the backend
   owes only those re-confirmations, never the result notices only the
   Korean rules require, and lists, records, pushes, and pauses them as
-  under `kr`. The catalog validator then requires the `notices` block, its
-  topic mapped on every target that maps an advertising topic, and
+  under `kr`. The catalog validator then requires the `notices` block (with
+  or without an advertising topic), its topic mapped on every target that
+  maps an advertising topic, and
   `notices.copy` needs only the `reconfirmation.*` texts of the kinds it
   refreshes (`notificationRequiredNoticeVariants`); the result texts are
   optional there.
 - **Overdue.** A re-confirmation is overdue from the Asia/Seoul day after its
   `dueBy` while it is not recorded (`notificationOverdueConsentRefreshes`).
-  Recording it moves the series to the next one, and a new consent restarts
-  the count, so either ends the overdue state at once. The next launch's
-  in-game notice is how a player catches up; recording it needs no push.
+  Every overdue one is listed, so recording the listed notices ends the
+  overdue state at once, and so does a new consent, which restarts the
+  count. The next launch's in-game notice is how a player catches up;
+  recording it needs no push.
 - **Pause.** Under `pause`:
   - An overdue `advertising` re-confirmation suppresses every advertising
     send as `suppressed: reconfirmation-overdue` (gate step 5). Sends of
@@ -1409,6 +1415,13 @@ dates, as for every notice, whatever the deployment's zone.
   store.listNoticesGiven(player)`, the notices it recorded through
   `notices.recordShown` and delivered notice pushes. The default stays fail
   closed. `@mpgd/game-services`' service passes them.
+- **A refresh added later.** A consent written before the deployment
+  added a refresh that pushes made no notice check. A registration starts
+  it (one more schedule read per registration where re-confirmations are
+  pushed), so the player's push is scheduled once the game runs again. A
+  player who never opens the game again gets no push: the store has no
+  enumeration of consent holders to backfill, and the pause still applies
+  to them.
 - **Reminders.** A server reminder's set-time check (steps 3 to 5) does not
   apply the pause: the player may record the notice before it fires. The
   gate applies it when the reminder fires.
@@ -3516,8 +3529,14 @@ re-confirmation one preset of a general [consent refresh](#consent-refresh).
   `reconfirmation.*` texts (`notificationRequiredNoticeVariants`, the
   `required` argument of `notificationNoticeCopyIssues`).
 - The CLI starter shows the listed notices once per launch, after the
-  runtime starts, and records them as given, so a player who never opens
-  the settings screen still ends a pause.
+  runtime starts (10 seconds at most) or, for a player who signs in later,
+  once a session is current. It records each notice as given once the
+  player can see it, on screen while the page is visible, so a player who
+  never opens the settings screen still ends a pause.
+- `listNotificationNotices` lists every overdue re-confirmation of a
+  consent, not only the first, so recording them ends a pause at once;
+  `notificationUpcomingReconfirmations` gives the next one per kind, which
+  the scheduler waits for in place of listing far ahead.
 - **Left open.** Notice dates stay Asia/Seoul dates under every policy.
 
 All of N1–C1 is the first release wave. Releases follow N3, S2, and C1. The

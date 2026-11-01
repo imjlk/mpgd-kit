@@ -2595,6 +2595,60 @@ const pending = (h: Harness) =>
     status: 'delivered',
     reads: 0,
   });
+  // A player with no endpoint answers no-endpoint before step 5: no read, so
+  // a failing notices read cannot fail that send.
+  await h.service.recordConsent(session('p-2'), {
+    kind: 'advertising',
+    state: 'granted',
+    source: 'player',
+    textVersion: 'v1',
+  });
+  h.time.set('2030-10-19T03:00:00Z');
+  const before = reads;
+  assert.deepEqual(
+    await h.service.deliver({ idempotencyKey: 'no-endpoint', player: 'p-2', topic: 'weekend-event' }),
+    { status: 'unavailable', reason: 'no-endpoint' },
+  );
+  assert.equal(reads - before, 0);
+}
+
+// CR1: a refresh added to a deployment after its players consented starts
+// their notice check at their next registration, so the push is scheduled.
+{
+  const shared = createInMemoryNotificationStore();
+  const before = harness({
+    topics: [weekend, noticeTopic],
+    deployment: { advertisingRules: 'none' },
+    notices: true,
+    store: () => shared,
+  });
+  await before.service.recordConsent(session('p-1'), {
+    kind: 'advertising',
+    state: 'granted',
+    source: 'player',
+    textVersion: 'v1',
+  });
+  const checks = () => shared.inspect().schedule.filter((entry) => entry.id === 'notices');
+  assert.deepEqual(checks(), [], 'no refresh, no check');
+  const after = harness({
+    topics: [weekend, noticeTopic],
+    deployment: {
+      advertisingRules: 'none',
+      consentRefresh: {
+        advertising: { intervalMonths: 12, noticeLeadDays: 30, pushLeadDays: 3, onOverdue: 'pause' },
+      },
+    },
+    notices: true,
+    store: () => shared,
+  });
+  await register(after, 'p-1');
+  assert.equal(checks().length, 1, 'the registration starts the check');
+  await after.service.runScheduler();
+  // Due by 2027-10-18, pushed from 2027-10-15 KST.
+  assert.equal(checks()[0]?.dueAt, '2027-10-14T15:00:00Z');
+  // A player without a consent the policy re-confirms gets none.
+  await register(after, 'p-2');
+  assert.equal(checks().length, 1);
 }
 
 // CR1: outside the Korean rules a consent refresh of its own lists and pushes

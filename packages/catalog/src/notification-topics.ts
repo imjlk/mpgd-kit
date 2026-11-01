@@ -228,9 +228,7 @@ export function validateNotificationTopicCatalog(
   issues.push(...noticeIssues(catalog, ids, targetProviders, options.deployment));
   issues.push(...deploymentIssues(catalog, options.deployment, targetProviders));
   // With no issue, `notices.copy` has every variant the deployment's notices
-  // are given in for every locale: the declared type, except that under a
-  // consent refresh outside kr the result variants, which no notice of that
-  // policy reads, may be missing.
+  // are given in for every locale: the catalog has the declared type.
   return issues.length === 0
     ? { valid: true, catalog: catalog as NotificationTopicCatalog, issues }
     : { valid: false, issues };
@@ -553,6 +551,16 @@ function deploymentIssues(
   } else if (deployment?.consentRefresh !== undefined) {
     issues.push(...notificationConsentRefreshIssues(deployment.consentRefresh));
   }
+  const refreshes = !kr
+    && notificationRefreshedConsentKinds.some((kind) => deployment?.consentRefresh?.[kind] !== undefined);
+  // A refresh of its own lists and pushes its notices for any consent holder,
+  // with or without an advertising topic: it needs the notices block.
+  if (refreshes && catalog.notices === undefined) {
+    issues.push({
+      path: 'notices.topic',
+      message: 'the consent refresh lists re-confirmation notices in the variants of notices.copy and pushes them through a service topic; declare notices',
+    });
+  }
   if (!catalog.topics.some((topic) => topic.purpose === 'advertising')) {
     return issues;
   }
@@ -563,19 +571,18 @@ function deploymentIssues(
     });
     return issues;
   }
-  const refreshes = !kr
-    && notificationRefreshedConsentKinds.some((kind) => deployment.consentRefresh?.[kind] !== undefined);
   if (kr || refreshes) {
     const noticeTopic = catalog.notices === undefined
       ? undefined
       : catalog.topics.find((topic) => topic.id === catalog.notices?.topic);
     if (catalog.notices === undefined) {
-      issues.push({
-        path: 'notices.topic',
-        message: kr
-          ? 'the Korean advertising rules send overdue consent notices through a service topic; declare notices.topic'
-          : 'the consent refresh lists re-confirmation notices in the variants of notices.copy and pushes them through a service topic; declare notices',
-      });
+      // A refresh outside kr was reported above.
+      if (kr) {
+        issues.push({
+          path: 'notices.topic',
+          message: 'the Korean advertising rules send overdue consent notices through a service topic; declare notices.topic',
+        });
+      }
     } else if (noticeTopic !== undefined) {
       // A target that delivers advertising also delivers its notices. A
       // provider that cannot carry them is reported at the advertising mapping.

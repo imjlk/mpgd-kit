@@ -28,6 +28,7 @@ import {
   notificationSendFingerprint,
   notificationShellRenderedAdvertisingTargets,
   notificationTemplateDataIssue,
+  notificationUpcomingReconfirmations,
   resolveNotificationNoticePolicy,
   toSeoulCalendarDate,
   type NotificationConsentRecord,
@@ -167,8 +168,6 @@ const noticeRecheckMs = 3_600_000;
 const noticeBackoffMs = 3_600_000;
 /** Records no rule reads are kept this long, for the daily cap, and then deleted. */
 const consentCompactionMs = dayMs;
-/** Lists every notice still owed, now or later: the next re-confirmation of each consent. */
-const noticeHorizon = '9999-12-31T00:00:00Z';
 const noticesEntryId = 'notices';
 /** How much wall time one scheduler run may use by default. */
 const defaultSchedulerBudgetMs = 20_000;
@@ -550,6 +549,9 @@ export function createNotificationService(input: CreateNotificationServiceInput)
   /** Whether an overdue re-confirmation pauses advertising (gate step 5), so an advertising send reads the notices given. */
   const refreshPauses = notificationRefreshedConsentKinds
     .some((kind) => noticePolicy?.refresh[kind]?.onOverdue === 'pause');
+  /** Whether the policy pushes any re-confirmation, so a registration may start a notice check. */
+  const refreshPushes = notificationRefreshedConsentKinds
+    .some((kind) => noticePolicy?.refresh[kind]?.pushLeadDays !== undefined);
   const leaseSeconds = input.claimLeaseSeconds ?? defaultClaimLeaseSeconds;
   // Checked in seconds: 0.5 is a whole number of milliseconds but no lease.
   if (!Number.isInteger(leaseSeconds) || leaseSeconds <= 0 || leaseSeconds * secondMs > dayMs) {
@@ -1107,8 +1109,10 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     copies: NotificationCopyCache,
   ): Promise<RecipientConsent> => {
     const records = await store.listConsent(player);
+    // A recipient that did not resolve answers `no-endpoint` before step 5.
     const advertising = refreshPauses && recipients.some((recipient) =>
-      topicFor(recipient.provider, recipient.target, topicId, origin)?.purpose === 'advertising');
+      recipient.resolved
+      && topicFor(recipient.provider, recipient.target, topicId, origin)?.purpose === 'advertising');
     if (!advertising || noticePolicy === undefined) {
       return { records };
     }
@@ -2744,8 +2748,11 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         report(error, 'scheduler.notice', key);
       }
     }
-    // Every notice still owed, now or later (the next re-confirmation of each consent).
-    const ahead = listNotificationNotices(records, given, noticeHorizon, noticePolicy);
+    // Every notice still owed, now or next (the next re-confirmation of each consent).
+    const ahead = [
+      ...owed,
+      ...notificationUpcomingReconfirmations(records, given, now, noticePolicy),
+    ];
     const owedKeys = new Set(
       ahead.map((notice) =>
         createNotificationNoticeIdempotencyKey({ ...noticeIdentity(notice), player }),
@@ -2924,10 +2931,33 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     phase: 'registration' | 'before-consent' | 'after-consent' = 'registration',
   ): Promise<void> => {
     try {
+      if (phase === 'registration' && await seedsRefreshPushes(player)) {
+        await markNoticesDue(player, nowMs());
+        return;
+      }
       await markNoticesDue(player, nowMs(), onlyBackedOff);
     } catch (error) {
       report(error, phase === 'registration' ? 'notices.retry' : `notices.retry.${phase}`);
     }
+  };
+  /**
+   * Whether a registration should start the player's notice check: the
+   * policy pushes re-confirmations, the player has none, and holds a consent
+   * the policy re-confirms. A consent written before the deployment added
+   * its refresh made no check, so this is how its push gets scheduled for a
+   * player who opens the game again; a player who never does gets none.
+   */
+  const seedsRefreshPushes = async (player: string): Promise<boolean> => {
+    if (!refreshPushes || !carriesNotices()) {
+      return false;
+    }
+    if (await store.getScheduleEntry({ player, id: noticesEntryId }) !== undefined) {
+      return false;
+    }
+    const records = await store.listConsent(player);
+    return notificationRefreshedConsentKinds.some((kind) =>
+      noticePolicy?.refresh[kind]?.pushLeadDays !== undefined
+      && latestNotificationConsent(records, kind)?.state === 'granted');
   };
 
   /**

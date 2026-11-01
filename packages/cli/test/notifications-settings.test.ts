@@ -13,6 +13,7 @@ import type {
 } from '@mpgd/platform/notifications';
 
 import {
+  createStarterNoticeVisibility,
   createStarterNotificationSettings,
   readStarterLaunchNotices,
 } from '../templates/notifications-overlay/common/src/platform/notificationSettings.js';
@@ -1031,9 +1032,12 @@ const common = {
     { title: '결과', body: '2026-10-19 동의', overdue: false },
   ]);
   assert.deepEqual(calls, [], 'reading records nothing');
-  await launch?.record();
+  // Only the notices the player saw are recorded, each once.
+  await launch?.record([0]);
+  assert.deepEqual(calls, [{ shown: overdue }]);
+  await launch?.record([0, 1, 1, 7]);
   assert.deepEqual(calls, [{ shown: overdue }, { shown: upcoming }]);
-  await launch?.record();
+  await launch?.record([0, 1]);
   assert.equal(calls.length, 2, 'recorded once');
   const none = { defaultLocale: 'ko', locale: 'ko', noticeCopy } as const;
   assert.equal(
@@ -1071,6 +1075,59 @@ const common = {
   } finally {
     console.warn = original;
   }
+}
+
+// A runtime whose start never settles does not hold the launch read past its
+// deadline; notices.list() still checks the session itself.
+{
+  const { provider } = fakeProvider(capabilities('app', 'os'), { app: 'granted' });
+  const notice: NotificationNotice = {
+    kind: 'reconfirmation',
+    record: {
+      kind: 'advertising',
+      state: 'granted',
+      at: '2026-10-18T16:30:00.000Z',
+      textVersion: '1',
+    },
+    dueBy: '2028-10-17',
+    variant: 'reconfirmation.advertising',
+  };
+  const { runtime } = fakeRuntime(provider, [notice]);
+  const text = { title: '재확인', body: '{{consentDate}} 동의' };
+  const launch = await readStarterLaunchNotices({
+    runtime,
+    provider,
+    started: new Promise<void>(() => undefined),
+    startTimeoutMs: 5,
+    noticeCopy: { ko: { 'reconfirmation.advertising': text } },
+    defaultLocale: 'ko',
+    locale: 'ko',
+    now: () => '2028-11-01T03:00:00Z',
+  });
+  assert.deepEqual(launch?.notices, [{ title: '재확인', body: '2026-10-19 동의', overdue: true }]);
+}
+
+// A launch notice counts as seen only while it is on screen and the page is
+// visible; one on screen while the page is hidden counts once it shows.
+{
+  let visible = false;
+  const seen: number[] = [];
+  const visibility = createStarterNoticeVisibility({
+    pageVisible: () => visible,
+    onSeen: (index) => seen.push(index),
+  });
+  visibility.intersecting(0, true);
+  visibility.intersecting(1, false);
+  assert.deepEqual(seen, [], 'nothing is seen on a hidden page');
+  visible = true;
+  visibility.pageVisibilityChanged();
+  assert.deepEqual(seen, [0]);
+  // Scrolled into view later, it is seen then; each one once.
+  visibility.intersecting(1, true);
+  visibility.intersecting(0, false);
+  visibility.intersecting(0, true);
+  visibility.pageVisibilityChanged();
+  assert.deepEqual(seen, [0, 1]);
 }
 
 console.info('Notification settings model checks passed.');

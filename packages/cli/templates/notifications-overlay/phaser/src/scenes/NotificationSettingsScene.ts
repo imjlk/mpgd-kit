@@ -81,18 +81,19 @@ export function routeNotificationSettingsOpens(game: Phaser.Game, context: Start
  */
 export function showNotificationLaunchNotices(game: Phaser.Game, context: StarterContext): void {
   let dispose: (() => void) | undefined;
-  let destroyed = false;
+  const lifetime = new AbortController();
   game.events.once('destroy', () => {
-    destroyed = true;
+    lifetime.abort();
     dispose?.();
   });
   void showStarterLaunchNotices(context.platform, {
     locale: context.locale,
-    show: (notices) => {
-      if (destroyed) {
+    signal: lifetime.signal,
+    show: (notices, seen) => {
+      if (lifetime.signal.aborted) {
         return false;
       }
-      dispose = mountStarterLaunchNotices(notices, context.locale);
+      dispose = mountStarterLaunchNotices(notices, context.locale, { onSeen: seen });
       return true;
     },
   });

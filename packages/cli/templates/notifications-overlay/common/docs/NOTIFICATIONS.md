@@ -139,10 +139,12 @@ withdraws a granted night consent in the same call (two records, two result
 notices).
 
 **Consent notices at launch.** Once per launch, after the notifications
-runtime starts, the game reads the consent notices the server lists and,
-when there is one, shows them in a small box at the top that does not pause
-the game, overdue ones first, and records them as given
-(`showStarterLaunchNotices`). Under the Korean rules advertising to a player
+runtime starts (10 seconds at most), the game reads the consent notices the
+server lists and, when there is one, shows them in a small box at the top
+that does not pause the game, overdue ones first, and records each one as
+given once the player can see it: on screen while the page is visible
+(`showStarterLaunchNotices`). A player who signs in after launch gets the
+read when the session becomes current. Under the Korean rules advertising to a player
 pauses while a re-confirmation (every two years) is past its due date and
 not recorded, so this is how a player who never opens the settings screen
 ends the pause. Keep it, or show the notices in your own launch UI and

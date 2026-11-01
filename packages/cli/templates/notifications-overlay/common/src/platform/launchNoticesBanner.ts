@@ -1,16 +1,25 @@
-import { starterNotificationLabelsFor, type StarterLaunchNotices } from './notificationSettings';
+import {
+  createStarterNoticeVisibility,
+  starterNotificationLabelsFor,
+  type StarterLaunchNotices,
+} from './notificationSettings';
 
 /**
  * The launch notices (`showStarterLaunchNotices`) as a small box at the top
  * of the page, over the game: a heading, each notice, and a close button.
  * It takes no focus and pauses nothing; only its own area takes taps, and the
- * game goes on under and around it. Returns the disposer, which closing the
- * box also runs.
+ * game goes on under and around it. `onSeen` runs once for each notice the
+ * player can see: on screen, not scrolled out of the box, while the page is
+ * visible (`createStarterNoticeVisibility`), so a notice is recorded only
+ * once it was seen. Returns the disposer, which closing the box also runs.
  */
 export function mountStarterLaunchNotices(
   notices: StarterLaunchNotices['notices'],
   locale: string,
-  parent: HTMLElement = document.body,
+  options: {
+    readonly onSeen: (index: number) => void;
+    readonly parent?: HTMLElement;
+  },
 ): () => void {
   const text = starterNotificationLabelsFor(locale);
   const box = document.createElement('div');
@@ -35,20 +44,56 @@ export function mountStarterLaunchNotices(
   const heading = document.createElement('strong');
   heading.textContent = text.notices;
   box.append(heading);
-  for (const notice of notices) {
+  const visibility = createStarterNoticeVisibility({
+    pageVisible: () => document.visibilityState === 'visible',
+    onSeen: options.onSeen,
+  });
+  const paragraphs = notices.map((notice, index) => {
     const paragraph = document.createElement('p');
     paragraph.style.whiteSpace = 'pre-line';
     paragraph.textContent = `${notice.title}\n${notice.body}`;
+    paragraph.dataset['noticeIndex'] = String(index);
     box.append(paragraph);
-  }
+    return paragraph;
+  });
   const close = document.createElement('button');
   close.type = 'button';
   close.textContent = text.close;
+  box.append(close);
+  // A notice counts as seen once most of it is on screen, the box's scroll
+  // clipping included. Without IntersectionObserver every notice counts as
+  // on screen, so it is seen while the page is visible.
+  const observer = typeof IntersectionObserver === 'function'
+    ? new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            const index = Number((entry.target as HTMLElement).dataset['noticeIndex']);
+            visibility.intersecting(index, entry.isIntersecting && entry.intersectionRatio >= 0.6);
+          }
+        },
+        { threshold: [0, 0.6, 1] },
+      )
+    : undefined;
+  const onVisibilityChange = (): void => visibility.pageVisibilityChanged();
+  document.addEventListener('visibilitychange', onVisibilityChange);
+  (options.parent ?? document.body).append(box);
+  if (observer === undefined) {
+    paragraphs.forEach((_paragraph, index) => visibility.intersecting(index, true));
+  } else {
+    for (const paragraph of paragraphs) {
+      observer.observe(paragraph);
+    }
+  }
+  let disposed = false;
   const dispose = (): void => {
+    if (disposed) {
+      return;
+    }
+    disposed = true;
+    observer?.disconnect();
+    document.removeEventListener('visibilitychange', onVisibilityChange);
     box.remove();
   };
   close.addEventListener('click', dispose);
-  box.append(close);
-  parent.append(box);
   return dispose;
 }
