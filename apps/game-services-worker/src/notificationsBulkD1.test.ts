@@ -237,7 +237,7 @@ try {
     partnerCalls.length = 0;
     const night = await send('event-night', audience('night'));
     assert.equal(
-      night.result.summary.delivered + night.result.summary.inFlight,
+      night.result.summary.delivered,
       recipientsPerCall,
       JSON.stringify(night.result.summary),
     );

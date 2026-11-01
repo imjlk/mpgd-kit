@@ -6,6 +6,7 @@ import { Miniflare } from 'miniflare';
 
 import {
   batchingDatabase,
+  d1BatchMaxIsolationQueries,
   d1BatchMaxStatements,
   d1BatchMaxWaitMs,
   runWithD1Batching,
@@ -98,6 +99,20 @@ try {
     assert.ok(stats.queries > 1 && stats.queries <= 9, String(stats.queries));
   }
 
+  // An error every caller hits (here, each insert breaks the CHECK) is isolated only up to the
+  // scope's cap; the callers still left then fail at once instead of spending the invocation.
+  {
+    const { value, stats } = await runWithD1Batching(async () =>
+      Promise.allSettled(
+        Array.from({ length: 400 }, (_, index) =>
+          db.prepare('INSERT INTO items (id, version, value) VALUES (?, 1, ?)').bind(`bad-${index}`, 'bad').run(),
+        ),
+      ),
+    );
+    assert.ok(value.every((settled) => settled.status === 'rejected'));
+    assert.ok(stats.queries <= 1 + d1BatchMaxIsolationQueries, String(stats.queries));
+  }
+
   // Any other failure (D1 unreachable) fails every caller once and is not run again: it may have been applied.
   {
     let batches = 0;
@@ -106,7 +121,11 @@ try {
       prepare: (sql: string) => bridged.db.prepare(sql),
       async batch() {
         batches += 1;
-        throw new Error('D1_ERROR: Network connection lost.');
+        throw new Error(
+          batches === 1
+            ? 'D1_ERROR: Network connection lost.'
+            : 'D1_ERROR: database or disk is full: SQLITE_FULL',
+        );
       },
     } as unknown as D1Database);
     const { value } = await runWithD1Batching(async () =>
@@ -120,6 +139,18 @@ try {
       ['rejected', 'rejected'],
     );
     assert.equal(batches, 1);
+    // A full database fails alike: not run again in halves either.
+    const full = await runWithD1Batching(async () =>
+      Promise.allSettled([
+        unreachable.prepare('SELECT 1').first(),
+        unreachable.prepare('SELECT 2').first(),
+      ]),
+    );
+    assert.deepEqual(
+      full.value.map((settled) => settled.status),
+      ['rejected', 'rejected'],
+    );
+    assert.equal(batches, 2);
   }
 
   // More statements than one batch carries go in several, in order.

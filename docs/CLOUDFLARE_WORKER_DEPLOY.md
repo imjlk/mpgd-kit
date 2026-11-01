@@ -623,7 +623,12 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
     Seoul time, FCM) run 8 at a time, and a recipient whose turn comes more
     than 30 seconds after its gate check is not sent with this call: its
     row is replayed later with fresh reads, by the scheduler or the same
-    call retried.
+    call retried. A call therefore sends about 8 × 30 s ÷ the provider's
+    latency one by one (all 2,500 at 60 ms a call, about 1,600 at 150 ms).
+  - **Failures.** A D1 failure that is not one statement's (D1
+    unreachable, a timeout) fails a whole batch of the call's recipients
+    at once; on a settle after the provider accepted, those recipients are
+    replayed as ambiguous sends after their lease.
   It runs inline, not through the queue.
 - **Scheduler.** Each cron run fires the due server reminders as sends
   through the policy gate, pushes the consent notices nobody recorded by

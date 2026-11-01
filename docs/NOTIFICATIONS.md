@@ -397,7 +397,9 @@ const result = await service.deliverBulk({
   (`MPGD_NOTIFICATIONS_BULK_RECIPIENTS`), so a whole Apps in Toss batch
   fits in one call: the Worker batches the call's D1 statements, about 100
   D1 queries for 2,500 players (see
-  [Cloudflare Worker deploy](CLOUDFLARE_WORKER_DEPLOY.md)). Another host
+  [Cloudflare Worker deploy](CLOUDFLARE_WORKER_DEPLOY.md)). Calls made one
+  by one (the hold window, FCM) send fewer per call, 8 at a time within
+  30 seconds; the rest are sent later. Another host
   whose store batches the calls made side by side can pass `concurrency`
   in the second argument of `deliverBulk`; provider calls made one by one
   stay 8 at a time.

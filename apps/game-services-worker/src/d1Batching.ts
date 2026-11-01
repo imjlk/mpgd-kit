@@ -33,14 +33,21 @@ import { AsyncLocalStorage } from 'node:async_hooks';
  *   applied. A batch that fails with a SQL error (a constraint, a type, a
  *   statement D1 refuses) is run again in halves until the failing caller's
  *   statement is alone, and only that caller gets the error; the others'
- *   statements run as they would have alone. Any other failure (the
- *   database unreachable, a timeout, a reset) fails every caller in the
- *   batch, as each of their own calls would have failed, and is never
- *   retried: the batch may have been applied.
+ *   statements run as they would have alone. The halving makes at most
+ *   `d1BatchMaxIsolationQueries` queries in a scope: an error that many
+ *   callers hit (a missing column) fails the callers still left in its
+ *   batch at once rather than spend the invocation's queries. Any other
+ *   failure (the database unreachable, full, busy, or read-only, a
+ *   timeout, a reset) fails every caller in the batch, as each of their
+ *   own calls would have failed, and is never retried: the batch may have
+ *   been applied. So one such failure reaches up to a whole batch of
+ *   callers, where it used to reach the calls in flight at that moment.
  */
 
 /** Statements one `db.batch()` carries at most. */
 export const d1BatchMaxStatements = 500;
+/** Queries one scope spends at most on running failed batches again in halves. */
+export const d1BatchMaxIsolationQueries = 64;
 /** How long the first queued statement waits for others at most, in milliseconds. */
 export const d1BatchMaxWaitMs = 500;
 
@@ -71,6 +78,7 @@ interface Scope {
   queries: number;
   statements: number;
   largestBatch: number;
+  isolationQueries: number;
 }
 
 const scopes = new AsyncLocalStorage<Scope>();
@@ -88,6 +96,7 @@ export async function runWithD1Batching<Value>(
     queries: 0,
     statements: 0,
     largestBatch: 0,
+    isolationQueries: 0,
   };
   const value = await scopes.run(scope, work);
   return {
@@ -280,8 +289,13 @@ function createBatcher(scope: Scope, db: D1Database): Batcher {
     try {
       results = await db.batch([...statements]);
     } catch (error) {
-      if (chunk.length > 1 && isStatementError(error)) {
+      if (
+        chunk.length > 1
+        && isStatementError(error)
+        && scope.isolationQueries + 2 <= d1BatchMaxIsolationQueries
+      ) {
         // The transaction rolled back: nothing ran. Halves isolate the failing caller.
+        scope.isolationQueries += 2;
         const middle = Math.ceil(chunk.length / 2);
         await runChunk(chunk.slice(0, middle));
         await runChunk(chunk.slice(middle));
@@ -341,6 +355,12 @@ function isStatementError(error: unknown): boolean {
   )) {
     return false;
   }
-  return /SQLITE_|constraint failed|D1_TYPE_ERROR|D1_COLUMN_NOTFOUND|no such (?:table|column)|syntax error|datatype mismatch|too many SQL variables|too big/iu
+  // A full, busy, locked, read-only, or failing database fails any batch alike.
+  if (/SQLITE_(?:FULL|BUSY|LOCKED|IOERR|READONLY|CORRUPT|NOMEM|INTERRUPT|PROTOCOL|CANTOPEN)/u.test(
+    message,
+  )) {
+    return false;
+  }
+  return /constraint failed|SQLITE_(?:CONSTRAINT|MISMATCH|TOOBIG|RANGE|ERROR)|D1_TYPE_ERROR|D1_COLUMN_NOTFOUND|no such (?:table|column)|syntax error|datatype mismatch|too many SQL variables|too big/iu
     .test(message);
 }

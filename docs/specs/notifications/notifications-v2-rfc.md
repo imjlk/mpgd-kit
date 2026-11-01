@@ -3220,7 +3220,8 @@ announcements and event pushes.
   by one otherwise. With account-deletion tombstones bound, which add a
   query to each new send and delivery record, the defaults are 45 and 50,
   below the Apps in Toss minimum. Raising either number needs the ledger's
-  D1 queries batched (`db.batch`), a follow-up (done in DB1, below). Devvit's backend bridge serves no bulk
+  D1 queries batched (`db.batch`), a follow-up. DB1 did that and raised
+  these defaults to 2,500 attempts and 3,000 keys (see What DB1 landed). Devvit's backend bridge serves no bulk
   method.
 - **Left to follow-ups.**
   - Batching the ledger's D1 queries (`db.batch`), so one Worker call can
@@ -3269,10 +3270,20 @@ reaches the Apps in Toss batch sizes on D1.
     statement rolls back the whole batch. A SQL error (a constraint, a type,
     a statement D1 refuses) runs the batch again in halves until the
     failing caller's statement is alone: only that caller gets the error,
-    and every other statement runs once, as it would have alone. Any other
-    failure (D1 unreachable, a timeout, a reset) fails every caller in the
-    batch, as their own calls would have failed, and is never run again,
-    since it may have been applied.
+    and every other statement runs once, as it would have alone. The halving
+    spends at most 64 queries a call: an error many callers hit (a missing
+    column) then fails the callers left in its batch at once. Any other
+    failure (D1 unreachable, full, busy, or read-only, a timeout, a reset)
+    fails every caller in the batch, as their own calls would have failed,
+    and is never run again, since it may have been applied.
+  - **Failure domain.** Such a failure now reaches a whole batch of
+    callers (up to 500 statements) where it used to reach the calls in
+    flight at that moment. On a settle after an accepted provider call,
+    each recipient of the batch then stays in flight under its claim and
+    is replayed as an ambiguous send after its lease, as one recipient's
+    failed settle already was: a provider without an idempotency key may
+    show those recipients the message twice. The kit accepts this for the
+    query budget; a D1 write that fails mid-flight is rare.
 - **`NotificationBulkDeliverOptions.concurrency`** (`@mpgd/game-services`,
   8 by default). The recipients of a batch whose ledger and gate work runs
   at once. The Worker on D1 sets it to the call's lookups, so each step of
@@ -3298,10 +3309,19 @@ reaches the Apps in Toss batch sizes on D1.
   - **Two deleted players and ten without a Toss user** among the 2,500:
     97 queries, each refused recipient with its own answer.
   - **Inside the hold window,** 2,500 single `send-message` calls: 96
-    queries.
+    queries, with a partner API that answers at once.
+  - **Throughput one by one.** Single calls run 8 at a time, and a
+    recipient whose turn comes more than 30 seconds after its gate check
+    is left for later (`not-sent`). So inside the hold window a call sends
+    about 8 × 30 s ÷ the call's latency: all 2,500 at 60 ms a call, about
+    1,600 at 150 ms (measured with a delayed fake). The rest stay in
+    flight, unclaimed, and the scheduler or the same call retried sends
+    them.
   - **Budget.** A batch of n recipients makes about 19 batched steps of
     ⌈n / 500⌉ queries each (about 100 for 2,500). Single provider calls add
-    at most one query per 500 ms while they run, and the 30-second gate
+    about one query per 500 ms while they run (an estimate, measured at
+    106 to 117 queries with 5 to 60 ms calls, not a bound the code
+    enforces), and the 30-second gate
     freshness ends the calls a batch starts within about 30 seconds plus
     the provider timeout (at most 60 seconds on Apps in Toss): at most 180
     more. So the Worker starts a batch of a bulk call only while 300 of its
