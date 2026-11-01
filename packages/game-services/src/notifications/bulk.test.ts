@@ -1033,6 +1033,40 @@ const statuses = (result: NotificationBulkDeliveryResult) =>
   });
   assert.deepEqual(statuses(pacedResult), [['p1', 'delivered', undefined]]);
   assert.equal(sent.length, 2, 'the third device waits for the pace');
+
+  // A spent budget also stops the next round of a player's devices: the
+  // devices left stay queued for the scheduler, and the first is answered.
+  let elapsed = 0;
+  const timed = createNotificationService({
+    store,
+    registry: createNotificationProviderRegistry([
+      { entry: fcmLike, delivery: provider, targets: ['device-target'] },
+    ]),
+    catalog: { defaultLocale: 'ko', topicsFor: () => [topic] },
+    now: () => '2026-11-01T07:00:00Z',
+    elapsedMs: () => elapsed,
+  });
+  sent.length = 0;
+  const original = provider.send.bind(provider);
+  provider.send = async (request) => {
+    elapsed += 1_000;
+    return original(request);
+  };
+  const timedResult = await timed.deliverBulk(
+    { ...bulkInput('event-18', ['p1']), provider: 'devices' },
+    { budgetMs: 500 },
+  );
+  assert.deepEqual(statuses(timedResult), [['p1', 'delivered', undefined]]);
+  assert.deepEqual(sent, ['event-18:p1:i1']);
+  const queued = await store.getSend('event-18:p1');
+  assert.deepEqual(
+    queued?.send.rows.map((row) => [row.installationId, row.state.status]),
+    [
+      ['i1', 'delivered'],
+      ['i2', 'in-flight'],
+      ['i3', 'in-flight'],
+    ],
+  );
 }
 
 // Malformed bulk sends fail as a whole; the registry checks each bulk capability once.

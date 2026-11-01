@@ -59,7 +59,12 @@ export interface NotificationBulkDeliverInput {
 
 /** What the host that serves `deliverBulk` bounds a call by. */
 export interface NotificationBulkDeliverOptions {
-  /** Wall time after which no further batch starts; 20 seconds by default. */
+  /**
+   * Wall time after which no further batch starts, nor a further round of a
+   * player's device rows (a player's second device and on, sent one round
+   * after the other); 20 seconds by default. A device row left is queued,
+   * and the scheduler sends it.
+   */
   readonly budgetMs?: number;
   /**
    * Deliveries one call attempts at most (sends it makes or replays, one

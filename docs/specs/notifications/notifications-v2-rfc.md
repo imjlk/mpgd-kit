@@ -3307,6 +3307,13 @@ reaches the Apps in Toss batch sizes on D1.
     more. So the Worker starts a batch of a bulk call only while 300 of its
     900 queries are left (`workerNotificationBulkBatchQueryReserve`,
     `workerNotificationBulkQueryBudget`), under D1's 1,000.
+  - **Device rounds.** A player's devices (FCM) are sent one round after
+    the other, and a round's statements batch only across players, so a
+    player with many devices makes about 10 queries a round. The call's
+    budget (`budgetMs`, and on the Worker the query reserve) now also stops
+    a further round: the devices left stay queued, unclaimed, and the
+    scheduler sends them, as a device over the attempt budget already
+    did.
   - **Other subrequests.** A call makes one identity lookup per recipient
     read and one per recipient attempted (5,000 for 2,500 recipients; at
     most 5,500), and inside the hold window one partner call per recipient:

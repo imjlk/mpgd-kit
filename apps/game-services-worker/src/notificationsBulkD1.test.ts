@@ -4,6 +4,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import { Miniflare } from 'miniflare';
 
 import type { GameServicesWorkerEnv } from './handler.js';
+import { createD1NotificationStore } from './notificationsD1.js';
 import { bridgedD1Database, d1BridgeScript } from './testing/d1Bridge.js';
 import {
   asWorkerNotificationRpcResult,
@@ -246,6 +247,104 @@ try {
       night.measured.queries <= queryCeiling,
       `${night.measured.queries} D1 queries for ${recipientsPerCall} single sends`,
     );
+  }
+  // One FCM player with many devices: the devices go one round after the
+  // other and a round batches only across players, so the call stops starting
+  // rounds while 300 of its 900 queries are left and the rest stay queued.
+  {
+    const keys = await crypto.subtle.generateKey(
+      {
+        name: 'RSASSA-PKCS1-v1_5',
+        modulusLength: 2048,
+        publicExponent: new Uint8Array([1, 0, 1]),
+        hash: 'SHA-256',
+      },
+      true,
+      ['sign', 'verify'],
+    );
+    const pkcs8 = new Uint8Array(await crypto.subtle.exportKey('pkcs8', keys.privateKey));
+    const label = ['PRIVATE', 'KEY'].join(' ');
+    const fcmSends: string[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url === 'https://oauth2.googleapis.com/token') {
+        return Response.json({ access_token: 'bulk-test-token', expires_in: 3600 });
+      }
+      if (url === 'https://fcm.googleapis.com/v1/projects/mpgd-bulk-test/messages:send') {
+        fcmSends.push(String(init?.body));
+        return Response.json({ name: `projects/mpgd-bulk-test/messages/${fcmSends.length}` });
+      }
+      return realFetch(input, init);
+    }) as typeof fetch;
+    try {
+      const devices = 150;
+      const at = new Date().toISOString();
+      const store = createD1NotificationStore(counted.db);
+      for (let index = 0; index < devices; index += 1) {
+        await store.putEndpoint({
+          provider: 'fcm',
+          installationId: `install-${String(index).padStart(3, '0')}`,
+          player: 'p-devices-1',
+          address: { kind: 'fcm-token', value: `token-${index}` },
+          permission: 'granted',
+          target: 'android',
+          sessionId: `session-${index}`,
+          lastRegisteredAt: at,
+        });
+      }
+      const fcmEnv = {
+        MPGD_STORE: 'd1',
+        DB: counted.db,
+        GAME_SERVICES_ACCOUNT_DELETION_TOMBSTONE_KEY: 'k'.repeat(48),
+        FCM_SERVICE_ACCOUNT: JSON.stringify({
+          type: 'service_account',
+          project_id: 'mpgd-bulk-test',
+          private_key_id: 'bulk-test-key',
+          private_key: `-----BEGIN ${label}-----\n${btoa(String.fromCharCode(...pkcs8))}\n-----END ${label}-----\n`,
+          client_email: 'sender@mpgd-bulk-test.iam.gserviceaccount.com',
+        }),
+        MPGD_NOTIFICATIONS_CATALOG: {
+          version: '2026-11-01',
+          defaultLocale: 'ko',
+          topics: [
+            {
+              id: 'energy-full',
+              purpose: 'service',
+              channels: ['remote'],
+              route: '/?entry=energy',
+              copy: { ko: { title: '에너지', body: '에너지가 가득 찼어요.' } },
+              targets: { android: { channelId: 'energy' } },
+            },
+          ],
+        },
+      } satisfies GameServicesWorkerEnv;
+      counted.reset();
+      const answer = await asWorkerNotificationRpcResult(() =>
+        deliverWorkerNotificationBulk(fcmEnv, {
+          idempotencyKey: 'event-devices',
+          provider: 'fcm',
+          topic: 'energy-full',
+          recipients: [{ player: 'p-devices-1' }],
+        }),
+      );
+      assert.ok(answer.ok, JSON.stringify(answer));
+      const measured = counted.snapshot();
+      console.info('event-devices:', measured, answer.value.summary, { sent: fcmSends.length });
+      assert.equal(answer.value.summary.delivered, 1);
+      assert.ok(measured.queries <= 900, `${measured.queries} D1 queries for ${devices} devices`);
+      assert.ok(
+        fcmSends.length > 1 && fcmSends.length < devices,
+        `${fcmSends.length} devices sent`,
+      );
+      const queued = await store.getSend('event-devices:p-devices-1');
+      assert.equal(
+        queued?.send.rows.filter((row) => row.state.status === 'in-flight').length,
+        devices - fcmSends.length,
+      );
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   }
   console.info('Worker bulk D1 query budget passed.');
 } finally {

@@ -3287,6 +3287,9 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     copies: NotificationCopyCache,
     // Rows whose ledger and gate work runs at once (`NotificationBulkDeliverOptions.concurrency`).
     concurrency: number = bulkConcurrency,
+    // Whether the call's budget is spent: no further round of device rows
+    // starts, and the rows left stay queued for the scheduler, unclaimed.
+    spent: () => boolean = () => false,
   ): Promise<BulkAnswer[]> => {
     const limiter = createNotificationLimiter(concurrency);
     // Above the default, single provider calls take a slot of their own, so
@@ -3303,6 +3306,9 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     }));
     const rounds = Math.max(0, ...prepared.map((entry) => entry.rows.length));
     for (let round = 0; round < rounds; round += 1) {
+      if (round > 0 && spent()) {
+        break;
+      }
       const members = prepared
         .map((entry, index) => ({ entry, index, row: entry.rows[round] }))
         .filter((member): member is typeof member & { readonly row: NotificationSendRow } => member.row !== undefined);
@@ -3643,6 +3649,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         calls,
         copies,
         concurrency,
+        () => elapsed() - startedAt >= budgetMs,
       );
       ready.forEach((entry, position) => {
         answers[entry.index] = ran[position] ?? { error: new Error('The batch answered no result.') };

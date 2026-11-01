@@ -611,7 +611,9 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
     in Toss recipients took 96 D1 queries in one `send-bulk-message` call,
     5 for the same call retried, and 96 inside the hold window, one
     `send-message` call each (before this, 45 recipients took 856). A batch
-    of a call starts only while 300 of the call's 900 queries are left.
+    of a call, or a round of its players' further FCM devices, starts only
+    while 300 of the call's 900 queries are left; devices left over stay
+    queued for the scheduler.
   - **Other subrequests.** One identity lookup per recipient read and per
     recipient attempted (5,000 for 2,500), plus one partner call per
     recipient inside the hold window: about 8,100 subrequests at most,

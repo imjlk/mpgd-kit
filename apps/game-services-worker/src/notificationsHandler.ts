@@ -176,8 +176,8 @@ export interface GameServicesNotificationsEnv {
    * recipients read. On D1 the default is also the ceiling: a larger value
    * is lowered to it. The call's D1 statements are batched
    * (`runWithD1Batching`): a batch of 2,500 recipients makes about 100 D1
-   * queries, and a new batch starts only while 300 of the call's 900 are
-   * left, under D1's 1,000 queries per Worker invocation (Workers Paid,
+   * queries, and a new batch (or round of a player's further devices)
+   * starts only while 300 of the call's 900 are left, under D1's 1,000 queries per Worker invocation (Workers Paid,
    * https://developers.cloudflare.com/d1/platform/limits/, checked
    * 2026-11-01). A value that is not a positive whole number is ignored.
    */
@@ -925,7 +925,10 @@ const workerNotificationBulkLookupsPerAttempt = 1.2;
  * invocation on Workers Paid; the rest is margin.
  */
 export const workerNotificationBulkQueryBudget = 900;
-/** D1 queries one batch of a bulk call may make at most; a batch starts only while this much budget is left. */
+/**
+ * D1 queries one batch of a bulk call, or one round of its players' device
+ * rows, may make at most; one starts only while this much budget is left.
+ */
 export const workerNotificationBulkBatchQueryReserve = 300;
 
 /**
@@ -933,8 +936,9 @@ export const workerNotificationBulkBatchQueryReserve = 300;
  * binding (BK1), like `deliverWorkerNotification`: never a fetch route, so
  * no client session can reach it. At most `MPGD_NOTIFICATIONS_BULK_RECIPIENTS`
  * deliveries are attempted per call. On D1 the call's statements are
- * batched (`runWithD1Batching`), and a new batch of the call starts only
- * while `workerNotificationBulkBatchQueryReserve` of the call's
+ * batched (`runWithD1Batching`), and a new batch of the call, or a new
+ * round of its players' further devices, starts only while
+ * `workerNotificationBulkBatchQueryReserve` of the call's
  * `workerNotificationBulkQueryBudget` is left.
  */
 export async function deliverWorkerNotificationBulk(
@@ -1224,7 +1228,7 @@ function countingMtls(
 }
 
 function notificationCronElapsed(): number {
-  // A bulk send on D1 starts no batch that its query budget could not finish.
+  // A bulk send on D1 starts no batch, nor device round, that its query budget could not finish.
   const bulkQueries = d1BatchingQueries();
   if (
     bulkQueries !== undefined
