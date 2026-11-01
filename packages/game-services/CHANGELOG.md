@@ -1,5 +1,21 @@
 # @mpgd/game-services
 
+## 0.36.0 — 2026-11-02
+
+### Added
+
+- [14da7b8a](https://github.com/imjlk/mpgd-kit/commit/14da7b8a65db1420916aacabe9413a5aa2329ec4) `deliverBulk` takes a `concurrency` option (8 by default): the recipients of a batch whose ledger and gate work runs at once, for a host whose store batches the calls made side by side (the game-services Worker on D1). Single provider calls stay at most 8 at a time, and each runs the gate again as it starts: a recipient whose gate inputs grew older than 30 seconds while it waited answers `not-sent` and is replayed later. The call's time budget (`budgetMs`) now also stops a further round of a player's device rows: the devices left stay queued, and the scheduler sends them. — Thanks @imjlk!
+
+### Changed
+
+- [54629c6e](https://github.com/imjlk/mpgd-kit/commit/54629c6eb9c700f9b565018a2500ae2df262fe90) The notifications service follows the deployment's consent refresh policy (RFC "Consent refresh"). Under the Korean rules advertising to a player whose advertising re-confirmation is past its `dueBy` unrecorded now answers `suppressed: reconfirmation-overdue` until the game records the notice (`recordNoticeShown`) or the player consents anew, and an overdue night re-confirmation holds night-time advertising only; other sends are unaffected. A deployment outside `kr` that sets `consentRefresh` gets its re-confirmations listed, recorded, pushed from `pushLeadDays` (never without it), and paused by the same rules, without the result notices only the Korean rules require. An advertising check reads the player's notices given only when a re-confirmation could be overdue, once per invocation. Outside `kr`, a refresh's `notices.copy` needs only the `reconfirmation.*` texts.
+  
+  A registration starts the player's notice check when the policy pushes re-confirmations and the player holds a consent it re-confirms but has no check, so a refresh added after players consented still schedules their push once they open the game again. The scheduler waits for the next re-confirmation (`notificationUpcomingReconfirmations`) instead of listing far ahead, and a send reads the notices given only for a recipient that resolved. A notice check remembers the policy it settled under (`NotificationNoticeCheck.policy`), and a registration makes one settled under another policy due again, so a changed interval reschedules its push. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/analytics@0.5.11, @mpgd/catalog@0.15.3, @mpgd/platform@0.37.0
+
 ## 0.35.0 — 2026-11-01
 
 ### Added

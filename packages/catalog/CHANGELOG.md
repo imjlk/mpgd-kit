@@ -1,5 +1,17 @@
 # @mpgd/catalog
 
+## 0.15.3 — 2026-11-02
+
+### Changed
+
+- [54629c6e](https://github.com/imjlk/mpgd-kit/commit/54629c6eb9c700f9b565018a2500ae2df262fe90) The notification topic catalog validator checks the deployment's `consentRefresh` (RFC "Consent refresh"): under `kr` it reports one, since the Korean rules fix the refresh; elsewhere it reports a push lead longer than the notice lead or a notice lead as long as the interval, and requires the `notices` block, its topic mapped on every target that maps an advertising topic. With such a refresh, `notices.copy` needs only the `reconfirmation.*` texts of the kinds it refreshes; under `kr`, and without a refresh, every variant but a refusal as before.
+  
+  A `consentRefresh` outside `kr` requires the `notices` block with or without an advertising topic. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/platform@0.37.0
+
 ## 0.15.2 — 2026-11-01
 
 ### Patch changes

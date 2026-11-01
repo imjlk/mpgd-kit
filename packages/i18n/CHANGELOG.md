@@ -1,5 +1,11 @@
 # @mpgd/i18n
 
+## 0.6.32 — 2026-11-02
+
+### Patch changes
+
+- Updated dependencies: @mpgd/platform@0.37.0
+
 ## 0.6.31 — 2026-11-01
 
 ### Patch changes
