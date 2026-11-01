@@ -136,8 +136,11 @@ pnpm exec mpgd store presence apply --plan app-store-presence.json --approve
 fields that change (old and new length, and the texts themselves only while
 both are at most 80 characters), and per image slot the uploads (`+`, by
 path and SHA-256) and removals (`-`, by the store's image ID and SHA-256). Languages only in the store are listed as
-`remote` and never deleted. `manual` lines are what the reviewer does in the
-console.
+`remote` and never deleted. `warning` lines (Google Play) are where the
+store page would miss the store's publishing requirements or
+recommendations after the apply; they never block it. `manual` lines are what the reviewer does in the
+console. `plan --json` prints the plan file (the same document `--out`
+saves, warnings included) as one JSON document on stdout.
 
 `apply`:
 
@@ -192,6 +195,36 @@ during an apply: the other edit fails and has to be run again. The Edits API als
 least one uploaded bundle: upload the first build (`mpgd deploy run`, which
 commits a draft release for a never-published app) before the first apply.
 
+### Publishing warnings
+
+`plan` checks Play's default language listing (Play's `defaultLanguage`,
+whether or not the file names it) as it will be after the apply: Play's
+images, plus the file's uploads and removals for each slot it names. It
+prints a `warning` line, and adds it to the plan's `warnings`, when that
+listing has:
+
+- no icon or no feature graphic: Play needs both to publish the store
+  listing;
+- fewer than 2 phone screenshots: Play needs "a minimum of two screenshots
+  across different device types" to publish the store listing, and the sync
+  asks for 2 in the phone set;
+- no 7-inch and no 10-inch tablet screenshots: Play does not require them to
+  publish, but recommends at least 4 (1,080 to 7,680 px, 16:9 or 9:16) to
+  show the app on tablets. Play Console Help states no effect of a missing
+  set on tablet visibility, and the large screen badge depends on the
+  [adaptive app quality](https://developer.android.com/docs/quality-guidelines/adaptive-app-quality)
+  tiers, not on screenshots.
+
+Other languages are not checked: a translation without its own graphics
+shows the default language's
+([Translate and localize your app](https://support.google.com/googleplay/android-developer/answer/9844778)).
+Warnings never block `apply`, and they are not part of the plan's stale
+check: `apply` does not compute them. When Play reports no default language,
+or reading its images for the check fails, the plan notes that nothing was
+checked (with the reason) and is still made. The App Store side is checked by `mpgd store release plan`, which
+blocks a submission without the iPhone (and, for a universal app, the
+13-inch iPad) screenshots ([App Store releases](./APP_STORE_RELEASES.md)).
+
 What stays manual on Play (printed by `plan`):
 
 - The privacy policy URL (Play Console > Policy and programs > App content):
@@ -215,7 +248,11 @@ What stays manual on Play (printed by `plan`):
   (title 30, short description 80, full description 4,000 characters) and
   [Add preview assets](https://support.google.com/googleplay/android-developer/answer/9866151)
   (icon, feature graphic and screenshot rules, at most 8 screenshots per
-  device type)
+  device type, the icon, the feature graphic and at least 2 screenshots
+  across device types needed to publish, at least 4 tablet screenshots
+  recommended) and
+  [Translate and localize your app](https://support.google.com/googleplay/android-developer/answer/9844778)
+  (translations without their own graphics show the default language's)
 
 ## App Store Connect
 
@@ -340,6 +377,11 @@ Mock-tested only. Check on the first run against a real Play app:
 - [ ] The file size limits the kit enforces (feature graphic 15 MB,
       screenshots 8 MB) match what `edits.images.upload` accepts; the help
       page states only the icon's 1 MB.
+- [ ] Publishing with fewer than 2 phone screenshots: Play Console Help
+      asks for "a minimum of two screenshots across different device types";
+      the plan warns when the phone set has fewer than 2, even when tablet
+      screenshots make up the count. Check whether Play Console refuses to
+      publish such a listing.
 - [ ] Tablet screenshots: whether Play requires the large-screen rules
       (1,080 to 7,680 px, 16:9 or 9:16, at least 4) for `sevenInchScreenshots`
       and `tenInchScreenshots`; the kit checks only the general screenshot

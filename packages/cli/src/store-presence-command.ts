@@ -12,12 +12,14 @@ import {
 } from './store-presence.js';
 import {
   applyAppStorePresence,
+  formatAppStorePresencePlan,
   planAppStorePresence,
   type AppStorePresenceApplyResult,
   type AppStorePresencePlan,
 } from './store-presence-app-store.js';
 import {
   applyPlayPresence,
+  formatPlayPresencePlan,
   planPlayPresence,
   type PlayPresenceApplyResult,
   type PlayPresencePlan,
@@ -123,6 +125,20 @@ export async function planStorePresence(
     presenceFile: source.file,
     plan,
   };
+}
+
+/**
+ * What `store presence plan` prints: the plan for the terminal, or with
+ * `--json` the plan file itself (the same document `--out` saves, warnings
+ * included) as one JSON document.
+ */
+export function renderStorePresencePlan(result: StorePresencePlanFile, json: boolean): string {
+  if (json) {
+    return JSON.stringify(result, null, 2);
+  }
+  return result.plan.store === 'google-play'
+    ? formatPlayPresencePlan(result.plan)
+    : formatAppStorePresencePlan(result.plan);
 }
 
 export function saveStorePresencePlan(file: string, plan: StorePresencePlanFile): string {
