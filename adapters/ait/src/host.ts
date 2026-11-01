@@ -1,4 +1,5 @@
 import {
+  Analytics,
   Environment,
   getTossShareLink,
   getUserKeyForGame,
@@ -40,6 +41,11 @@ import {
   toNotificationSubscriptionStatus,
 } from '@mpgd/platform/notifications';
 import { createAitAdProvider } from './ad-provider.js';
+import {
+  createAitAnalyticsHost,
+  minimumAitAnalyticsLogTossAppVersion,
+  type AitAnalyticsSdk,
+} from './analytics.js';
 
 import type { AitAdPlacementType } from './ad-config.js';
 import { createAitCommerceV2BridgeHandler } from './commerce-bridge.js';
@@ -195,6 +201,8 @@ export interface AitHostDependencies {
     typeof submitGameCenterLeaderBoardScore
   >;
   readonly iap: AitIapDependencies;
+  /** `Analytics`: platform analytics logs (`analytics.*` bridge methods). */
+  readonly analytics: AitAnalyticsSdk;
 }
 
 export interface AitPromotionRewardConfig {
@@ -327,6 +335,7 @@ const defaultDependencies: AitHostDependencies = {
   openGameCenterLeaderboard,
   submitGameCenterLeaderBoardScore,
   iap: IAP,
+  analytics: Analytics,
 };
 
 export function installAitHostBridge(options: InstallAitHostBridgeOptions = {}): GamePlatformBridge {
@@ -424,6 +433,16 @@ export function createAitHostBridge(
       : { onPendingOrdersChanged: options.onPendingOrdersChanged },
   );
   const commerceV2 = createAitCommerceV2BridgeHandler(commerceProvider);
+  const analytics = createAitAnalyticsHost({
+    sdk: dependencies.analytics,
+    isLogSupported: () =>
+      isCapabilitySupported(() =>
+        dependencies.isMinVersionSupported({
+          android: minimumAitAnalyticsLogTossAppVersion,
+          ios: minimumAitAnalyticsLogTossAppVersion,
+        }),
+      ),
+  });
   const promotionClaims = createPromotionClaimMemory();
   const observePromotionGrant: AitPromotionGrantObserver = async (observation) => {
     if (observation.status === 'granted' && observation.receiptKey) {
@@ -866,6 +885,12 @@ export function createAitHostBridge(
         await dependencies.storage.setItem(key, serialized);
         return ok(request, {});
       }
+
+      case 'analytics.getStatus':
+        return ok(request, analytics.getStatus());
+
+      case 'analytics.log':
+        return ok(request, { sent: analytics.log(request.payload) });
 
       default:
         return createBridgeError(

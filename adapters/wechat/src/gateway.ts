@@ -3,6 +3,7 @@ import {
   PlatformOperationError,
   type PlatformGateway,
 } from '@mpgd/platform';
+import { createUnsupportedPlatformAnalyticsSink } from '@mpgd/platform/analytics';
 
 import { resolveWechatMiniGameApi, type WechatMiniGameApi } from './api.js';
 import { createWechatLifecycleAdapter } from './lifecycle.js';
@@ -24,6 +25,7 @@ export function createWechatPlatformGateway(
   // unsupported commerce block from createUnsupportedCapabilities().
   return {
     target: 'wechat',
+    analytics: createUnsupportedPlatformAnalyticsSink(),
     async getCapabilities() {
       return {
         ...createUnsupportedCapabilities(),

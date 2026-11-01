@@ -6950,6 +6950,12 @@ function createDependencies(
     openGameCenterLeaderboard: withSupportProbe(openGameCenterLeaderboard),
     submitGameCenterLeaderBoardScore: withSupportProbe(submitGameCenterLeaderBoardScore),
     iap: unsupportedIap,
+    analytics: {
+      screen: async () => {},
+      click: async () => {},
+      impression: async () => {},
+      log: async () => {},
+    },
     ...otherOverrides,
   } as AitHostDependencies;
 }

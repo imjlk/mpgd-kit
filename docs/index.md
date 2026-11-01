@@ -47,6 +47,8 @@ To ship a game to Google Play and the App Store, follow the
 [store privacy disclosures](STORE_PRIVACY_DISCLOSURES.md) map kit features to
 the Data safety and App Privacy answers. [Crash reporting](CRASH_REPORTING.md)
 adds Firebase Crashlytics to the Capacitor shells.
+[Platform analytics](PLATFORM_ANALYTICS.md) forwards a game's bounded logs to
+host analytics such as the Apps in Toss console.
 [App Store releases](APP_STORE_RELEASES.md) takes an iOS version from
 TestFlight to App Review and release, as [Google Play releases](GOOGLE_PLAY_RELEASES.md)
 does for Play tracks.

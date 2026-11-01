@@ -178,6 +178,11 @@ export const javascriptInventory = [
     reason: 'Plain Node consumer verifies shipped JavaScript without TypeScript loaders or workspace source aliases.',
   },
   {
+    file: 'packages/platform/test/analytics-dist-import.mjs',
+    disposition: 'runtime-exception',
+    reason: 'Plain Node consumer verifies shipped JavaScript without TypeScript loaders or workspace source aliases.',
+  },
+  {
     file: 'packages/platform/test/capability-conformance-dist-import.mjs',
     disposition: 'runtime-exception',
     reason: 'Plain Node consumer verifies shipped JavaScript without TypeScript loaders or workspace source aliases.',
