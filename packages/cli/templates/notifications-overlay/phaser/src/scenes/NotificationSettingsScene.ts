@@ -89,9 +89,11 @@ export function showNotificationLaunchNotices(game: Phaser.Game, context: Starte
   void showStarterLaunchNotices(context.platform, {
     locale: context.locale,
     show: (notices) => {
-      if (!destroyed) {
-        dispose = mountStarterLaunchNotices(notices, context.locale);
+      if (destroyed) {
+        return false;
       }
+      dispose = mountStarterLaunchNotices(notices, context.locale);
+      return true;
     },
   });
 }

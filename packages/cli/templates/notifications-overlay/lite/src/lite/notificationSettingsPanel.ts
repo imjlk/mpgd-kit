@@ -203,9 +203,11 @@ export function mountNotificationSettingsPanel(mount: HTMLElement, context: Star
   void showStarterLaunchNotices(context.platform, {
     locale: context.locale,
     show: (notices) => {
-      if (!disposed) {
-        disposeLaunchNotices = mountStarterLaunchNotices(notices, context.locale);
+      if (disposed) {
+        return false;
       }
+      disposeLaunchNotices = mountStarterLaunchNotices(notices, context.locale);
+      return true;
     },
   });
   return () => {

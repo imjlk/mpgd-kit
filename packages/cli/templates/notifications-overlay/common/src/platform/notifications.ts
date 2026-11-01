@@ -188,7 +188,8 @@ const launchNoticesRead = new WeakSet<TargetConfiguredGateway>();
  * Shows the consent notices the server lists, once per launch: once the
  * runtime has started (the game needs its server session first), it reads
  * the listed notices and, when there is one, calls `show` with them in the
- * player's language, overdue ones first, then records them as given. Under
+ * player's language, overdue ones first, then records them as given, only
+ * when `show` answers that they are on screen. Under
  * the Korean rules advertising pauses while a re-confirmation is overdue,
  * until the game records it, so a player who never opens the settings screen
  * still ends the pause at the next launch. It runs in the background: it
@@ -199,7 +200,8 @@ export function showStarterLaunchNotices(
   platform: TargetConfiguredGateway,
   input: {
     readonly locale: string;
-    readonly show: (notices: StarterLaunchNotices['notices']) => void;
+    /** Shows the notices; answers whether they are on screen. Only notices shown are recorded. */
+    readonly show: (notices: StarterLaunchNotices['notices']) => boolean;
   },
 ): Promise<void> {
   if (launchNoticesRead.has(platform)) {
@@ -224,7 +226,12 @@ export function showStarterLaunchNotices(
     if (launch === undefined) {
       return;
     }
-    input.show(launch.notices);
+    if (!input.show(launch.notices)) {
+      // Not on screen (the game went away while they were read): not given,
+      // so a later mount in this process may show them.
+      launchNoticesRead.delete(platform);
+      return;
+    }
     await launch.record();
   })().catch((error: unknown) => {
     console.warn('[notifications] the launch notices could not be shown.', error);
