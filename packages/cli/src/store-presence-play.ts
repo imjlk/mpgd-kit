@@ -98,6 +98,13 @@ export interface PlayPresencePlan {
   readonly imageRemovals: number;
   readonly changed: boolean;
   readonly notes: readonly string[];
+  /**
+   * Where Play's default language listing would fall short of Play's
+   * publishing requirements or recommendations once apply has run (Play's
+   * images plus the file's changes). Never blocks apply, and not part of
+   * the stale check.
+   */
+  readonly warnings: readonly string[];
   /** What the sync cannot do; the reviewer does it in Play Console. */
   readonly manual: readonly string[];
   /** Digest of everything read from Play. */
@@ -243,6 +250,16 @@ async function planInEdit(
     );
   }
   const plannedDetails = planDetails(details, play, notes);
+  const warnings = defaultLanguage === undefined
+    ? []
+    : await publishingWarnings({
+      input,
+      editId,
+      port,
+      language: defaultLanguage,
+      remote: remoteByLanguage.get(defaultLanguage.toLowerCase()),
+      planned: planned.find((language) => language.language.toLowerCase() === defaultLanguage.toLowerCase()),
+    });
   const manual = manualSteps(input.presence);
   const imageRemovals = planned.reduce(
     (sum, language) => sum + language.images.reduce(
@@ -280,6 +297,7 @@ async function planInEdit(
     imageRemovals,
     changed,
     notes,
+    warnings,
     manual,
     remoteSha256,
     desiredSha256,
@@ -445,6 +463,109 @@ function planDetails(
     );
   }
   return { changes, write };
+}
+
+/**
+ * Google Play's store listing graphics rules, from Play Console Help, "Add
+ * preview assets to showcase your app"
+ * (https://support.google.com/googleplay/android-developer/answer/9866151),
+ * checked 2026-11-01:
+ *
+ * - "You must provide an app icon to publish your store listing" and "You
+ *   must provide a feature graphic to publish your store listing."
+ * - "You must provide a minimum of two screenshots across different device
+ *   types to publish your store listing", and "up to 8 screenshots for each
+ *   supported device type". The phone set is the one phones show, so the
+ *   sync asks for two there.
+ * - Tablets (7-inch and 10-inch) and Chromebooks: "you can add a minimum of
+ *   4 screenshots", 1,080 to 7,680 px, 16:9 or 9:16. That is a
+ *   recommendation, not a publishing requirement; the help page states no
+ *   effect of a missing tablet set on tablet visibility, and the large
+ *   screen badge depends on the adaptive app quality tiers
+ *   (https://developer.android.com/docs/quality-guidelines/adaptive-app-quality),
+ *   not on screenshots.
+ *
+ * Translations need no graphics of their own: "If you add text translations
+ * without localized graphic assets, your app's graphic assets show from the
+ * default language"
+ * (https://support.google.com/googleplay/android-developer/answer/9844778).
+ * So only the default language is checked.
+ */
+export const googlePlayPublishingGraphics = Object.freeze({
+  phoneScreenshots: 2,
+  largeScreenScreenshots: 4,
+});
+
+const publishingSlots = [
+  'icon',
+  'featureGraphic',
+  'phoneScreenshots',
+  'sevenInchScreenshots',
+  'tenInchScreenshots',
+] as const satisfies readonly PlayImageType[];
+
+/**
+ * Warnings for Play's default language listing, counted after apply: the
+ * plan's result for each slot the file names, Play's images for the others.
+ */
+async function publishingWarnings(input: {
+  readonly input: PlayPresencePlanInput;
+  readonly editId: string;
+  readonly port: PlayStoreListingPort;
+  /** Play's default language. */
+  readonly language: string;
+  readonly remote: PlayListing | undefined;
+  readonly planned: PlannedPlayLanguage | undefined;
+}): Promise<string[]> {
+  const { packageName, signal } = input.input;
+  const plannedSlots = new Map((input.planned?.images ?? []).map((slot) => [slot.imageType, slot]));
+  const unread = input.remote === undefined
+    ? []
+    : publishingSlots.filter((slot) => !plannedSlots.has(slot));
+  const remoteCounts = await mapWithConcurrency(unread, readConcurrency, async (imageType) => {
+    const images = await input.port.listImages({
+      packageName,
+      editId: input.editId,
+      language: String(input.remote?.language),
+      imageType,
+      ...(signal === undefined ? {} : { signal }),
+    });
+    return [imageType, images.length] as const;
+  });
+  const remote = new Map<PlayImageType, number>(remoteCounts);
+  const count = (imageType: PlayImageType): number => {
+    const slot = plannedSlots.get(imageType);
+    return slot === undefined
+      ? (remote.get(imageType) ?? 0)
+      : slot.keep.length + slot.upload.length;
+  };
+  const prefix = `${input.planned?.language ?? input.language} (Play's default language)`;
+  const warnings: string[] = [];
+  if (count('icon') === 0) {
+    warnings.push(
+      `${prefix} has no icon after apply; Play needs one to publish the store listing.`,
+    );
+  }
+  if (count('featureGraphic') === 0) {
+    warnings.push(
+      `${prefix} has no featureGraphic after apply; Play needs a feature graphic to publish the store listing.`,
+    );
+  }
+  const phone = count('phoneScreenshots');
+  if (phone < googlePlayPublishingGraphics.phoneScreenshots) {
+    warnings.push(
+      `${prefix} has ${phone} phoneScreenshots after apply; Play needs at least `
+      + `${googlePlayPublishingGraphics.phoneScreenshots} screenshots to publish the store listing.`,
+    );
+  }
+  if (count('sevenInchScreenshots') === 0 && count('tenInchScreenshots') === 0) {
+    warnings.push(
+      `${prefix} has no sevenInchScreenshots or tenInchScreenshots after apply; Play does not require tablet `
+      + `screenshots to publish, but recommends at least ${googlePlayPublishingGraphics.largeScreenScreenshots} `
+      + '(1,080 to 7,680 px, 16:9 or 9:16) to show the app on tablets.',
+    );
+  }
+  return warnings;
 }
 
 function manualSteps(presence: StorePresence): string[] {
@@ -717,6 +838,9 @@ export function formatPlayPresencePlan(plan: PlayPresencePlan): string {
     lines.push(
       `  IMAGE REMOVAL: ${plan.imageRemovals} image(s); apply needs --confirm-image-removal`,
     );
+  }
+  for (const warning of plan.warnings) {
+    lines.push(`  warning   ${warning}`);
   }
   for (const note of plan.notes) {
     lines.push(`  note      ${note}`);

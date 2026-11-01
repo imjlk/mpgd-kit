@@ -24,6 +24,7 @@ import type {
 import {
   applyStorePresence,
   planStorePresence,
+  renderStorePresencePlan,
   saveStorePresencePlan,
 } from './store-presence-command.js';
 import {
@@ -992,6 +993,154 @@ assert.equal(
       { googlePlay: factory },
     );
     assert.equal(replanned.plan.changed, false);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+}
+
+// Publishing warnings: Play's default language listing, counted after apply.
+{
+  const fixture = makeFixture();
+  try {
+    const englishListing: PlayListing = {
+      language: 'en-US',
+      title: 'Block Party',
+      shortDescription: 'Stack blocks with friends.',
+      fullDescription: longDescription,
+    };
+    const digest = (name: string): string => sha256(fixture.images[name] as Buffer);
+    const playWith = (images: Record<string, readonly string[]>, defaultLanguage = 'en-US'): FakePlay =>
+      fakePlay({
+        listings: new Map([['en-US', { ...englishListing }]]),
+        images: new Map(
+          Object.entries(images).map(([slot, names]) => [
+            `en-US/${slot}`,
+            names.map((name, index) => ({ id: `${slot}-${index}`, sha256: digest(name) })),
+          ]),
+        ),
+        details: { defaultLanguage },
+      });
+    const warningsOf = async (play: FakePlay, graphics: Record<string, unknown>): Promise<readonly string[]> =>
+      (await planPlayPresence(input(fixture, onlyEnglish(graphics)), play.port)).warnings;
+    // Play's state as slot -> image names; the same shape as graphics for the screenshot sets.
+    const complete = {
+      icon: ['store/icon.png'],
+      featureGraphic: ['store/feature.png'],
+      phoneScreenshots: ['store/phone-1.png', 'store/phone-2.png'],
+      tenInchScreenshots: ['store/tablet-1.png'],
+    };
+
+    // One phone screenshot warns; two do not.
+    const one = await warningsOf(playWith({ ...complete, phoneScreenshots: [] }), {
+      phoneScreenshots: ['store/phone-1.png'],
+    });
+    assert.equal(one.length, 1, one.join('\n'));
+    assert.match(
+      one[0] ?? '',
+      /^en-US \(Play's default language\) has 1 phoneScreenshots after apply; Play needs at least 2/u,
+    );
+    assert.deepEqual(
+      await warningsOf(playWith({ ...complete, phoneScreenshots: [] }), {
+        phoneScreenshots: ['store/phone-1.png', 'store/phone-2.png'],
+      }),
+      [],
+    );
+
+    // A missing tablet set warns, and says Play does not require one.
+    const noTablet = await warningsOf(playWith({ ...complete, tenInchScreenshots: [] }), {});
+    assert.equal(noTablet.length, 1, noTablet.join('\n'));
+    assert.match(
+      noTablet[0] ?? '',
+      /no sevenInchScreenshots or tenInchScreenshots after apply; Play does not require/u,
+    );
+    // Either tablet size is enough.
+    assert.deepEqual(
+      await warningsOf(playWith({ ...complete, tenInchScreenshots: [] }), {
+        sevenInchScreenshots: ['store/tablet-1.png'],
+      }),
+      [],
+    );
+
+    // A draft listing: everything Play needs is missing, and the file completes it in the same apply.
+    const draft = playWith({});
+    const before = await warningsOf(draft, {});
+    assert.deepEqual(
+      before.map(
+        (warning) => /has (no icon|no featureGraphic|0 phoneScreenshots|no sevenInch)/u.exec(warning)?.[1],
+      ),
+      ['no icon', 'no featureGraphic', '0 phoneScreenshots', 'no sevenInch'],
+    );
+    const completed = await planPlayPresence(
+      input(
+        fixture,
+        onlyEnglish({ ...complete, icon: 'store/icon.png', featureGraphic: 'store/feature.png' }),
+      ),
+      draft.port,
+    );
+    assert.deepEqual(completed.warnings, [], 'the file completes every set in the same apply');
+    // Play's images count too: the file adds one phone screenshot to the one Play holds.
+    assert.deepEqual(
+      await warningsOf(playWith({ ...complete, phoneScreenshots: ['store/phone-1.png'] }), {
+        phoneScreenshots: ['store/phone-2.png'],
+      }),
+      [],
+    );
+    // A complete set that leaves one phone screenshot warns.
+    const shrunk = await planPlayPresence(
+      input(
+        fixture,
+        onlyEnglish({ phoneScreenshots: { files: ['store/phone-1.png'], complete: true } }),
+      ),
+      playWith({ ...complete, phoneScreenshots: ['store/phone-1.png', 'store/phone-2.png', 'store/phone-3.png'] }).port,
+    );
+    assert.equal(shrunk.imageRemovals, 2);
+    assert.match(shrunk.warnings.join('\n'), /has 1 phoneScreenshots after apply/u);
+
+    // Only the default language: translations show its graphics when they have none.
+    const japanese = await planPlayPresence(
+      input(fixture, onlyEnglish({})),
+      playWith(complete, 'ja-JP').port,
+    );
+    assert.ok(japanese.warnings.length > 0);
+    assert.ok(
+      japanese.warnings.every((warning) => warning.startsWith("ja-JP (Play's default language)")),
+    );
+    assert.deepEqual(
+      (await planPlayPresence(input(fixture), playWith(complete).port)).warnings,
+      [],
+      'ko-KR without graphics does not warn',
+    );
+
+    // Printed, carried by --json, and never block apply.
+    const play = playWith({});
+    const plan = await planPlayPresence(
+      input(fixture, onlyEnglish({ phoneScreenshots: ['store/phone-1.png'] })),
+      play.port,
+    );
+    assert.equal(plan.warnings.length, 4);
+    const printed = formatPlayPresencePlan(plan);
+    for (const warning of plan.warnings) {
+      assert.ok(printed.includes(`  warning   ${warning}`), printed);
+    }
+    const file = {
+      schemaVersion: 1,
+      kind: 'mpgd-store-presence-plan',
+      gameRoot: fixture.directory,
+      profile: 'beta',
+      presenceFile: path.join(fixture.directory, 'mpgd.store-presence.json'),
+      plan,
+    } as const;
+    const json = JSON.parse(renderStorePresencePlan(file, true)) as { plan: PlayPresencePlan };
+    assert.deepEqual(json.plan.warnings, plan.warnings);
+    assert.equal(renderStorePresencePlan(file, false), printed);
+    const applied = await applyPlayPresence({
+      saved: plan,
+      plan: input(fixture, onlyEnglish({ phoneScreenshots: ['store/phone-1.png'] })),
+      port: play.port,
+      approved: true,
+    });
+    assert.equal(applied.status, 'committed');
+    assert.deepEqual(play.writes, ['upload en-US/phoneScreenshots phone-1.png']);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }

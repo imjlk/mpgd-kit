@@ -356,7 +356,10 @@ Google Play Console:
       `apply --plan <plan> --approve` write them from
       `mpgd.store-presence.json` after the first bundle is uploaded
       ([store page sync](./STORE_PRESENCE_SYNC.md)); the privacy policy URL
-      under App content stays in the console.
+      under App content stays in the console. Clear the plan's `warning`
+      lines first: Play's default language needs an icon, a feature graphic
+      and at least 2 phone screenshots to publish, and tablet screenshots
+      are recommended. They warn but do not block `apply`.
 - [ ] Content rating (IARC questionnaire), target audience and content,
       ads declaration ("contains ads" if AdMob), advertising ID declaration
       (matches the manifest, see above), app access (instructions if review
