@@ -1,5 +1,14 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  statSync,
+  writeFileSync,
+  type Stats,
+} from 'node:fs';
 import { join, relative } from 'node:path';
 
 import type { WorkspacePackage } from './workspace';
@@ -26,6 +35,19 @@ export const packageBuildToolchainFiles = [
   'strip.config.js',
 ] as const;
 
+/**
+ * Gitignored native build output skipped at any depth of a package's input:
+ * a SwiftPM `.build` directory, and a Gradle module's `build` directory (one
+ * next to `build.gradle` or `build.gradle.kts`). It is large, depends on local
+ * build state and can hold symlinks that do not resolve. A `build` directory
+ * anywhere else (`src/build`) is source and stays in the input.
+ */
+export function isPackageBuildOutputDirectory(parent: string, entry: string): boolean {
+  return entry === '.build'
+    || (entry === 'build'
+      && (existsSync(join(parent, 'build.gradle')) || existsSync(join(parent, 'build.gradle.kts'))));
+}
+
 export interface InputFingerprintOptions {
   /** Repository files whose content changes every package build. */
   readonly toolchainFiles: readonly string[];
@@ -37,8 +59,9 @@ export interface InputFingerprintOptions {
 
 /**
  * Source fingerprints for package builds, computed before anything is built. A
- * package's input covers its own files (without dist and node_modules), the
- * toolchain files and the fingerprints of its workspace dependencies.
+ * package's input covers its own files (without dist, node_modules and native
+ * build output), the toolchain files and the fingerprints of its workspace
+ * dependencies.
  * `undefined` means "always rebuild" and propagates to dependents.
  */
 export function createInputFingerprints(
@@ -88,7 +111,10 @@ export function createInputFingerprints(
       }
     }
     const result = reusable
-      ? hashParts([...parts, hashTree(workspacePackage.dir, ['dist'])])
+      ? hashParts([
+          ...parts,
+          hashTree(workspacePackage.dir, ['dist'], isPackageBuildOutputDirectory),
+        ])
       : undefined;
     visiting.delete(name);
     memo.set(name, result);
@@ -145,8 +171,18 @@ export function recordBuild(
   );
 }
 
-/** Hashes every file under root; `skip` names top-level entries to leave out. */
-export function hashTree(root: string, skip: readonly string[] = []): string {
+/**
+ * Hashes every file under root. A symlink that resolves is read through, as a
+ * file or a directory, so a change to what it points at changes the hash; a
+ * symlink that does not resolve contributes its target string instead of
+ * failing the walk. `skip` names top-level entries to leave out and
+ * `skipDirectory` picks directories to leave out at any depth.
+ */
+export function hashTree(
+  root: string,
+  skip: readonly string[] = [],
+  skipDirectory: (parent: string, entry: string) => boolean = () => false,
+): string {
   const parts: string[] = [];
   visit(root);
   return hashParts(parts);
@@ -157,11 +193,25 @@ export function hashTree(root: string, skip: readonly string[] = []): string {
         continue;
       }
       const path = join(dir, entry);
-      if (statSync(path).isDirectory()) {
-        visit(path);
+      const relativePath = relative(root, path).split('\\').join('/');
+      let stats: Stats;
+      try {
+        stats = statSync(path);
+      } catch (error) {
+        if (lstatSync(path).isSymbolicLink()) {
+          // A link that does not resolve (SwiftPM leaves some in resource bundles).
+          parts.push(`${relativePath}\0link\0${readlinkSync(path)}`);
+          continue;
+        }
+        throw error;
+      }
+      if (stats.isDirectory()) {
+        if (!skipDirectory(dir, entry)) {
+          visit(path);
+        }
         continue;
       }
-      parts.push(`${relative(root, path).split('\\').join('/')}\0${hashFile(path)}`);
+      parts.push(`${relativePath}\0${hashFile(path)}`);
     }
   }
 }

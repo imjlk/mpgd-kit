@@ -1,5 +1,13 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -75,6 +83,61 @@ check('dist and node_modules do not affect the input fingerprint', () => {
   mkdirSync(join(core.dir, 'node_modules', 'x'), { recursive: true });
   writeFileSync(join(core.dir, 'node_modules', 'x', 'index.js'), 'dependency');
   assert.equal(fingerprints()('@mpgd/core'), before);
+});
+
+check('native build output and dangling symlinks do not break the input fingerprint', () => {
+  // A Gradle module: its `build` directory is output.
+  mkdirSync(join(core.dir, 'android'), { recursive: true });
+  writeFileSync(join(core.dir, 'android', 'build.gradle'), 'plugins {}');
+  const before = fingerprints()('@mpgd/core');
+  // SwiftPM leaves a relative symlink in resource bundles that does not resolve.
+  const bundle = join(core.dir, '.build', 'debug', 'OpenIAP_OpenIAP.bundle');
+  mkdirSync(bundle, { recursive: true });
+  symlinkSync('../../missing/openiap-versions.json', join(bundle, 'openiap-versions.json'));
+  writeFileSync(join(bundle, 'Info.plist'), 'built');
+  mkdirSync(join(core.dir, 'android', 'build', 'outputs'), { recursive: true });
+  writeFileSync(join(core.dir, 'android', 'build', 'outputs', 'plugin.aar'), 'built');
+  assert.equal(fingerprints()('@mpgd/core'), before);
+
+  const sourceLink = join(core.dir, 'src', 'dangling.ts');
+  symlinkSync('./missing.ts', sourceLink);
+  const linked = fingerprints()('@mpgd/core');
+  assert.notEqual(linked, before, 'a source symlink is part of the input');
+  rmSync(sourceLink);
+  symlinkSync('./elsewhere.ts', sourceLink);
+  assert.notEqual(fingerprints()('@mpgd/core'), linked, 'the link target is hashed');
+  rmSync(sourceLink);
+  assert.equal(fingerprints()('@mpgd/core'), before);
+  rmSync(join(core.dir, '.build'), { recursive: true });
+  rmSync(join(core.dir, 'android'), { recursive: true });
+});
+
+check('a build directory outside a Gradle module stays in the input', () => {
+  const before = fingerprints()('@mpgd/core');
+  mkdirSync(join(core.dir, 'src', 'build'), { recursive: true });
+  writeFileSync(join(core.dir, 'src', 'build', 'steps.ts'), 'export const steps = 1;');
+  const added = fingerprints()('@mpgd/core');
+  assert.notEqual(added, before, 'src/build is source');
+  writeFileSync(join(core.dir, 'src', 'build', 'steps.ts'), 'export const steps = 2;');
+  assert.notEqual(fingerprints()('@mpgd/core'), added, 'its content is hashed');
+  rmSync(join(core.dir, 'src', 'build'), { recursive: true });
+  assert.equal(fingerprints()('@mpgd/core'), before);
+});
+
+check('a symlink that resolves is hashed by what it points at', () => {
+  const shared = join(root, 'shared.ts');
+  writeFileSync(shared, 'export const shared = 1;');
+  const sourceLink = join(core.dir, 'src', 'shared.ts');
+  symlinkSync(shared, sourceLink);
+  const linked = fingerprints()('@mpgd/core');
+  writeFileSync(shared, 'export const shared = 2;');
+  assert.notEqual(
+    fingerprints()('@mpgd/core'),
+    linked,
+    'a change outside the package reaches through the link',
+  );
+  rmSync(sourceLink);
+  rmSync(shared);
 });
 
 check('toolchain changes invalidate every package', () => {
