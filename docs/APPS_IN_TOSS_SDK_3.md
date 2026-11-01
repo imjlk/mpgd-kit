@@ -50,7 +50,9 @@ a single DNS label.
 1. Build the target and retain the generated `.ait` and release manifest.
 2. Upload the bundle to the Apps in Toss console.
 3. Exercise identity, Storage, share, Game Center, ads, purchases, and every
-   backend request through the Toss-app QR test appropriate to the game.
+   backend request through the Toss-app QR test appropriate to the game. If
+   the game sends [platform analytics](PLATFORM_ANALYTICS.md) logs, check that
+   they reach the console's event logs.
 4. Confirm all four origins receive the expected CORS headers.
 5. Publish only after the QR run succeeds.
 

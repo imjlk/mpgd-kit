@@ -178,3 +178,15 @@ describe('WeChat platform gateway', () => {
     expect(noShareGateway.sharing).toBeUndefined();
   });
 });
+
+describe('WeChat platform analytics', () => {
+  it('reports platform analytics as unsupported and drops every log', async () => {
+    const gateway = createWechatPlatformGateway({ api: createFakeWechatMiniGameApi().api });
+    await expect(gateway.analytics?.getStatus()).resolves.toEqual({
+      provider: 'none',
+      state: 'unsupported',
+      logTypes: [],
+    });
+    await expect(gateway.analytics?.log({ logName: 'play_start', logType: 'event' })).resolves.toBe(false);
+  });
+});

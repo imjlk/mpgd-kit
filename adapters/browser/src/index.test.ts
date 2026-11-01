@@ -542,3 +542,22 @@ describe('adapter-browser', () => {
 function nestedQueryParams(value: unknown): string {
   return `queryParams=${encodeURIComponent(JSON.stringify(value))}`;
 }
+
+describe('adapter-browser platform analytics', () => {
+  it('reports platform analytics as unsupported and drops every log', async () => {
+    const gateway = createBrowserPlatformGateway({
+      storage: {
+        getItem() {
+          return null;
+        },
+        setItem() {},
+      },
+    });
+    await expect(gateway.analytics?.getStatus()).resolves.toEqual({
+      provider: 'none',
+      state: 'unsupported',
+      logTypes: [],
+    });
+    await expect(gateway.analytics?.log({ logName: 'play_start', logType: 'event' })).resolves.toBe(false);
+  });
+});

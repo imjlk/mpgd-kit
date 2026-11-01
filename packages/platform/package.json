@@ -49,6 +49,10 @@
       "types": "./dist/crash-reporting.d.ts",
       "default": "./dist/crash-reporting.js"
     },
+    "./analytics": {
+      "types": "./dist/analytics.d.ts",
+      "default": "./dist/analytics.js"
+    },
     "./commerce": {
       "types": "./dist/commerce.d.ts",
       "default": "./dist/commerce.js"
@@ -110,7 +114,7 @@
     "lint": "ttsc --noEmit",
     "format": "ttsc format",
     "fix": "ttsc fix",
-    "test": "vitest run && node test/capability-conformance-dist-import.mjs && node test/storage-conformance-dist-import.mjs && node test/ads-dist-import.mjs && node test/crash-reporting-dist-import.mjs && node test/commerce-dist-import.mjs && node test/commerce-conformance-dist-import.mjs && node test/wallet-commerce-dist-import.mjs && node test/notifications-dist-import.mjs && node test/notifications-conformance-dist-import.mjs && node test/routes-dist-import.mjs && node test/share-link-conformance-dist-import.mjs && cd ../.. && node tools/run-ttsx.mjs packages/platform/test/commerce-derived-key-parity.ts"
+    "test": "vitest run && node test/capability-conformance-dist-import.mjs && node test/storage-conformance-dist-import.mjs && node test/ads-dist-import.mjs && node test/crash-reporting-dist-import.mjs && node test/analytics-dist-import.mjs && node test/commerce-dist-import.mjs && node test/commerce-conformance-dist-import.mjs && node test/wallet-commerce-dist-import.mjs && node test/notifications-dist-import.mjs && node test/notifications-conformance-dist-import.mjs && node test/routes-dist-import.mjs && node test/share-link-conformance-dist-import.mjs && cd ../.. && node tools/run-ttsx.mjs packages/platform/test/commerce-derived-key-parity.ts"
   },
   "dependencies": {
     "typia": "15.2.1"

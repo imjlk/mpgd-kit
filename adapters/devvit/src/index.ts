@@ -36,6 +36,7 @@ import {
   type PresentationResult,
   type ShareResult,
 } from '@mpgd/platform';
+import { createUnsupportedPlatformAnalyticsSink } from '@mpgd/platform/analytics';
 import {
   assertCommerceBridgeGetAvailablePurchasesResult,
   assertCommerceBridgeGetCapabilitiesResult,
@@ -407,6 +408,7 @@ export function createDevvitPlatformGateway(
 
   return {
     target: 'reddit',
+    analytics: createUnsupportedPlatformAnalyticsSink(),
     async getCapabilities() {
       const {
         nativeIap: _nativeIap,

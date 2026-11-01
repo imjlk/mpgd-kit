@@ -49,6 +49,7 @@ import {
 // channel carries none of them.
 import type { NotificationCapabilities, NotificationProvider } from '@mpgd/platform/notifications';
 
+import { createAitBridgeAnalyticsSink } from './analytics.js';
 import { createAitBridgeCommerceProvider } from './commerce-bridge.js';
 import { aitCommerceStoreId, createAitCommerceCapabilities } from './commerce-provider.js';
 import { createAitLifecycleAdapter } from './lifecycle.js';
@@ -321,6 +322,7 @@ export function createAitPlatformGateway(input: {
       open: (payload) => request('leaderboard.open', payload ?? {}),
     },
     lifecycle: createAitLifecycleAdapter(),
+    analytics: createAitBridgeAnalyticsSink((method, payload) => request(method, payload)),
     storage: {
       async load(payload) {
         return decodeBridgeStorageLoadData(await request<unknown>('storage.load', payload));

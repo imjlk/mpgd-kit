@@ -29,6 +29,12 @@ optional integration contracts:
   state as `notifications` and then adds its capability block to
   `getCapabilities()`. No adapter provides it yet.
 
+- `analytics` forwards a game's bounded logs (screen, event, click,
+  impression) to the host's own analytics, such as the Apps in Toss console.
+  It mirrors product moments; the first-party analytics pipeline stays the
+  source of truth. Targets without host analytics report `unsupported`. See
+  [platform analytics](PLATFORM_ANALYTICS.md).
+
 These groups are optional so existing adapters remain source compatible.
 Callers must read the target runtime integration state before showing a CTA and
 must still handle an operation returning `unavailable`.

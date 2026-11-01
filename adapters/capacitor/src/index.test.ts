@@ -333,3 +333,25 @@ describe('adapter-capacitor', () => {
     ]);
   });
 });
+
+describe('adapter-capacitor platform analytics', () => {
+  it('reports platform analytics as unsupported and drops every log', async () => {
+    const bridge: NativeBridge = {
+      async request(input) {
+        throw new Error(`No request expected: ${input.method}`);
+      },
+    };
+    const gateway = createCapacitorPlatformGateway({
+      target: 'android',
+      appVersion: '1.2.3',
+      buildId: 'build-android',
+      bridge,
+    });
+    await expect(gateway.analytics?.getStatus()).resolves.toEqual({
+      provider: 'none',
+      state: 'unsupported',
+      logTypes: [],
+    });
+    await expect(gateway.analytics?.log({ logName: 'play_start', logType: 'event' })).resolves.toBe(false);
+  });
+});

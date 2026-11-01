@@ -23,6 +23,7 @@ import {
   type ShareResult,
   type ViewportAdapter,
 } from '@mpgd/platform';
+import { createUnsupportedPlatformAnalyticsSink } from '@mpgd/platform/analytics';
 import { withShareIntentCheck } from '@mpgd/platform/routes';
 import {
   createCapacitorAppEvents,
@@ -584,6 +585,7 @@ export function createCapacitorPlatformGateway(input: {
 
   return {
     target: input.target,
+    analytics: createUnsupportedPlatformAnalyticsSink(),
     async getCapabilities() {
       const base = await request<PlatformCapabilities>('runtime.getCapabilities', {});
       // A native shell built before the commerce v2 removals may still send the

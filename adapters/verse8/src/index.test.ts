@@ -657,3 +657,15 @@ function createNativePresentation(): { source: Verse8AdPresentationSource; emit(
     },
   };
 }
+
+describe('adapter-verse8 platform analytics', () => {
+  it('reports platform analytics as unsupported and drops every log', async () => {
+    const gateway = createVerse8PlatformGateway({ authClient: authenticatedClient() });
+    await expect(gateway.analytics?.getStatus()).resolves.toEqual({
+      provider: 'none',
+      state: 'unsupported',
+      logTypes: [],
+    });
+    await expect(gateway.analytics?.log({ logName: 'play_start', logType: 'event' })).resolves.toBe(false);
+  });
+});

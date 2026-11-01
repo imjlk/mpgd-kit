@@ -10,6 +10,7 @@ import {
   type PlayerIdentity,
   type ShareIntent,
 } from '@mpgd/platform';
+import { createUnsupportedPlatformAnalyticsSink } from '@mpgd/platform/analytics';
 import type {
   CommerceProvider,
   RequestPurchaseResult,
@@ -79,6 +80,7 @@ export function createBrowserPlatformGateway(
 
   return {
     target: 'browser',
+    analytics: createUnsupportedPlatformAnalyticsSink(),
     async getCapabilities() {
       return {
         ...createUnsupportedCapabilities(),

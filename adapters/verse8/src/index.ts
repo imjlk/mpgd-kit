@@ -16,6 +16,7 @@ import {
   type ProductType,
   type StorageAdapter,
 } from '@mpgd/platform';
+import { createUnsupportedPlatformAnalyticsSink } from '@mpgd/platform/analytics';
 
 import { createVerse8AdProvider, type Verse8AdPresentationSource } from './ad-provider.js';
 import { toAdAdapter } from '@mpgd/platform/ads';
@@ -208,6 +209,7 @@ export function createVerse8PlatformGateway(
 
   return {
     target: 'verse8',
+    analytics: createUnsupportedPlatformAnalyticsSink(),
     async getCapabilities() {
       const capabilities = {
         // Includes the unsupported commerce block, a fresh object per read.

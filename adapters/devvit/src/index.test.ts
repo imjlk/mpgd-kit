@@ -1225,3 +1225,23 @@ describe('adapter-devvit commerce v2 gateway', () => {
     await expect(gateway.getCapabilities()).rejects.toThrow();
   });
 });
+
+describe('adapter-devvit platform analytics', () => {
+  it('reports platform analytics as unsupported and drops every log', async () => {
+    const gateway = createDevvitPlatformGateway({
+      appVersion: '1.2.3',
+      buildId: 'build-reddit',
+      bridge: {
+        async request(input) {
+          throw new Error(`No request expected: ${input.method}`);
+        },
+      },
+    });
+    await expect(gateway.analytics?.getStatus()).resolves.toEqual({
+      provider: 'none',
+      state: 'unsupported',
+      logTypes: [],
+    });
+    await expect(gateway.analytics?.log({ logName: 'play_start', logType: 'event' })).resolves.toBe(false);
+  });
+});

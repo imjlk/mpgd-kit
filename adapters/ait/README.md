@@ -92,6 +92,25 @@ The server side is
 `@mpgd/game-services/notifications/ait-functional-delivery`, which sends
 functional messages over the partner API's mTLS certificate.
 
+## Platform analytics
+
+`gateway.analytics` sends a game's bounded logs to the Apps in Toss console
+without the game importing the SDK. The gateway sends each log over the host
+bridge (`analytics.log`); `installAitHostBridge` checks it again with
+`readPlatformAnalyticsLog` and calls `Analytics.screen` for screens and
+`Analytics.log` for events, clicks and impressions on Toss 5.208.0 or later.
+Older Toss apps fall back to `Analytics.click` and `Analytics.impression` and
+drop events. Logs never throw into the game. See
+[platform analytics](../../docs/PLATFORM_ANALYTICS.md) for the log rules.
+
+```ts
+void gateway.analytics?.log({
+  logName: 'mygame_play_clear',
+  logType: 'event',
+  params: { kind: 'daily', stage: 3 },
+});
+```
+
 ## Promotion outcome observation
 
 Configure `observePromotionGrant` beside the existing authorizer and pending resolver to record a

@@ -1,5 +1,6 @@
 import type { ReviewCapabilities, ReviewProvider } from './reviews-contract.js';
 import type { AdProvider } from './ads.js';
+import type { PlatformAnalyticsSink } from './analytics.js';
 // Only the typia-free contract modules may be imported here: headless
 // consumers type-check this entry with `skipLibCheck: false` and no DOM lib.
 import type { CommerceProvider } from './commerce-contract.js';
@@ -744,6 +745,15 @@ export interface PlatformGateway {
    * ship no crash service; native crashes need no call.
    */
   readonly crashReporter?: CrashReporter;
+  /**
+   * Optional platform analytics (`@mpgd/platform/analytics`): forwards a
+   * game's bounded logs to the host's own analytics, such as the Apps in Toss
+   * console. A mirror of product moments, never a source of truth: the
+   * first-party analytics pipeline keeps every event. Kit adapters always
+   * expose it; one whose target has no host analytics reports `unsupported`
+   * and drops every log. Read `getStatus()` rather than the target name.
+   */
+  readonly analytics?: PlatformAnalyticsSink;
 }
 
 export function createUnsupportedCapabilities(): PlatformCapabilities {

@@ -62,6 +62,23 @@ export function isMinVersionSupported(): boolean {
   return false;
 }
 
+/**
+ * Local browsers have no Toss console; logs only reach the developer console.
+ * `isMinVersionSupported` answers false, so the host bridge treats this as a
+ * Toss app older than 5.208.0 and drops `event` logs before they get here.
+ */
+function localAnalyticsLog(params: unknown): Promise<void> {
+  console.debug('[mpgd/adapter-ait] local analytics log', params);
+  return Promise.resolve();
+}
+
+export const Analytics = {
+  log: localAnalyticsLog,
+  screen: localAnalyticsLog,
+  click: localAnalyticsLog,
+  impression: localAnalyticsLog,
+};
+
 export const grantPromotionRewardForGame = Object.assign(async (): Promise<'ERROR'> => 'ERROR', {
   isSupported: unsupported,
 });

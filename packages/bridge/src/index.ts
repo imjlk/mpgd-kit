@@ -72,6 +72,15 @@ export type BridgeNotificationsBackendMethod =
   | 'notifications.backend.listNotices'
   | 'notifications.backend.recordNotice';
 
+/**
+ * Platform analytics methods (`@mpgd/platform/analytics`). `analytics.getStatus`
+ * answers a `PlatformAnalyticsStatus`; `analytics.log` takes a
+ * `PlatformAnalyticsLog` and answers `{ sent: boolean }`, never an error for a
+ * dropped log. A host without platform analytics answers `UNSUPPORTED_METHOD`,
+ * which the gateway reads as `unsupported`.
+ */
+export type BridgeAnalyticsMethod = 'analytics.getStatus' | 'analytics.log';
+
 export type BridgeMethod =
   | 'runtime.getCapabilities'
   | 'identity.getPlayer'
@@ -103,7 +112,8 @@ export type BridgeMethod =
   | 'storage.save'
   | 'credentials.load'
   | 'credentials.save'
-  | 'credentials.remove';
+  | 'credentials.remove'
+  | BridgeAnalyticsMethod;
 
 export interface BridgeRequest<TPayload = unknown> {
   readonly id: string;
