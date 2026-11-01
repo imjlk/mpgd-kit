@@ -222,8 +222,10 @@ export interface AitFunctionalMessageDeliveryProvider {
    * `accepted` only when one channel's sent count equals the recipients
    * (the kit reads a channel as reaching each recipient at most once per
    * message, which the documentation does not state) or the channels'
-   * sent counts add up to exactly the recipients (read as each recipient
-   * reached on at most one channel per message, also not stated), `rejected` with
+   * sent counts add up to exactly the recipients (each recipient is reached
+   * on at most one channel per message: the project maintainer confirmed
+   * this on 2026-11-01, though Apps in Toss's public documentation does not
+   * state it), `rejected` with
    * reason `recipient` when nothing was sent on any channel, and otherwise
    * `ambiguous` with `unattributed` (code `BULK_PARTIAL`): some were
    * reached, and a replay would reach them again. A failure of the whole
@@ -624,14 +626,15 @@ function readSuccess(
 
 /**
  * A `send-bulk-message` `SUCCESS` for `recipients` recipients. The answer
- * names no recipient, so the counts decide, under two readings the
- * documentation does not state:
+ * names no recipient, so the counts decide, under two readings Apps in
+ * Toss's public documentation does not state:
  * - a channel reaches each recipient at most once per message, so one
  *   channel that sent exactly as many messages as there were recipients
  *   reached each of them;
  * - a recipient is reached on at most one channel per message (push, else
  *   inbox, and so on), so per-channel sent counts that add up to exactly
- *   the recipients, none above it, reached each of them once.
+ *   the recipients, none above it, reached each of them once. The project
+ *   maintainer confirmed this reading on 2026-11-01.
  * It proves nothing sent only when every count is zero. Anything else is
  * some recipients reached and some not, without saying which: each is
  * `unattributed`, its row stays in flight and is never replayed. Such a

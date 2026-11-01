@@ -41,6 +41,12 @@ import {
   resolveAccountDeletionTombstones,
   type AccountDeletionTombstonesEnv,
 } from './deletionTombstones.js';
+import {
+  batchingDatabase,
+  d1BatchingQueries,
+  runWithD1Batching,
+  trackD1BatchingIo,
+} from './d1Batching.js';
 import { createD1NotificationStore } from './notificationsD1.js';
 
 /**
@@ -165,15 +171,15 @@ export interface GameServicesNotificationsEnv {
   /**
    * Deliveries one `deliverNotificationBulk` call attempts at most (one per
    * FCM device); the rest answer `not-attempted` (`count-budget`), and a
-   * later call sends them. 50 by default, with the keys of at most 60
-   * recipients read (scaled with it): a recipient costs about 7 D1 queries
-   * to plan and an attempted delivery about 11 more. With account-deletion
-   * tombstones bound, which add a query to each new send and delivery
-   * record, 45 and 50. On D1 these are also the ceiling: a larger value
-   * is lowered to them. Either way a call stays under
-   * D1's 1,000 queries per Worker invocation (Workers
-   * Paid, https://developers.cloudflare.com/d1/platform/limits/, checked
-   * 2026-11-01). Raise it only with a store that is not bound by that limit.
+   * later call sends them. 2,500 by default (the Apps in Toss
+   * `send-bulk-message` maximum), with the keys of 1.2 times as many
+   * recipients read. On D1 the default is also the ceiling: a larger value
+   * is lowered to it. The call's D1 statements are batched
+   * (`runWithD1Batching`): a batch of 2,500 recipients makes about 100 D1
+   * queries, and a new batch (or round of a player's further devices)
+   * starts only while 300 of the call's 900 are left, under D1's 1,000 queries per Worker invocation (Workers Paid,
+   * https://developers.cloudflare.com/d1/platform/limits/, checked
+   * 2026-11-01). A value that is not a positive whole number is ignored.
    */
   readonly MPGD_NOTIFICATIONS_BULK_RECIPIENTS?: string;
 }
@@ -586,7 +592,8 @@ function buildWorkerNotifications(env: GameServicesNotificationsEnv): WorkerNoti
       : {
           resolvePlatformRecipient: async ({ provider, player }) => {
             takeCronOperation();
-            return (await identity.resolveNotificationRecipient({ provider, playerId: player })) ?? undefined;
+            return (await trackD1BatchingIo(() =>
+              identity.resolveNotificationRecipient({ provider, playerId: player }))) ?? undefined;
           },
         }),
     ...(copy === undefined ? {} : { resolveCopy: workerNotificationCopyResolver(copy) }),
@@ -629,7 +636,8 @@ export function workerNotificationCopyResolver(
 ): NotificationCopyResolver {
   return async (input) => {
     takeCronOperation();
-    return (await binding.resolveNotificationCopy(input)) ?? resolveCatalogNotificationCopy(input);
+    return (await trackD1BatchingIo(() => binding.resolveNotificationCopy(input)))
+      ?? resolveCatalogNotificationCopy(input);
   };
 }
 
@@ -642,7 +650,10 @@ export function refuseDeletedNotificationWrites(
   env: GameServicesNotificationsEnv & AccountDeletionTombstonesEnv,
   store: NotificationStore,
 ): NotificationStore {
-  const tombstones = resolveAccountDeletionTombstones(env);
+  // On D1 the tombstone reads join a bulk send's statement batches too.
+  const tombstones = resolveAccountDeletionTombstones(
+    env.DB === undefined ? env : { ...env, DB: batchingDatabase(env.DB) },
+  );
   return tombstones === undefined
     ? store
     : refuseDeletedPlayerWrites(store, tombstones, {
@@ -669,7 +680,7 @@ function notificationStoreOf(env: GameServicesNotificationsEnv): NotificationSto
     if (env.DB === undefined) {
       throw new Error('MPGD_STORE is d1 but DB binding is not configured.');
     }
-    return createD1NotificationStore(accountingDatabase(env.DB));
+    return createD1NotificationStore(accountingDatabase(batchingDatabase(env.DB)));
   }
   const state = notificationsStateOf(env);
   let store = state.memoryStore;
@@ -906,61 +917,68 @@ export async function deliverWorkerNotification(env: GameServicesNotificationsEn
 }
 
 /** Recipients one bulk call attempts by default (`MPGD_NOTIFICATIONS_BULK_RECIPIENTS`). */
-export const defaultWorkerNotificationBulkRecipients = 50;
+export const defaultWorkerNotificationBulkRecipients = 2_500;
+/** Recipients' keys one bulk call reads per recipient it may attempt. */
+const workerNotificationBulkLookupsPerAttempt = 1.2;
 /**
- * Recipients' keys one bulk call reads by default. A recipient the gate
- * refuses costs about 7 D1 queries and no attempt, one already sent costs 1,
- * and an attempted delivery about 11 more: 60 × 7 + 50 × 11 = 970.
+ * D1 queries a bulk call may make on the Worker: D1 allows 1,000 per Worker
+ * invocation on Workers Paid; the rest is margin.
  */
-const defaultWorkerNotificationBulkLookups = 60;
+export const workerNotificationBulkQueryBudget = 900;
 /**
- * The defaults with D1 account-deletion tombstones bound, which add a query
- * to each new send and each delivery record: 50 × 8 + 45 × 12 = 940.
+ * D1 queries one batch of a bulk call, or one round of its players' device
+ * rows, may make at most; one starts only while this much budget is left.
  */
-const defaultWorkerNotificationBulkRecipientsWithTombstones = 45;
-const defaultWorkerNotificationBulkLookupsWithTombstones = 50;
+export const workerNotificationBulkBatchQueryReserve = 300;
 
 /**
  * The bulk send a game server or operator tool makes through the service
  * binding (BK1), like `deliverWorkerNotification`: never a fetch route, so
  * no client session can reach it. At most `MPGD_NOTIFICATIONS_BULK_RECIPIENTS`
- * deliveries are attempted per call, and the keys of at most 60 recipients
- * (scaled with it) are read.
+ * deliveries are attempted per call. On D1 the call's statements are
+ * batched (`runWithD1Batching`), and a new batch of the call, or a new
+ * round of its players' further devices, starts only while
+ * `workerNotificationBulkBatchQueryReserve` of the call's
+ * `workerNotificationBulkQueryBudget` is left.
  */
 export async function deliverWorkerNotificationBulk(
   env: GameServicesNotificationsEnv,
   input: unknown,
 ): Promise<NotificationBulkDeliveryResult> {
-  return readyService(env).deliverBulk(input, workerNotificationBulkLimits(env));
+  const service = readyService(env);
+  const limits = workerNotificationBulkLimits(env);
+  if (env.MPGD_STORE !== 'd1') {
+    return service.deliverBulk(input, limits);
+  }
+  // A failed batch's callers run one by one only while the batch in progress keeps its reserve.
+  return (await runWithD1Batching(() => service.deliverBulk(input, limits), {
+    maxQueries: workerNotificationBulkQueryBudget - workerNotificationBulkBatchQueryReserve,
+  })).value;
 }
 
 /**
- * The bounds of one `deliverNotificationBulk` call. On D1 they keep a call
- * under D1's 1,000 queries per invocation: 50 deliveries and 60 keys, or 45
- * and 50 with account-deletion tombstones bound (a query more per new send
- * and per delivery record), and `MPGD_NOTIFICATIONS_BULK_RECIPIENTS` may
- * lower them but not raise them past that ceiling. Another store takes the
- * setting as it is.
+ * The bounds of one `deliverNotificationBulk` call: at most
+ * `MPGD_NOTIFICATIONS_BULK_RECIPIENTS` attempts (2,500 by default, the Apps
+ * in Toss bulk maximum), the keys of 1.2 times as many recipients, and, on
+ * D1, every recipient of a batch worked on at once so its statements share
+ * each `db.batch()`. On D1 the default is also the ceiling: a larger value
+ * is lowered to it, and a value that is not a positive whole number is
+ * ignored. Another store takes the setting as it is.
  */
 export function workerNotificationBulkLimits(
   env: GameServicesNotificationsEnv,
-): { readonly maxRecipients: number; readonly maxLookups: number } {
+): { readonly maxRecipients: number; readonly maxLookups: number; readonly concurrency?: number } {
   const declared = env.MPGD_NOTIFICATIONS_BULK_RECIPIENTS?.trim();
   const asked = declared === undefined || declared === '' ? Number.NaN : Number(declared);
   const d1 = env.MPGD_STORE === 'd1';
-  const tombstones = d1 && resolveAccountDeletionTombstones(env) !== undefined;
-  const attempts = tombstones
-    ? defaultWorkerNotificationBulkRecipientsWithTombstones
+  const wanted = Number.isSafeInteger(asked) && asked >= 1
+    ? asked
     : defaultWorkerNotificationBulkRecipients;
-  const reads = tombstones
-    ? defaultWorkerNotificationBulkLookupsWithTombstones
-    : defaultWorkerNotificationBulkLookups;
-  const wanted = Number.isSafeInteger(asked) && asked >= 1 ? asked : attempts;
-  const maxRecipients = d1 ? Math.min(wanted, attempts) : wanted;
-  return {
-    maxRecipients,
-    maxLookups: Math.max(maxRecipients, Math.ceil((reads * maxRecipients) / attempts)),
-  };
+  const maxRecipients = d1 ? Math.min(wanted, defaultWorkerNotificationBulkRecipients) : wanted;
+  const maxLookups = Math.ceil(maxRecipients * workerNotificationBulkLookupsPerAttempt);
+  return d1
+    ? { maxRecipients, maxLookups, concurrency: maxLookups }
+    : { maxRecipients, maxLookups };
 }
 
 /**
@@ -1197,7 +1215,7 @@ function countingFetch(
 ): (input: string, init?: RequestInit) => Promise<Response> {
   return (input, init) => {
     takeCronOperation();
-    return inner(input, init);
+    return trackD1BatchingIo(() => inner(input, init));
   };
 }
 
@@ -1207,12 +1225,20 @@ function countingMtls(
   return {
     fetch(input, init) {
       takeCronOperation();
-      return mtls.fetch(input, init);
+      return trackD1BatchingIo(() => mtls.fetch(input, init));
     },
   };
 }
 
 function notificationCronElapsed(): number {
+  // A bulk send on D1 starts no batch, nor device round, that its query budget could not finish.
+  const bulkQueries = d1BatchingQueries();
+  if (
+    bulkQueries !== undefined
+    && bulkQueries + workerNotificationBulkBatchQueryReserve > workerNotificationBulkQueryBudget
+  ) {
+    return Number.POSITIVE_INFINITY;
+  }
   const budget = cronInvocation.getStore();
   if (budget === undefined || budget.remaining >= budget.roundReserve) {
     return performance.now();

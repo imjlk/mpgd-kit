@@ -2766,6 +2766,7 @@ publishable package carries a Sampo changeset.
 | AR1 | Android advertising pushes the shell renders with the opt-out action: `rendersAdvertising`, `shellRendersAdvertising`, and the gate's `endpointShowsActions` in `@mpgd/platform`; the catalog switch; the FCM data message in `@mpgd/game-services`; the renderer and its messaging service in `@mpgd/capacitor-game-services`; the provider's renderer read in `@mpgd/adapter-capacitor`; the CLI's manifest wiring and the starter's Android mapping | No Android advertising |
 | LC1 | Server-side localized copy: the gate's `resolvedCopy`, `copy-missing`, and `notificationContentSource` in `@mpgd/platform`; the `NotificationCopyResolver` port and its catalog default in `@mpgd/game-services`; the Worker's copy binding | Open question 4 |
 | BK1 | Bulk sends: `deliverBulk` and the provider bulk capability in `@mpgd/game-services`, the Apps in Toss `send-bulk-message` path, the Devvit bulk `enqueue` and opted-in page helper in `@mpgd/adapter-devvit`, and the Worker's `deliverNotificationBulk` binding method | One provider call per recipient |
+| DB1 | D1 statement batching for the Worker's bulk sends (`runWithD1Batching`), `NotificationBulkDeliverOptions.concurrency` in `@mpgd/game-services`, and the Worker's bulk limits raised to 2,500 attempts | About 50 recipients per Worker bulk call |
 
 **What S1 landed.**
 
@@ -3179,8 +3180,10 @@ announcements and event pushes.
     - `accepted` when one channel's sent count equals the recipients (the
       kit reads a channel as reaching a recipient at most once per message,
       which the documentation does not state), or when the channels' sent
-      counts add up to exactly the recipients (read as each recipient
-      reached on at most one channel per message, also not stated);
+      counts add up to exactly the recipients (each recipient is reached on
+      at most one channel per message: the project maintainer confirmed
+      this on 2026-11-01, though Apps in Toss's public documentation does
+      not state it; see What DB1 landed);
     - `rejected` (`recipient`) when every count is zero;
     - otherwise `ambiguous` with `unattributed` (`BULK_PARTIAL`).
     - A failure of the whole call maps as for `send-message`, except that
@@ -3217,15 +3220,148 @@ announcements and event pushes.
   by one otherwise. With account-deletion tombstones bound, which add a
   query to each new send and delivery record, the defaults are 45 and 50,
   below the Apps in Toss minimum. Raising either number needs the ledger's
-  D1 queries batched (`db.batch`), a follow-up. Devvit's backend bridge serves no bulk
+  D1 queries batched (`db.batch`), a follow-up. DB1 did that and raised
+  these defaults to 2,500 attempts and 3,000 keys (see What DB1 landed). Devvit's backend bridge serves no bulk
   method.
 - **Left to follow-ups.**
   - Batching the ledger's D1 queries (`db.batch`), so one Worker call can
     prepare more than about 50 deliveries under D1's 1,000 queries per
-    invocation.
+    invocation. Done in DB1.
   - A live run against the Apps in Toss bulk API and Devvit with the
     user's accounts.
   - Confirmation from Apps in Toss of how its counts relate to recipients.
+    DB1 records the project maintainer's confirmation of the one-channel
+    reading; the one-message-per-channel reading stays unconfirmed.
+
+**What DB1 landed.** DB1 is the follow-up BK1 left: a Worker bulk call
+reaches the Apps in Toss batch sizes on D1.
+
+- **Why.** BK1's ledger made each recipient's D1 statements one query at
+  a time: about 19 per allowed recipient (measured: 856 queries for 45
+  single sends with account-deletion tombstones bound). Under D1's 1,000
+  queries per Worker invocation (Workers Paid), the Worker attempted 50
+  recipients a call, or 45 with tombstones, below the Apps in Toss bulk
+  minimum of 50.
+- **D1 statement batching** (`apps/game-services-worker/src/d1Batching.ts`).
+  D1 counts a `db.batch()` as one query against that limit, whatever its
+  statement count ([D1 limits](https://developers.cloudflare.com/d1/platform/limits/),
+  checked 2026-11-01). Inside `runWithD1Batching`, the Worker's D1 store and
+  its tombstone reads queue each statement instead of sending it, and the
+  statements the call's concurrent recipients queued side by side go in one
+  `db.batch()`:
+  - **Contract.** The store port and the D1 store's statements are
+    unchanged, so every per-recipient write keeps its own condition (a
+    send's version, `ON CONFLICT DO NOTHING`) and its own answer, and the
+    memory and Devvit Redis stores are untouched. A store's own
+    `db.batch()` (an endpoint write, a pruning) is queued as one group and
+    never split.
+  - **Order.** Statements run in the order queued, one batch after the
+    other. Each caller has one statement or group waiting at a time, so a
+    batch is one serial order of calls that could have run concurrently
+    anyway.
+  - **When a batch goes.** Once a timer turn passes with nothing new queued
+    and no outside call (identity lookup, provider call, copy lookup) in
+    flight, and at the latest 500 ms after its first statement. At most 500
+    statements a `db.batch()`: D1 documents no statement count per batch,
+    but a batch must finish within the 30-second query duration, and each
+    statement keeps the 100 KB and 100-bound-parameter limits, which the
+    store already respects.
+  - **A failing statement.** A batch is one SQL transaction, so a failing
+    statement rolls back the whole batch. A SQL error (a constraint, a type,
+    a statement D1 refuses) runs the batch again in halves until the
+    failing caller's statement is alone: only that caller gets the error,
+    and every other statement runs once, as it would have alone. The halving
+    spends at most 64 queries a call. Past that, a failed batch's callers
+    run one by one while the call has used under 600 of its queries (the
+    900 less a batch's reserve), each with its own answer. Past both, no
+    caller can be singled out, so each gets a retryable
+    `D1BatchAbortedError` that names no statement, as any store failure is
+    handled (a retryable failure before the provider call, a recipient left
+    in flight after it), never another
+    recipient's SQL error. Any other
+    failure (D1 unreachable, full, busy, or read-only, a timeout, a reset)
+    fails every caller in the batch, as their own calls would have failed,
+    and is never run again, since it may have been applied.
+  - **Failure domain.** Such a failure now reaches a whole batch of
+    callers (up to 500 statements) where it used to reach the calls in
+    flight at that moment. On a settle after an accepted provider call,
+    each recipient of the batch then stays in flight under its claim and
+    is replayed as an ambiguous send after its lease, as one recipient's
+    failed settle already was: a provider without an idempotency key may
+    show those recipients the message twice. The kit accepts this for the
+    query budget; a D1 write that fails mid-flight is rare.
+- **`NotificationBulkDeliverOptions.concurrency`** (`@mpgd/game-services`,
+  8 by default). The recipients of a batch whose ledger and gate work runs
+  at once. The Worker on D1 sets it to the call's lookups, so each step of
+  a batch (the key reads, the new keys, the gate inputs, the planned rows,
+  the claims, the history, the settles) is one round trip for the whole
+  batch. Single provider calls (a batch under the minimum, the hold
+  window, a provider without a bulk path) stay at most 8 at a time. Each
+  runs the gate again as its call starts, as a batch call does: a
+  recipient whose gate inputs grew older than 30 seconds while it waited,
+  or whose claim has less than half a lease left, answers `not-sent`, and
+  its row is replayed with fresh reads.
+- **The Worker's bulk limits** (`workerNotificationBulkLimits`). On D1,
+  `MPGD_NOTIFICATIONS_BULK_RECIPIENTS` attempts (2,500 by default, the Apps
+  in Toss maximum, also the ceiling: a larger value is lowered to it), the
+  keys of 1.2 times as many recipients (3,000), and that many recipients
+  worked on at once. Measured on local D1 (miniflare) with tombstones
+  bound, one call of 2,500 Apps in Toss recipients:
+  - **One `send-bulk-message` call:** 96 D1 queries (47,501 statements, at
+    most 500 a batch); before DB1 a call of 45 single sends made 856.
+  - **The same call retried:** 5 queries, every recipient answered from the
+    ledger.
+  - **A partial answer** (every recipient `unattributed`): 86 queries.
+  - **Two deleted players and ten without a Toss user** among the 2,500:
+    97 queries, each refused recipient with its own answer.
+  - **Inside the hold window,** 2,500 single `send-message` calls: 96
+    queries, with a partner API that answers at once.
+  - **Throughput one by one.** Single calls run 8 at a time, and a
+    recipient whose turn comes more than 30 seconds after its gate check
+    is left for later (`not-sent`). So inside the hold window a call sends
+    about 8 × 30 s ÷ the call's latency: all 2,500 at 60 ms a call, about
+    1,600 at 150 ms (measured with a delayed fake). The rest stay in
+    flight, unclaimed, and the scheduler or the same call retried sends
+    them.
+  - **Budget.** A batch of n recipients makes about 19 batched steps of
+    ⌈n / 500⌉ queries each (about 100 for 2,500). Single provider calls add
+    about one query per 500 ms while they run (an estimate, measured at
+    106 to 117 queries with 5 to 60 ms calls, not a bound the code
+    enforces), and the 30-second gate
+    freshness ends the calls a batch starts within about 30 seconds plus
+    the provider timeout (at most 60 seconds on Apps in Toss): at most 180
+    more. So the Worker starts a batch of a bulk call only while 300 of its
+    900 queries are left (`workerNotificationBulkBatchQueryReserve`,
+    `workerNotificationBulkQueryBudget`), under D1's 1,000.
+  - **Device rounds.** A player's devices (FCM) are sent one round after
+    the other, and a round's statements batch only across players, so a
+    player with many devices makes about 10 queries a round. The call's
+    budget (`budgetMs`, and on the Worker the query reserve) now also stops
+    a further round: the devices left stay queued, unclaimed, and the
+    scheduler sends them, as a device over the attempt budget already
+    did.
+  - **Other subrequests.** A call makes one identity lookup per recipient
+    read and one per recipient attempted (5,000 for 2,500 recipients; at
+    most 5,500), and inside the hold window one partner call per recipient:
+    with the D1 queries about 8,100 at most, under the 10,000 subrequests
+    of Workers Paid (the docs do not say whether a service binding call
+    counts as one; the Worker assumes it does).
+  - **Time.** The CPU of a 2,500-recipient call is spent on the gate,
+    JSON, and the HMACs of the tombstone reads; on local Node it took about
+    2 seconds of wall time with the D1 batches, far under the 30-second CPU
+    default of Workers Paid. A service-binding call has no wall-clock limit
+    while its caller waits; the 15-minute limit applies to cron and queue
+    invocations, which do not serve bulk sends.
+- **Apps in Toss counts.** The project maintainer confirmed on 2026-11-01
+  that Apps in Toss reaches each recipient of a message on at most one
+  channel, so per-channel sent counts that add up to exactly the
+  recipients mean each was reached once. Apps in Toss's public
+  documentation does not state it. That a channel reaches a recipient at
+  most once per message stays the kit's own reading.
+- **Left to follow-ups.** A live run of a 2,500-recipient bulk call against
+  the Apps in Toss partner API and production D1 with the user's
+  accounts, to confirm the query count, CPU time, and identity-lookup
+  latency the local run measured.
 
 All of N1–C1 is the first release wave. Releases follow N3, S2, and C1. The
 v1 adapter and the deprecated delivery aliases go away in the major release

@@ -59,7 +59,12 @@ export interface NotificationBulkDeliverInput {
 
 /** What the host that serves `deliverBulk` bounds a call by. */
 export interface NotificationBulkDeliverOptions {
-  /** Wall time after which no further batch starts; 20 seconds by default. */
+  /**
+   * Wall time after which no further batch starts, nor a further round of a
+   * player's device rows (a player's second device and on, sent one round
+   * after the other); 20 seconds by default. A device row left is queued,
+   * and the scheduler sends it.
+   */
   readonly budgetMs?: number;
   /**
    * Deliveries one call attempts at most (sends it makes or replays, one
@@ -75,6 +80,17 @@ export interface NotificationBulkDeliverOptions {
    * retry, which `maxRecipients` does not.
    */
   readonly maxLookups?: number;
+  /**
+   * Recipients of a batch whose ledger reads and writes and gate checks run
+   * at once; 8 by default. A host whose store batches the calls made side by
+   * side into one round trip (the game-services Worker on D1) raises it to
+   * the batch size, so each step of a batch is one round trip. Provider
+   * calls made one by one stay at most 8 at a time whatever it says, and
+   * each runs the gate again as it starts: a recipient whose gate inputs
+   * grew older than 30 seconds while it waited for its turn answers
+   * `not-sent` and is replayed with fresh reads, as in a batch call.
+   */
+  readonly concurrency?: number;
 }
 
 /** Why a recipient was not attempted in this call; the same call retried attempts it. */

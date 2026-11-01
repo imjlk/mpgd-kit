@@ -1895,21 +1895,36 @@ try {
     [55, 5, { batch: 0, single: 5 }],
   );
   assert.ok(bulkCalls.every((partnerCall) => partnerCall.url.endsWith('/send-message')));
-  // On D1 the bulk bounds never pass the D1 query budget; another store takes the setting.
+  // On D1 the bulk bounds stop at the Apps in Toss maximum of 2,500 attempts, with every recipient of a
+  // batch worked on at once so its statements share D1 batches; another store takes the setting.
+  assert.deepEqual(workerNotificationBulkLimits({ MPGD_STORE: 'd1' }), {
+    maxRecipients: 2_500,
+    maxLookups: 3_000,
+    concurrency: 3_000,
+  });
   assert.deepEqual(
-    workerNotificationBulkLimits({ MPGD_STORE: 'd1', MPGD_NOTIFICATIONS_BULK_RECIPIENTS: '500' }),
-    { maxRecipients: 50, maxLookups: 60 },
+    workerNotificationBulkLimits({ MPGD_STORE: 'd1', MPGD_NOTIFICATIONS_BULK_RECIPIENTS: '5000' }),
+    { maxRecipients: 2_500, maxLookups: 3_000, concurrency: 3_000 },
   );
   assert.deepEqual(
     workerNotificationBulkLimits({ MPGD_STORE: 'd1', MPGD_NOTIFICATIONS_BULK_RECIPIENTS: '20' }),
-    { maxRecipients: 20, maxLookups: 24 },
+    { maxRecipients: 20, maxLookups: 24, concurrency: 24 },
   );
+  for (const ignored of ['0', '-3', '2.5', 'many', '']) {
+    assert.deepEqual(
+      workerNotificationBulkLimits({
+        MPGD_STORE: 'd1',
+        MPGD_NOTIFICATIONS_BULK_RECIPIENTS: ignored,
+      }),
+      { maxRecipients: 2_500, maxLookups: 3_000, concurrency: 3_000 },
+    );
+  }
   assert.deepEqual(
     workerNotificationBulkLimits({
       MPGD_STORE: 'memory',
-      MPGD_NOTIFICATIONS_BULK_RECIPIENTS: '500',
+      MPGD_NOTIFICATIONS_BULK_RECIPIENTS: '5000',
     }),
-    { maxRecipients: 500, maxLookups: 600 },
+    { maxRecipients: 5_000, maxLookups: 6_000 },
   );
   // A malformed bulk send keeps its code across the binding.
   assert.deepEqual(
