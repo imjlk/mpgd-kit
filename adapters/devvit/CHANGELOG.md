@@ -1,5 +1,15 @@
 # @mpgd/adapter-devvit
 
+## 0.15.0 — 2026-11-01
+
+### Added
+
+- [86bd62a3](https://github.com/imjlk/mpgd-kit/commit/86bd62a33a74ad82cf40686e8fe50c25ced5919b) Add bulk notification sends (notifications v2 RFC open question 5). `NotificationService.deliverBulk(input, options)` in `@mpgd/game-services/notifications` sends one topic to many players through one provider: each player is a single send with its own key (`<idempotencyKey>:<encodeURIComponent(player)>`), ledger row, policy-gate check, and answer, and the provider gets shared calls. A delivery provider declares a bulk path with `bulk` (`NotificationRemoteBulkCapability`: `maxRecipients`, `minRecipients`, `perRecipientOutcomes`, `holdWindow`) and `sendBatch`; one without it keeps sending one recipient per call. A retry of the same call answers players already sent from the ledger, and players over the call's time or recipient budget, or over the provider's `rate`, answer `not-attempted` and leave nothing behind. A bulk answer that proves only that some recipients were reached is `ambiguous` with `unattributed`: the row stays in flight and is never replayed, so no player gets the message twice. A request a batch made no call for answers `not-sent` and is replayed shortly, without the rate-limit backoff. The scheduler replays due rows of a bulk provider together through `sendBatch`. The Apps in Toss functional-message provider sends 50 to 2,500 recipients through `send-bulk-message` (one by one below 50 and from 21:00 to 08:00 Seoul time, when the host would hold a bulk message). In `@mpgd/adapter-devvit/server`, the Devvit provider batches up to 1,000 recipients per `enqueue` and maps Devvit's per-user errors and counts per recipient, and `runDevvitNotificationBulkPage` sends one `listOptedInUsers` page through `deliverBulk` with the kit's gate still deciding each user. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/bridge@0.19.1, @mpgd/game-services@0.35.0, @mpgd/platform@0.36.0
+
 ## 0.14.12 — 2026-11-01
 
 ### Fixed
