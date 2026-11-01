@@ -6,6 +6,7 @@ import { Miniflare } from 'miniflare';
 
 import {
   batchingDatabase,
+  D1BatchAbortedError,
   d1BatchMaxIsolationQueries,
   d1BatchMaxStatements,
   d1BatchMaxWaitMs,
@@ -99,18 +100,60 @@ try {
     assert.ok(stats.queries > 1 && stats.queries <= 9, String(stats.queries));
   }
 
-  // An error every caller hits (here, each insert breaks the CHECK) is isolated only up to the
-  // scope's cap; the callers still left then fail at once instead of spending the invocation.
+  // An error every caller hits (here, each insert breaks the CHECK) is halved only up to the
+  // scope's cap, then run one by one only within the scope's query limit: the invocation's
+  // queries are never all spent on it, and every caller fails.
   {
-    const { value, stats } = await runWithD1Batching(async () =>
-      Promise.allSettled(
-        Array.from({ length: 400 }, (_, index) =>
-          db.prepare('INSERT INTO items (id, version, value) VALUES (?, 1, ?)').bind(`bad-${index}`, 'bad').run(),
+    const maxQueries = 1 + d1BatchMaxIsolationQueries;
+    const { value, stats } = await runWithD1Batching(
+      async () =>
+        Promise.allSettled(
+          Array.from({ length: 400 }, (_, index) =>
+            db.prepare('INSERT INTO items (id, version, value) VALUES (?, 1, ?)').bind(`bad-${index}`, 'bad').run(),
+          ),
         ),
-      ),
+      { maxQueries },
     );
     assert.ok(value.every((settled) => settled.status === 'rejected'));
-    assert.ok(stats.queries <= 1 + d1BatchMaxIsolationQueries, String(stats.queries));
+    assert.ok(stats.queries <= maxQueries, String(stats.queries));
+  }
+
+  // Past the halving budget, a failed batch's callers run one by one while the scope's
+  // query limit allows: the failing caller gets its own error, the others their answers.
+  // Past that limit too, nobody can be singled out, and no innocent caller gets another's
+  // SQL error: each gets a retryable D1BatchAbortedError.
+  for (const maxQueries of [Number.POSITIVE_INFINITY, 1 + d1BatchMaxIsolationQueries + 2]) {
+    const { value } = await runWithD1Batching(async () => {
+      // Spend the halving budget on callers that all fail alike.
+      await Promise.allSettled(
+        Array.from({ length: 400 }, (_, index) =>
+          db.prepare('INSERT INTO items (id, version, value) VALUES (?, 1, ?)').bind(`spent-${index}`, 'bad').run()),
+      );
+      return Promise.allSettled([
+        db.prepare('INSERT INTO items (id, version, value) VALUES (?, 1, ?)').bind('a', 'x').run(),
+        db.prepare('SELECT ? AS n').bind(7).first<{ readonly n: number }>(),
+        db.prepare('INSERT INTO items (id, version, value) VALUES (?, 1, ?)').bind(`innocent-${maxQueries}`, 'x').run(),
+      ]);
+    }, { maxQueries });
+    const [failing, read, write] = value;
+    assert.equal(failing.status, 'rejected');
+    assert.equal(read.status === 'rejected', write.status === 'rejected');
+    if (maxQueries === Number.POSITIVE_INFINITY) {
+      assert.match(String((failing as PromiseRejectedResult).reason), /UNIQUE constraint failed/u);
+      assert.deepEqual(read.status === 'fulfilled' ? read.value : undefined, { n: 7 });
+      assert.equal(write.status, 'fulfilled');
+    } else {
+      for (const settled of value) {
+        const reason = (settled as PromiseRejectedResult).reason as D1BatchAbortedError;
+        assert.ok(reason instanceof D1BatchAbortedError);
+        assert.equal(reason.retryable, true);
+        assert.doesNotMatch(reason.message, /constraint/u);
+      }
+      assert.equal(
+        await bridged.db.prepare('SELECT id FROM items WHERE id = ?').bind(`innocent-${maxQueries}`).first(),
+        null,
+      );
+    }
   }
 
   // Any other failure (D1 unreachable) fails every caller once and is not run again: it may have been applied.

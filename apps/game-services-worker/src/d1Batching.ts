@@ -34,15 +34,37 @@ import { AsyncLocalStorage } from 'node:async_hooks';
  *   statement D1 refuses) is run again in halves until the failing caller's
  *   statement is alone, and only that caller gets the error; the others'
  *   statements run as they would have alone. The halving makes at most
- *   `d1BatchMaxIsolationQueries` queries in a scope: an error that many
- *   callers hit (a missing column) fails the callers still left in its
- *   batch at once rather than spend the invocation's queries. Any other
+ *   `d1BatchMaxIsolationQueries` queries in a scope. Past that, a failed
+ *   batch's callers run one by one while the scope stays within its
+ *   `maxQueries` (which also bounds the halving), so each still gets its
+ *   own answer. Past both, nobody can
+ *   tell which caller's statement failed, so every caller of that batch
+ *   gets a `D1BatchAbortedError` (retryable, naming no statement), never
+ *   another caller's SQL error. Any other
  *   failure (the database unreachable, full, busy, or read-only, a
  *   timeout, a reset) fails every caller in the batch, as each of their
  *   own calls would have failed, and is never retried: the batch may have
  *   been applied. So one such failure reaches up to a whole batch of
  *   callers, where it used to reach the calls in flight at that moment.
  */
+
+/**
+ * A caller whose statement was in a batch that failed on a statement the
+ * batching could no longer single out: its own statement was rolled back
+ * and may be fine, so the call can be made again.
+ */
+export class D1BatchAbortedError extends Error {
+  readonly code = 'D1_BATCH_ABORTED';
+  readonly retryable = true;
+
+  constructor(options?: { readonly cause?: unknown }) {
+    super(
+      'A D1 batch this statement shared failed on another statement; nothing in it was applied. Retry.',
+      options,
+    );
+    this.name = 'D1BatchAbortedError';
+  }
+}
 
 /** Statements one `db.batch()` carries at most. */
 export const d1BatchMaxStatements = 500;
@@ -79,6 +101,10 @@ interface Scope {
   statements: number;
   largestBatch: number;
   isolationQueries: number;
+  /** Halves a failed batch was split into that have not run yet. */
+  isolationPending: number;
+  /** Queries the scope may reach by running a failed batch's callers one by one. */
+  readonly maxQueries: number;
 }
 
 const scopes = new AsyncLocalStorage<Scope>();
@@ -89,14 +115,23 @@ const scopes = new AsyncLocalStorage<Scope>();
  */
 export async function runWithD1Batching<Value>(
   work: () => Promise<Value>,
+  options: {
+    /**
+     * Queries the scope may reach by running a failed batch's callers one
+     * by one once the halving budget is spent; unbounded by default.
+     */
+    readonly maxQueries?: number;
+  } = {},
 ): Promise<{ readonly value: Value; readonly stats: D1BatchingStats }> {
   const scope: Scope = {
+    maxQueries: options.maxQueries ?? Number.POSITIVE_INFINITY,
     batchers: new Map(),
     external: 0,
     queries: 0,
     statements: 0,
     largestBatch: 0,
     isolationQueries: 0,
+    isolationPending: 0,
   };
   const value = await scopes.run(scope, work);
   return {
@@ -280,7 +315,10 @@ function createBatcher(scope: Scope, db: D1Database): Batcher {
       await runChunk(chunk);
     }
   }
-  async function runChunk(chunk: readonly Entry[]): Promise<void> {
+  async function runChunk(chunk: readonly Entry[], isolating = false): Promise<void> {
+    if (isolating) {
+      scope.isolationPending -= 1;
+    }
     const statements = chunk.flatMap((entry) => entry.statements);
     let results: readonly D1Result[];
     scope.queries += 1;
@@ -293,12 +331,30 @@ function createBatcher(scope: Scope, db: D1Database): Batcher {
         chunk.length > 1
         && isStatementError(error)
         && scope.isolationQueries + 2 <= d1BatchMaxIsolationQueries
+        && scope.queries + scope.isolationPending + 2 <= scope.maxQueries
       ) {
         // The transaction rolled back: nothing ran. Halves isolate the failing caller.
         scope.isolationQueries += 2;
+        scope.isolationPending += 2;
         const middle = Math.ceil(chunk.length / 2);
-        await runChunk(chunk.slice(0, middle));
-        await runChunk(chunk.slice(middle));
+        await runChunk(chunk.slice(0, middle), true);
+        await runChunk(chunk.slice(middle), true);
+        return;
+      }
+      if (chunk.length > 1 && isStatementError(error)) {
+        if (scope.queries + scope.isolationPending + chunk.length <= scope.maxQueries) {
+          // The halving budget is spent: each caller alone, so each gets its own answer.
+          scope.isolationPending += chunk.length;
+          for (const entry of chunk) {
+            await runChunk([entry], true);
+          }
+          return;
+        }
+        // No caller can be singled out: none gets another caller's SQL error.
+        const aborted = new D1BatchAbortedError({ cause: error });
+        for (const entry of chunk) {
+          entry.reject(aborted);
+        }
         return;
       }
       for (const entry of chunk) {

@@ -3271,8 +3271,14 @@ reaches the Apps in Toss batch sizes on D1.
     a statement D1 refuses) runs the batch again in halves until the
     failing caller's statement is alone: only that caller gets the error,
     and every other statement runs once, as it would have alone. The halving
-    spends at most 64 queries a call: an error many callers hit (a missing
-    column) then fails the callers left in its batch at once. Any other
+    spends at most 64 queries a call. Past that, a failed batch's callers
+    run one by one while the call has used under 600 of its queries (the
+    900 less a batch's reserve), each with its own answer. Past both, no
+    caller can be singled out, so each gets a retryable
+    `D1BatchAbortedError` that names no statement, as any store failure is
+    handled (a retryable failure before the provider call, a recipient left
+    in flight after it), never another
+    recipient's SQL error. Any other
     failure (D1 unreachable, full, busy, or read-only, a timeout, a reset)
     fails every caller in the batch, as their own calls would have failed,
     and is never run again, since it may have been applied.

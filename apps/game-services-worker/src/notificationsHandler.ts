@@ -950,7 +950,10 @@ export async function deliverWorkerNotificationBulk(
   if (env.MPGD_STORE !== 'd1') {
     return service.deliverBulk(input, limits);
   }
-  return (await runWithD1Batching(() => service.deliverBulk(input, limits))).value;
+  // A failed batch's callers run one by one only while the batch in progress keeps its reserve.
+  return (await runWithD1Batching(() => service.deliverBulk(input, limits), {
+    maxQueries: workerNotificationBulkQueryBudget - workerNotificationBulkBatchQueryReserve,
+  })).value;
 }
 
 /**
