@@ -977,6 +977,13 @@ assert.deepEqual(
   }).map((issue) => issue.split(':')[0]),
   ['deployment.consentRefresh'],
 );
+// The refresh is checked without an advertising topic too.
+assert.deepEqual(
+  issuesOf(catalogWith(baseTopic), { ...krDeployment, consentRefresh: yearlyPolicy }).map(
+    (issue) => issue.split(':')[0],
+  ),
+  ['deployment.consentRefresh'],
+);
 const noExpiry: NotificationProviderRegistryEntry = {
   ...referenceNotificationProviders.fcm,
   expiry: false,

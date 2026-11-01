@@ -525,13 +525,23 @@ function noticeTopicIssues(
   return issues;
 }
 
-/** The deployment settings an advertising topic needs. */
+/** The deployment's consent refresh, and the settings an advertising topic needs. */
 function deploymentIssues(
   catalog: NotificationTopicCatalogShape,
   deployment: NotificationDeployment | undefined,
   targetProviders: Readonly<Record<string, NotificationProviderRegistryEntry>>,
 ): NotificationTopicCatalogIssue[] {
   const issues: NotificationTopicCatalogIssue[] = [];
+  // The refresh itself is checked with or without an advertising topic.
+  const kr = deployment?.advertisingRules === 'kr';
+  if (kr && deployment?.consentRefresh !== undefined) {
+    issues.push({
+      path: 'deployment.consentRefresh',
+      message: 'the Korean rules fix the consent refresh (every two years, pausing advertising once overdue); leave consentRefresh out under kr',
+    });
+  } else if (deployment?.consentRefresh !== undefined) {
+    issues.push(...notificationConsentRefreshIssues(deployment.consentRefresh));
+  }
   if (!catalog.topics.some((topic) => topic.purpose === 'advertising')) {
     return issues;
   }
@@ -541,15 +551,6 @@ function deploymentIssues(
       message: "a catalog with an advertising topic needs the deployment's advertisingRules: 'kr' or 'none'",
     });
     return issues;
-  }
-  const kr = deployment.advertisingRules === 'kr';
-  if (kr && deployment.consentRefresh !== undefined) {
-    issues.push({
-      path: 'deployment.consentRefresh',
-      message: 'the Korean rules fix the consent refresh (every two years, pausing advertising once overdue); leave consentRefresh out under kr',
-    });
-  } else if (deployment.consentRefresh !== undefined) {
-    issues.push(...notificationConsentRefreshIssues(deployment.consentRefresh));
   }
   const refreshes = !kr
     && notificationRefreshedConsentKinds.some((kind) => deployment.consentRefresh?.[kind] !== undefined);

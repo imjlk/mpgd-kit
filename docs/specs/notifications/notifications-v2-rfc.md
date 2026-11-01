@@ -1383,6 +1383,9 @@ dates, as for every notice, whatever the deployment's zone.
     the expiry at the next 21:00).
   - The pause holds whether or not the push reached the player, and the kit
     collects no other contact to reach them.
+  - Only the Korean rules have a night window, so outside them a `night`
+    rule lists and pushes its re-confirmations but its pause changes no
+    send.
 - **Why night pauses only night-time advertising.** Night consent is an
   addition to advertising consent (§50③; see
   [Advertising rules](#advertising-rules)): advertising outside the window
