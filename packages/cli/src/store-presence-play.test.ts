@@ -1133,6 +1133,58 @@ assert.equal(
     );
     assert.deepEqual(unknown.warnings, []);
     assert.match(unknown.notes.join('\n'), /no default language/u);
+    const blank = await planPlayPresence(
+      input(fixture, onlyEnglish({})),
+      fakePlay({
+        listings: new Map([['en-US', { ...englishListing }]]),
+        details: { defaultLanguage: '' },
+      }).port,
+    );
+    assert.deepEqual(blank.warnings, [], 'an empty default language is no default language');
+    assert.match(blank.notes.join('\n'), /no default language/u);
+    assert.doesNotMatch(blank.notes.join('\n'), /default language +is not in the file/u);
+
+    // A failed read for the warnings is a note; the plan is still made. A cancelled read is not swallowed.
+    const flaky = playWith(complete);
+    const failing = (error: Error): PlayStoreListingPort => ({
+      ...flaky.port,
+      listImages: async (target) => {
+        if (target.imageType === 'featureGraphic') {
+          throw error;
+        }
+        return flaky.port.listImages(target);
+      },
+    });
+    const unread = await planPlayPresence(
+      input(fixture, onlyEnglish({ phoneScreenshots: ['store/phone-1.png'] })),
+      failing(new Error('Play answered 503')),
+    );
+    assert.deepEqual(unread.warnings, []);
+    assert.match(
+      unread.notes.join('\n'),
+      /Play's en-US images could not be read \(Play answered 503\), so the listing's publishing graphics were not checked/u,
+    );
+    const abort = new Error('The operation was aborted');
+    abort.name = 'AbortError';
+    await assert.rejects(
+      planPlayPresence(
+        input(fixture, onlyEnglish({ phoneScreenshots: ['store/phone-1.png'] })),
+        failing(abort),
+      ),
+      /aborted/u,
+    );
+    const controller = new AbortController();
+    controller.abort();
+    await assert.rejects(
+      planPlayPresence(
+        {
+          ...input(fixture, onlyEnglish({ phoneScreenshots: ['store/phone-1.png'] })),
+          signal: controller.signal,
+        },
+        failing(new Error('Play answered 503')),
+      ),
+      /503/u,
+    );
 
     // Printed, carried by --json, and never block apply.
     const play = playWith({});

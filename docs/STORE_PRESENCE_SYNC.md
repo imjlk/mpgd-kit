@@ -220,7 +220,8 @@ shows the default language's
 ([Translate and localize your app](https://support.google.com/googleplay/android-developer/answer/9844778)).
 Warnings never block `apply`, and they are not part of the plan's stale
 check: `apply` does not compute them. When Play reports no default language,
-the plan notes that nothing was checked. The App Store side is checked by `mpgd store release plan`, which
+or reading its images for the check fails, the plan notes that nothing was
+checked (with the reason) and is still made. The App Store side is checked by `mpgd store release plan`, which
 blocks a submission without the iPhone (and, for a universal app, the
 13-inch iPad) screenshots ([App Store releases](./APP_STORE_RELEASES.md)).
 

@@ -242,7 +242,8 @@ async function planInEdit(
     .filter((language) => !named.has(language.toLowerCase()))
     .sort();
 
-  const defaultLanguage = typeof details.defaultLanguage === 'string'
+  // An empty value is no default language.
+  const defaultLanguage = typeof details.defaultLanguage === 'string' && details.defaultLanguage.trim() !== ''
     ? details.defaultLanguage
     : undefined;
   if (defaultLanguage !== undefined && !named.has(defaultLanguage.toLowerCase())) {
@@ -256,16 +257,29 @@ async function planInEdit(
       "Play reports no default language, so the listing's publishing graphics were not checked.",
     );
   }
-  const warnings = !checkPublishing || defaultLanguage === undefined
-    ? []
-    : await publishingWarnings({
-      input,
-      editId,
-      port,
-      language: defaultLanguage,
-      remote: remoteByLanguage.get(defaultLanguage.toLowerCase()),
-      planned: planned.find((language) => language.language.toLowerCase() === defaultLanguage.toLowerCase()),
-    });
+  let warnings: string[] = [];
+  if (checkPublishing && defaultLanguage !== undefined) {
+    try {
+      warnings = await publishingWarnings({
+        input,
+        editId,
+        port,
+        language: defaultLanguage,
+        remote: remoteByLanguage.get(defaultLanguage.toLowerCase()),
+        planned: planned.find((language) => language.language.toLowerCase() === defaultLanguage.toLowerCase()),
+      });
+    } catch (error) {
+      // Warnings are advisory: a failed read leaves them unchecked, but a
+      // cancelled plan stays cancelled.
+      if (signal?.aborted === true || (error instanceof Error && error.name === 'AbortError')) {
+        throw error;
+      }
+      notes.push(
+        `Play's ${defaultLanguage} images could not be read (${error instanceof Error ? error.message : String(error)}), `
+        + "so the listing's publishing graphics were not checked.",
+      );
+    }
+  }
   const manual = manualSteps(input.presence);
   const imageRemovals = planned.reduce(
     (sum, language) => sum + language.images.reduce(
