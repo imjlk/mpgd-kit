@@ -5,7 +5,9 @@ import {
   readdirSync,
   readFileSync,
   readlinkSync,
+  statSync,
   writeFileSync,
+  type Stats,
 } from 'node:fs';
 import { join, relative } from 'node:path';
 
@@ -34,11 +36,17 @@ export const packageBuildToolchainFiles = [
 ] as const;
 
 /**
- * Gitignored native build output (SwiftPM `.build`, Gradle `build`) skipped at
- * any depth of a package's input. It is large, depends on local build state
- * and can hold symlinks that do not resolve.
+ * Gitignored native build output skipped at any depth of a package's input:
+ * a SwiftPM `.build` directory, and a Gradle module's `build` directory (one
+ * next to `build.gradle` or `build.gradle.kts`). It is large, depends on local
+ * build state and can hold symlinks that do not resolve. A `build` directory
+ * anywhere else (`src/build`) is source and stays in the input.
  */
-export const packageBuildOutputDirectories = ['.build', 'build'] as const;
+export function isPackageBuildOutputDirectory(parent: string, entry: string): boolean {
+  return entry === '.build'
+    || (entry === 'build'
+      && (existsSync(join(parent, 'build.gradle')) || existsSync(join(parent, 'build.gradle.kts'))));
+}
 
 export interface InputFingerprintOptions {
   /** Repository files whose content changes every package build. */
@@ -105,7 +113,7 @@ export function createInputFingerprints(
     const result = reusable
       ? hashParts([
           ...parts,
-          hashTree(workspacePackage.dir, ['dist'], packageBuildOutputDirectories),
+          hashTree(workspacePackage.dir, ['dist'], isPackageBuildOutputDirectory),
         ])
       : undefined;
     visiting.delete(name);
@@ -164,14 +172,16 @@ export function recordBuild(
 }
 
 /**
- * Hashes every file under root without following symlinks; a link contributes
- * its target string. `skip` names top-level entries to leave out and
- * `skipDirectories` names directories to leave out at any depth.
+ * Hashes every file under root. A symlink that resolves is read through, as a
+ * file or a directory, so a change to what it points at changes the hash; a
+ * symlink that does not resolve contributes its target string instead of
+ * failing the walk. `skip` names top-level entries to leave out and
+ * `skipDirectory` picks directories to leave out at any depth.
  */
 export function hashTree(
   root: string,
   skip: readonly string[] = [],
-  skipDirectories: readonly string[] = [],
+  skipDirectory: (parent: string, entry: string) => boolean = () => false,
 ): string {
   const parts: string[] = [];
   visit(root);
@@ -183,19 +193,25 @@ export function hashTree(
         continue;
       }
       const path = join(dir, entry);
-      const stats = lstatSync(path);
+      const relativePath = relative(root, path).split('\\').join('/');
+      let stats: Stats;
+      try {
+        stats = statSync(path);
+      } catch (error) {
+        if (lstatSync(path).isSymbolicLink()) {
+          // A link that does not resolve (SwiftPM leaves some in resource bundles).
+          parts.push(`${relativePath}\0link\0${readlinkSync(path)}`);
+          continue;
+        }
+        throw error;
+      }
       if (stats.isDirectory()) {
-        if (!skipDirectories.includes(entry)) {
+        if (!skipDirectory(dir, entry)) {
           visit(path);
         }
         continue;
       }
-      const relativePath = relative(root, path).split('\\').join('/');
-      parts.push(
-        stats.isSymbolicLink()
-          ? `${relativePath}\0link\0${readlinkSync(path)}`
-          : `${relativePath}\0${hashFile(path)}`,
-      );
+      parts.push(`${relativePath}\0${hashFile(path)}`);
     }
   }
 }

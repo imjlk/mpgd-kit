@@ -86,6 +86,9 @@ check('dist and node_modules do not affect the input fingerprint', () => {
 });
 
 check('native build output and dangling symlinks do not break the input fingerprint', () => {
+  // A Gradle module: its `build` directory is output.
+  mkdirSync(join(core.dir, 'android'), { recursive: true });
+  writeFileSync(join(core.dir, 'android', 'build.gradle'), 'plugins {}');
   const before = fingerprints()('@mpgd/core');
   // SwiftPM leaves a relative symlink in resource bundles that does not resolve.
   const bundle = join(core.dir, '.build', 'debug', 'OpenIAP_OpenIAP.bundle');
@@ -105,6 +108,36 @@ check('native build output and dangling symlinks do not break the input fingerpr
   assert.notEqual(fingerprints()('@mpgd/core'), linked, 'the link target is hashed');
   rmSync(sourceLink);
   assert.equal(fingerprints()('@mpgd/core'), before);
+  rmSync(join(core.dir, '.build'), { recursive: true });
+  rmSync(join(core.dir, 'android'), { recursive: true });
+});
+
+check('a build directory outside a Gradle module stays in the input', () => {
+  const before = fingerprints()('@mpgd/core');
+  mkdirSync(join(core.dir, 'src', 'build'), { recursive: true });
+  writeFileSync(join(core.dir, 'src', 'build', 'steps.ts'), 'export const steps = 1;');
+  const added = fingerprints()('@mpgd/core');
+  assert.notEqual(added, before, 'src/build is source');
+  writeFileSync(join(core.dir, 'src', 'build', 'steps.ts'), 'export const steps = 2;');
+  assert.notEqual(fingerprints()('@mpgd/core'), added, 'its content is hashed');
+  rmSync(join(core.dir, 'src', 'build'), { recursive: true });
+  assert.equal(fingerprints()('@mpgd/core'), before);
+});
+
+check('a symlink that resolves is hashed by what it points at', () => {
+  const shared = join(root, 'shared.ts');
+  writeFileSync(shared, 'export const shared = 1;');
+  const sourceLink = join(core.dir, 'src', 'shared.ts');
+  symlinkSync(shared, sourceLink);
+  const linked = fingerprints()('@mpgd/core');
+  writeFileSync(shared, 'export const shared = 2;');
+  assert.notEqual(
+    fingerprints()('@mpgd/core'),
+    linked,
+    'a change outside the package reaches through the link',
+  );
+  rmSync(sourceLink);
+  rmSync(shared);
 });
 
 check('toolchain changes invalidate every package', () => {
