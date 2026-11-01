@@ -790,6 +790,25 @@ assert.equal(defaultAitFunctionalMessageTimeoutMs, defaultAppsInTossPartnerApiTi
     ),
     [['ambiguous', 'BULK_COUNTS_DISAGREE', true]],
   );
+  // Without a count, only list entries that name their message count; one that does not is unattributed.
+  const listedOnly = (entries: readonly unknown[]): Response =>
+    json({
+      resultType: 'SUCCESS',
+      success: {
+        msgCount: entries.length,
+        detail: { ...emptyChannels, sentPush: entries },
+        fail: emptyChannels,
+      },
+    });
+  assert.deepEqual(
+    (await outcomes(listedOnly([{ contentId: 'a' }, { contentId: 'b' }, { contentId: 'c' }]))).map(
+      (answer) => answer[0],
+    ),
+    ['accepted'],
+  );
+  assert.deepEqual(await outcomes(listedOnly([{ contentId: 'a' }, {}, { contentId: 7 }])), [
+    ['ambiguous', 'BULK_COUNTS_DISAGREE', true],
+  ]);
   // A bulk answer over the single send's 256 KiB is still read (up to 4 MiB);
   // a 2xx answer that cannot be read is unattributed, never replayed.
   const big = 2_500;

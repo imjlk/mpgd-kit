@@ -826,6 +826,36 @@ const statuses = (result: NotificationBulkDeliveryResult) =>
   );
 }
 
+// A provider rate that cannot be read fails its recipient, retryable: the key is released and
+// the attempt goes back, so the next recipient is still sent.
+{
+  const fake = bulkProvider({ maxRecipients: 10, minRecipients: 2, perRecipientOutcomes: true });
+  let failOnce = true;
+  const { service, store } = await setup({
+    provider: fake.provider,
+    entry: { ...entry, rate: { count: 10, windowSeconds: 3_600 } },
+    players: players(2),
+    wrapStore: (inner) => ({
+      ...inner,
+      async countHistory(input) {
+        if (failOnce) {
+          failOnce = false;
+          throw new Error('D1 is unavailable.');
+        }
+        return inner.countHistory(input);
+      },
+    }),
+  });
+  const result = await service.deliverBulk(bulkInput('event-28', players(2), { batchSize: 1 }), {
+    maxRecipients: 1,
+  });
+  assert.deepEqual(statuses(result), [
+    ['p1', 'failed', 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE'],
+    ['p2', 'delivered', undefined],
+  ]);
+  assert.equal(await store.getSend('event-28:p1'), undefined);
+}
+
 // A copy outage for a locale only refused recipients use never fails the allowed ones.
 {
   const resolveCopy: NotificationCopyResolver = (input) => {

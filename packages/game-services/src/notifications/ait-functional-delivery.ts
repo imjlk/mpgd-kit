@@ -653,18 +653,30 @@ function readBulkSuccess(success: unknown, recipients: number): AitFunctionalMes
     friendtalk: 'sentFriendtalkCount',
   };
   const channelNames = Object.keys(channelFields) as AitFunctionalMessageChannel[];
+  /** A channel's sent list: its entries, and how many name their message (a string `contentId`). */
+  const listedOn = (channel: AitFunctionalMessageChannel): { readonly entries: number; readonly valid: number } | undefined => {
+    const listed = isRecord(detail) ? detail[channelFields[channel]] : undefined;
+    if (!Array.isArray(listed)) {
+      return undefined;
+    }
+    const valid = listed.filter((item) =>
+      isRecord(item) && typeof item['contentId'] === 'string' && item['contentId'].length > 0).length;
+    return { entries: listed.length, valid };
+  };
   const sentOn = (channel: AitFunctionalMessageChannel): number => {
     const counted = success[countFields[channel]];
-    const listed = isRecord(detail) ? detail[channelFields[channel]] : undefined;
-    return Math.max(isCount(counted) ? counted : 0, Array.isArray(listed) ? listed.length : 0);
+    return Math.max(isCount(counted) ? counted : 0, listedOn(channel)?.valid ?? 0);
   };
-  // A count and a list of sent messages that disagree prove nothing about
-  // who was reached. An empty list is a list the answer left out, and the
-  // count stands.
+  // A count and a list of sent messages that disagree, or a list entry that
+  // names no message, prove nothing about who was reached. An empty list is
+  // a list the answer left out, and the count stands.
   const disagree = (Object.keys(channelFields) as AitFunctionalMessageChannel[]).some((channel) => {
     const counted = success[countFields[channel]];
-    const listed = isRecord(detail) ? detail[channelFields[channel]] : undefined;
-    return isCount(counted) && Array.isArray(listed) && listed.length > 0 && listed.length !== counted;
+    const listed = listedOn(channel);
+    if (listed === undefined || listed.entries === 0) {
+      return false;
+    }
+    return listed.valid !== listed.entries || (isCount(counted) && listed.entries !== counted);
   });
   if (disagree) {
     return { status: 'ambiguous', providerCode: 'BULK_COUNTS_DISAGREE', unattributed: true };

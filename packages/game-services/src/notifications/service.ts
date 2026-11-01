@@ -3052,7 +3052,17 @@ export function createNotificationService(input: CreateNotificationServiceInput)
           over = 'count-budget';
         } else {
           work.left -= 1;
-          if (!await pace.take(provider)) {
+          let paced: boolean;
+          try {
+            paced = await pace.take(provider);
+          } catch (error) {
+            // The rate could not be read (the store failed): nothing was
+            // sent, so the attempt goes back and the key is released.
+            work.left += 1;
+            await releaseQuietly(key, version);
+            throw error;
+          }
+          if (!paced) {
             work.left += 1;
             over = 'provider-rate';
           }
@@ -3086,7 +3096,18 @@ export function createNotificationService(input: CreateNotificationServiceInput)
           break;
         }
         work.left -= 1;
-        if (!await pace.take(row.provider)) {
+        let paced = false;
+        try {
+          paced = await pace.take(row.provider);
+        } catch (error) {
+          // The device's row is stored: it stays queued for the scheduler.
+          report(error, 'deliverBulk.pace', {
+            sendKey: key,
+            provider: row.provider,
+            rowKey: row.key,
+          });
+        }
+        if (!paced) {
           work.left += 1;
           break;
         }
