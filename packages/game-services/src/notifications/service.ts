@@ -549,6 +549,8 @@ export function createNotificationService(input: CreateNotificationServiceInput)
   /** Whether an overdue re-confirmation pauses advertising (gate step 5), so an advertising send reads the notices given. */
   const refreshPauses = notificationRefreshedConsentKinds
     .some((kind) => noticePolicy?.refresh[kind]?.onOverdue === 'pause');
+  /** The notice policy a check settles under: a check settled under another one runs again at the next registration. */
+  const noticePolicyKey = JSON.stringify(noticePolicy ?? null);
   /** Whether the policy pushes any re-confirmation, so a registration may start a notice check. */
   const refreshPushes = notificationRefreshedConsentKinds
     .some((kind) => noticePolicy?.refresh[kind]?.pushLeadDays !== undefined);
@@ -2788,6 +2790,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       attempts,
       ...(stillFailed.length === 0 ? {} : { failed: stillFailed }),
       ...(pushed.length === 0 ? {} : { pushed }),
+      policy: noticePolicyKey,
     };
     // With nothing to look at again, a check that remembers failed pushes
     // stays without a due time, so they still fail once; a new record makes
@@ -2941,8 +2944,9 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     }
   };
   /**
-   * Whether a registration should start the player's notice check: the
-   * policy pushes re-confirmations, the player has none, and holds a consent
+   * Whether a registration should make the player's notice check due now:
+   * the policy pushes re-confirmations, and the player either has a check
+   * that last settled under another policy, or has none and holds a consent
    * the policy re-confirms. A consent written before the deployment added
    * its refresh made no check, so this is how its push gets scheduled for a
    * player who opens the game again; a player who never does gets none.
@@ -2951,8 +2955,11 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     if (!refreshPushes || !carriesNotices()) {
       return false;
     }
-    if (await store.getScheduleEntry({ player, id: noticesEntryId }) !== undefined) {
-      return false;
+    const held = await store.getScheduleEntry({ player, id: noticesEntryId });
+    if (held !== undefined) {
+      // A check settled under another policy (a changed interval or lead)
+      // runs again now, so its next push follows the current policy.
+      return held.entry.item.kind === 'notices' && held.entry.item.policy !== noticePolicyKey;
     }
     const records = await store.listConsent(player);
     return notificationRefreshedConsentKinds.some((kind) =>

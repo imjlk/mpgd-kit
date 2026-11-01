@@ -234,6 +234,11 @@ export interface NotificationNoticeCheck {
    * check while its notice is still owed was refused when it was sent.
    */
   readonly pushed?: readonly string[];
+  /**
+   * The notice policy the check last settled under, as the service names it;
+   * a registration makes a check settled under another policy due again.
+   */
+  readonly policy?: string;
 }
 
 export type NotificationScheduleItem = NotificationStoredReminder | NotificationNoticeCheck;

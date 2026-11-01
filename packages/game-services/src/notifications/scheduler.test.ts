@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 
 import {
+  notificationKoreanNoticePolicy,
   notificationNoticeVariants,
   referenceNotificationProviders,
   type NotificationDeliveryProviderEntry,
@@ -141,6 +142,8 @@ const kr: NotificationDeployment = {
   advertisingRules: 'kr',
   advertisingSender: { contact: '080-000-0000' },
 };
+/** The policy a check settles under the Korean rules. */
+const krPolicyKey = JSON.stringify(notificationKoreanNoticePolicy);
 
 interface Harness {
   readonly service: NotificationService;
@@ -755,13 +758,13 @@ const pending = (h: Harness) =>
   );
   assert.deepEqual(
     [check()?.dueAt, check()?.item],
-    ['2026-10-26T01:00:00Z', { kind: 'notices', attempts: 1 }],
+    ['2026-10-26T01:00:00Z', { kind: 'notices', attempts: 1, policy: krPolicyKey }],
   );
   h.time.set('2026-10-26T01:00:00Z');
   await h.service.runScheduler();
   assert.deepEqual(
     [check()?.dueAt, check()?.item],
-    ['2026-10-26T03:00:00Z', { kind: 'notices', attempts: 2 }],
+    ['2026-10-26T03:00:00Z', { kind: 'notices', attempts: 2, policy: krPolicyKey }],
   );
   for (let attempt = 0; attempt < 8; attempt += 1) {
     h.time.set(check()?.dueAt ?? '');
@@ -2610,6 +2613,47 @@ const pending = (h: Harness) =>
     { status: 'unavailable', reason: 'no-endpoint' },
   );
   assert.equal(reads - before, 0);
+}
+
+// CR1: a check settled under another refresh policy (a shorter interval) runs
+// again at the next registration, so its push follows the current policy.
+{
+  const shared = createInMemoryNotificationStore();
+  const refresh = (intervalMonths: number): NotificationDeployment => ({
+    advertisingRules: 'none',
+    consentRefresh: {
+      advertising: { intervalMonths, noticeLeadDays: 30, pushLeadDays: 3, onOverdue: 'pause' },
+    },
+  });
+  const longer = harness({
+    topics: [weekend, noticeTopic],
+    deployment: refresh(24),
+    notices: true,
+    store: () => shared,
+  });
+  await longer.service.recordConsent(session('p-1'), {
+    kind: 'advertising',
+    state: 'granted',
+    source: 'player',
+    textVersion: 'v1',
+  });
+  await longer.service.runScheduler();
+  const check = () => shared.inspect().schedule.find((entry) => entry.id === 'notices');
+  // Due by 2028-10-18, pushed from 2028-10-15 KST.
+  assert.equal(check()?.dueAt, '2028-10-14T15:00:00Z');
+  const shorter = harness({
+    topics: [weekend, noticeTopic],
+    deployment: refresh(12),
+    notices: true,
+    store: () => shared,
+  });
+  await register(shorter, 'p-1');
+  assert.equal(check()?.dueAt, '2026-10-19T03:00:00Z', 'due now under the new policy');
+  await shorter.service.runScheduler();
+  assert.equal(check()?.dueAt, '2027-10-14T15:00:00Z');
+  // Settled under the current policy, a registration leaves it as it is.
+  await register(shorter, 'p-1');
+  assert.equal(check()?.dueAt, '2027-10-14T15:00:00Z');
 }
 
 // CR1: a refresh added to a deployment after its players consented starts

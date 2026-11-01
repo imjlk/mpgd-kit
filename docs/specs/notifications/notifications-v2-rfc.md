@@ -1421,7 +1421,9 @@ dates, as for every notice, whatever the deployment's zone.
   pushed), so the player's push is scheduled once the game runs again. A
   player who never opens the game again gets no push: the store has no
   enumeration of consent holders to backfill, and the pause still applies
-  to them.
+  to them. A check that last settled under another policy (a changed
+  interval or lead) runs again at the player's next registration, so its
+  push follows the current policy.
 - **Reminders.** A server reminder's set-time check (steps 3 to 5) does not
   apply the pause: the player may record the notice before it fires. The
   gate applies it when the reminder fires.

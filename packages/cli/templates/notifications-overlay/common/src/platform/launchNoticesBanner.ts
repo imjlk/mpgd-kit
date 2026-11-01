@@ -60,19 +60,22 @@ export function mountStarterLaunchNotices(
   close.type = 'button';
   close.textContent = text.close;
   box.append(close);
-  // A notice counts as seen once most of it is on screen, the box's scroll
-  // clipping included. Without IntersectionObserver every notice counts as
-  // on screen, so it is seen while the page is visible.
+  // A notice counts as seen once most of it shows in the box (its scroll
+  // area, which stays on screen), or, for one taller than the box, once it
+  // fills most of the box. Without IntersectionObserver every notice counts
+  // as on screen, so it is seen while the page is visible.
   const observer = typeof IntersectionObserver === 'function'
-    ? new IntersectionObserver(
-        (entries) => {
-          for (const entry of entries) {
-            const index = Number((entry.target as HTMLElement).dataset['noticeIndex']);
-            visibility.intersecting(index, entry.isIntersecting && entry.intersectionRatio >= 0.6);
-          }
-        },
-        { threshold: [0, 0.6, 1] },
-      )
+    ? new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+          const index = Number((entry.target as HTMLElement).dataset['noticeIndex']);
+          const shown = entry.intersectionRect.height;
+          const area = entry.rootBounds?.height ?? 0;
+          visibility.intersecting(
+            index,
+            entry.isIntersecting && (entry.intersectionRatio >= 0.6 || (area > 0 && shown >= area * 0.6)),
+          );
+        }
+      }, { root: box, threshold: Array.from({ length: 21 }, (_, step) => step / 20) })
     : undefined;
   const onVisibilityChange = (): void => visibility.pageVisibilityChanged();
   document.addEventListener('visibilitychange', onVisibilityChange);
