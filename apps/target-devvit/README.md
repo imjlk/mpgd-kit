@@ -6,7 +6,7 @@
 
 Update the exact versions and lockfile, then rebuild and run target checks before retrying. The gate never installs dependencies between a verified build and upload. A reviewed root override can temporarily align an older published adapter's SDK; it must actually resolve to the current version and be recorded with the release. The pre-upload check cannot detect every other library's nested SDK or replace a compatible-build test.
 
-Devvit 0.15.0 is the tested baseline. Its exact first-party packages have a documented release-age exception for this user-requested update; future SDK releases require their own compatibility and dependency-policy review. See the [official changelog](https://developers.reddit.com/docs/changelog).
+Devvit 0.15.1 is the tested baseline. Future SDK releases require their own compatibility and dependency-policy review. See the [official changelog](https://developers.reddit.com/docs/changelog).
 
 Reddit Devvit Web wrapper for the Phaser game target.
 
