@@ -1,5 +1,15 @@
 # @mpgd/cli
 
+## 0.71.2 — 2026-11-03
+
+### Changed
+
+- [4b4b9ae6](https://github.com/imjlk/mpgd-kit/commit/4b4b9ae675dfada2c041e20e8998b522c633f3f0) The Phaser game template's Devvit target now pins `@devvit/web`, `@devvit/start`, and the `devvit` CLI to 0.15.2, the current stable Devvit release. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/adapter-devvit@0.15.3
+
 ## 0.71.1 — 2026-11-02
 
 ### Changed
