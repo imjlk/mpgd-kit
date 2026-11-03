@@ -18,6 +18,32 @@ allowBuilds:
 minimumReleaseAge: 1440
 minimumReleaseAgeStrict: true
 minimumReleaseAgeExclude:
+  # User-requested Devvit 0.15.2 (published 2026-11-02 by devvit-cli-bot, same
+  # publisher as 0.15.1); drop once it is past the release-age window.
+  - '@devvit/build-pack@0.15.2'
+  - '@devvit/builders@0.15.2'
+  - '@devvit/cache@0.15.2'
+  - '@devvit/cli@0.15.2'
+  - '@devvit/client@0.15.2'
+  - '@devvit/external-endpoints@0.15.2'
+  - '@devvit/linkers@0.15.2'
+  - '@devvit/media@0.15.2'
+  - '@devvit/notifications@0.15.2'
+  - '@devvit/payments@0.15.2'
+  - '@devvit/protos@0.15.2'
+  - '@devvit/public-api@0.15.2'
+  - '@devvit/realtime@0.15.2'
+  - '@devvit/reddit@0.15.2'
+  - '@devvit/redis@0.15.2'
+  - '@devvit/scheduler@0.15.2'
+  - '@devvit/server@0.15.2'
+  - '@devvit/settings@0.15.2'
+  - '@devvit/shared-types@0.15.2'
+  - '@devvit/shared@0.15.2'
+  - '@devvit/start@0.15.2'
+  - '@devvit/web-view-scripts@0.15.2'
+  - '@devvit/web@0.15.2'
+  - 'devvit@0.15.2'
   # Reviewed first-party releases: imjlk/ait-kit PRs #52 and #53.
   - '@ait-kit/api-core@0.6.0'
   - '@ait-kit/sdk@0.7.0'

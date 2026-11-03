@@ -123,7 +123,7 @@ const requiredDevvitQueries = [
   'playtest',
   'payments',
 ] as const;
-const expectedDevvitVersion = '0.15.1';
+const expectedDevvitVersion = '0.15.2';
 // @devvit/mcp 0.0.27 depends on better-sqlite3 11.9.1, which ships prebuilt
 // binaries for Node 22 but not 24 and does not build on 26. `--no-config` keeps
 // mise from loading project or global config, so the server gets no
