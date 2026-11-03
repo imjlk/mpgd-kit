@@ -20,16 +20,16 @@
     "check:sdk": "pnpm exec mpgd kit devvit-check --project ."
   },
   "dependencies": {
-    "@devvit/web": "0.15.1",
+    "@devvit/web": "0.15.2",
     "@mpgd/adapter-devvit": "workspace:*",
     "@mpgd/bridge": "workspace:*",
     "@mpgd/catalog": "workspace:*"
   },
   "devDependencies": {
-    "@devvit/start": "0.15.1",
+    "@devvit/start": "0.15.2",
     "@ttsc/unplugin": "0.34.2",
     "@types/node": "^24.0.0",
-    "devvit": "0.15.1",
+    "devvit": "0.15.2",
     "ttsc": "0.34.2",
     "typescript": "7.0.2",
     "vite": "7.3.6"
