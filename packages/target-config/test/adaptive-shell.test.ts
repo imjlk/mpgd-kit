@@ -277,6 +277,99 @@ describe('mounted shell', () => {
     expect(rootStyle.getPropertyValue('--sample-upgrade-panel-width')).toBe('');
   });
 
+  it('restores the inline layout it wrote on destroy and keeps authored styles', () => {
+    const frames = stubFrameLoop();
+    setViewportSize(390, 844);
+    document.body.innerHTML = `
+      <main id="game-shell" style="background: black; width: 100%">
+        <aside data-game-shell-rail="left" style="color: red"></aside>
+        <div id="game" style="padding: 4px; left: 5px !important"></div>
+        <aside data-game-shell-rail="right"></aside>
+      </main>`;
+    const stage = document.getElementById('game') as HTMLElement;
+    const controller = mountAdaptiveGameShell({
+      gameRoot: stage,
+      runtime: 'web-preview',
+      policy: { gameAspectRatio: 3 / 4, minRailWidth: 160 },
+      railSlots: [panelSlot],
+    });
+    setViewportSize(1_280, 720);
+    window.dispatchEvent(new Event('resize'));
+    frames.shift()?.(0);
+    const { shell, leftRail, rightRail } = controller;
+    expect(shell.style.width).toBe('1280px');
+    expect(stage.style.left).toBe('370px');
+    expect(leftRail.style.width).toBe('370px');
+    expect(document.documentElement.style.getPropertyValue(`${panelSlot.cssVariablePrefix}-width`)).toBe('320px');
+    // A value the game sets after the shell's last write belongs to the game.
+    rightRail.style.top = '9px';
+
+    controller.destroy();
+    setViewportSize(720, 320);
+    window.dispatchEvent(new Event('resize'));
+    expect(frames).toHaveLength(0);
+    expect(shell.getAttribute('style')).toBe('background: black; width: 100%;');
+    expect(stage.getAttribute('style')).toBe('padding: 4px; left: 5px !important;');
+    expect(leftRail.getAttribute('style')).toBe('color: red;');
+    expect(rightRail.getAttribute('style')).toBe('top: 9px;');
+    expect(document.documentElement.style.getPropertyValue(`${panelSlot.cssVariablePrefix}-width`)).toBe('');
+    expect(stage.hasAttribute(adaptiveShellAttributes.stage)).toBe(true);
+  });
+
+  it('leaves a newer shell on the same stage alone when the older one is destroyed', () => {
+    const frames = stubFrameLoop();
+    setViewportSize(1_280, 720);
+    const input = {
+      gameRoot: mountStage(),
+      runtime: 'web-preview' as const,
+      policy: { gameAspectRatio: 3 / 4, minRailWidth: 160 },
+      railSlots: [panelSlot],
+    };
+    const first = mountAdaptiveGameShell(input);
+    const second = mountAdaptiveGameShell(input);
+    first.destroy();
+    expect(second.shell.style.width).toBe('1280px');
+    expect(second.stage.style.width).toBe('540px');
+    expect(second.leftRail.style.width).toBe('370px');
+    expect(document.documentElement.style.getPropertyValue(`${panelSlot.cssVariablePrefix}-width`)).toBe('320px');
+
+    setViewportSize(390, 844);
+    window.dispatchEvent(new Event('resize'));
+    frames.shift()?.(0);
+    expect(second.shell.style.width).toBe('390px');
+    second.destroy();
+    for (const element of [second.shell, second.stage, second.leftRail, second.rightRail]) {
+      expect(element.hasAttribute('style') ? element.getAttribute('style') : '').toBe('');
+    }
+  });
+
+  it('leaves a shared shell to the stage that wrote it last', () => {
+    stubFrameLoop();
+    setViewportSize(1_280, 720);
+    document.body.innerHTML = `
+      <main id="game-shell">
+        <aside data-game-shell-rail="left"></aside>
+        <div id="first"></div>
+        <div id="second"></div>
+        <aside data-game-shell-rail="right"></aside>
+      </main>`;
+    const policy = { gameAspectRatio: 3 / 4, minRailWidth: 160 };
+    const firstStage = document.getElementById('first') as HTMLElement;
+    const first = mountAdaptiveGameShell({ gameRoot: firstStage, runtime: 'web-preview', policy });
+    const second = mountAdaptiveGameShell({
+      gameRoot: document.getElementById('second') as HTMLElement,
+      runtime: 'web-preview',
+      policy,
+    });
+    first.destroy();
+    expect(firstStage.style.width).toBe('');
+    expect(second.shell.style.width).toBe('1280px');
+    expect(second.leftRail.style.width).toBe('370px');
+    second.destroy();
+    expect(second.shell.style.width).toBe('');
+    expect(second.leftRail.style.width).toBe('');
+  });
+
   it('refuses an unmeasurable host before touching the DOM', () => {
     stubFrameLoop();
     setViewportSize(0, 0);

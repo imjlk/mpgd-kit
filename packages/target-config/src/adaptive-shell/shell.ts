@@ -53,6 +53,24 @@ export const defaultAdaptiveShellId = 'game-shell';
 const shellOwners = new WeakMap<HTMLElement, () => void>();
 const documentSlotOwners = new WeakMap<Document, Map<string, () => void>>();
 
+interface InlineStyleEntry {
+  readonly value: string;
+  readonly priority: string;
+  applied: string;
+}
+
+interface InlineStyleClaim {
+  owner: object;
+  readonly entries: Map<string, InlineStyleEntry>;
+}
+
+/**
+ * Inline properties the shell replaced on each element, so destroy can hand the element back as
+ * authored. Claims are per element, not per controller: stages sharing an authored shell keep the
+ * first original value, and only the latest writer restores it.
+ */
+const inlineStyleClaims = new WeakMap<HTMLElement, InlineStyleClaim>();
+
 /**
  * Root custom-property prefixes the shell reads back (`--mpgd-safe-area-top`, ...). A rail slot
  * using one would shadow the safe-area tokens and skew every composition.
@@ -72,8 +90,9 @@ export interface AdaptiveGameShellController {
   readonly state: AdaptiveGameShellState;
   readonly subscribe: (listener: (state: AdaptiveGameShellState) => void) => () => void;
   /**
-   * Stop observing and clear rail slots. The shell, rails, attributes and inline bounds stay in
-   * the DOM; the game owns unmounting them, usually by unloading the page.
+   * Stop observing, clear rail slots and restore the inline layout the shell wrote on the shell,
+   * stage and rails. The elements and their attributes stay in the DOM; the game owns unmounting
+   * them, usually by unloading the page.
    */
   readonly destroy: () => void;
 }
@@ -171,8 +190,9 @@ export function mountAdaptiveGameShell(input: MountAdaptiveGameShellInput): Adap
   let destroyed = false;
   let state = resolveShellState(elements.shell, ownedInput, initialMeasurement);
   let offset = visualViewportOffset(elements.shell);
+  const styleOwner = {};
 
-  applyShellState(elements, state, railSlots, offset);
+  applyShellState(styleOwner, elements, state, railSlots, offset);
 
   const refresh = (): void => {
     animationFrame = undefined;
@@ -189,7 +209,7 @@ export function mountAdaptiveGameShell(input: MountAdaptiveGameShellInput): Adap
 
     state = next;
     offset = nextOffset;
-    applyShellState(elements, state, railSlots, offset);
+    applyShellState(styleOwner, elements, state, railSlots, offset);
 
     for (const listener of listeners) {
       notifyListener(listener, state);
@@ -250,6 +270,9 @@ export function mountAdaptiveGameShell(input: MountAdaptiveGameShellInput): Adap
           slotOwners.delete(slot.cssVariablePrefix);
           clearRailSlot(elements.shell, slot);
         }
+      }
+      for (const element of [elements.shell, elements.gameRoot, elements.leftRail, elements.rightRail]) {
+        releaseInlineStyles(styleOwner, element);
       }
     },
   };
@@ -387,18 +410,19 @@ function createRail(doc: Document, side: AdaptiveShellRailSide, className: strin
 }
 
 function applyShellState(
+  owner: object,
   elements: ShellElements,
   state: AdaptiveGameShellState,
   railSlots: readonly AdaptiveShellRailSlot[],
   offset: { readonly x: number; readonly y: number },
 ): void {
   const { composition } = state;
-  elements.shell.style.left = `${offset.x}px`;
-  elements.shell.style.top = `${offset.y}px`;
-  elements.shell.style.right = 'auto';
-  elements.shell.style.bottom = 'auto';
-  elements.shell.style.width = `${state.viewport.layout.width}px`;
-  elements.shell.style.height = `${state.viewport.layout.height}px`;
+  writeInlineStyle(owner, elements.shell, 'left', `${offset.x}px`);
+  writeInlineStyle(owner, elements.shell, 'top', `${offset.y}px`);
+  writeInlineStyle(owner, elements.shell, 'right', 'auto');
+  writeInlineStyle(owner, elements.shell, 'bottom', 'auto');
+  writeInlineStyle(owner, elements.shell, 'width', `${state.viewport.layout.width}px`);
+  writeInlineStyle(owner, elements.shell, 'height', `${state.viewport.layout.height}px`);
   elements.shell.setAttribute(adaptiveShellAttributes.compositionMode, composition.mode);
   elements.shell.setAttribute(adaptiveShellAttributes.primaryControls, composition.primaryControls);
   elements.gameRoot.setAttribute(adaptiveShellAttributes.layoutMode, composition.mode);
@@ -408,9 +432,9 @@ function applyShellState(
   );
   const leftRailBounds = resolveAdaptiveShellRailBounds(composition, 'left');
   const rightRailBounds = resolveAdaptiveShellRailBounds(composition, 'right');
-  applyBounds(elements.gameRoot, composition.gameBounds);
-  applyOptionalBounds(elements.leftRail, leftRailBounds);
-  applyOptionalBounds(elements.rightRail, rightRailBounds);
+  applyBounds(owner, elements.gameRoot, composition.gameBounds);
+  applyOptionalBounds(owner, elements.leftRail, leftRailBounds);
+  applyOptionalBounds(owner, elements.rightRail, rightRailBounds);
   for (const slot of railSlots) {
     const bounds = slot.rail === 'left' ? leftRailBounds : rightRailBounds;
     applyRailSlot(
@@ -464,21 +488,69 @@ function clearRailSlot(shell: HTMLElement, slot: AdaptiveShellRailSlot): void {
   rootStyle.removeProperty(`${slot.cssVariablePrefix}-width`);
 }
 
-function applyBounds(element: HTMLElement, bounds: TargetViewportBounds): void {
-  element.style.display = '';
-  element.style.left = `${bounds.x}px`;
-  element.style.top = `${bounds.y}px`;
-  element.style.width = `${bounds.width}px`;
-  element.style.height = `${bounds.height}px`;
+function applyBounds(owner: object, element: HTMLElement, bounds: TargetViewportBounds): void {
+  writeInlineStyle(owner, element, 'display', '');
+  writeInlineStyle(owner, element, 'left', `${bounds.x}px`);
+  writeInlineStyle(owner, element, 'top', `${bounds.y}px`);
+  writeInlineStyle(owner, element, 'width', `${bounds.width}px`);
+  writeInlineStyle(owner, element, 'height', `${bounds.height}px`);
 }
 
-function applyOptionalBounds(element: HTMLElement, bounds: TargetViewportBounds | undefined): void {
+function applyOptionalBounds(
+  owner: object,
+  element: HTMLElement,
+  bounds: TargetViewportBounds | undefined,
+): void {
   if (bounds === undefined) {
-    element.style.display = 'none';
+    writeInlineStyle(owner, element, 'display', 'none');
     return;
   }
 
-  applyBounds(element, bounds);
+  applyBounds(owner, element, bounds);
+}
+
+/** Write an inline property, remembering the value it replaced on first write. */
+function writeInlineStyle(owner: object, element: HTMLElement, property: string, value: string): void {
+  let claim = inlineStyleClaims.get(element);
+  if (claim === undefined) {
+    claim = { owner, entries: new Map() };
+    inlineStyleClaims.set(element, claim);
+  }
+  claim.owner = owner;
+  let entry = claim.entries.get(property);
+  if (entry === undefined) {
+    entry = {
+      value: element.style.getPropertyValue(property),
+      priority: element.style.getPropertyPriority(property),
+      applied: '',
+    };
+    claim.entries.set(property, entry);
+  }
+  element.style.setProperty(property, value);
+  // Read back the serialized value so the destroy comparison matches the browser's spelling.
+  entry.applied = element.style.getPropertyValue(property);
+}
+
+/**
+ * Restore what the shell replaced. A property the game changed after the shell's last write is
+ * the game's and stays; so does every element a newer shell has written since.
+ */
+function releaseInlineStyles(owner: object, element: HTMLElement): void {
+  const claim = inlineStyleClaims.get(element);
+  if (claim === undefined || claim.owner !== owner) {
+    return;
+  }
+  inlineStyleClaims.delete(element);
+  for (const [property, entry] of claim.entries) {
+    if (element.style.getPropertyValue(property) !== entry.applied) {
+      continue;
+    }
+    if (entry.value === '') {
+      element.style.removeProperty(property);
+    } else {
+      element.style.setProperty(property, entry.value, entry.priority);
+    }
+  }
 }
 
 function shellStateSignature(state: AdaptiveGameShellState): string {
