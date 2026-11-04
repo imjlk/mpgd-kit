@@ -309,8 +309,9 @@ describe('mounted shell', () => {
     setViewportSize(720, 320);
     window.dispatchEvent(new Event('resize'));
     expect(frames).toHaveLength(0);
-    expect(shell.getAttribute('style')).toBe('background: black; width: 100%;');
-    expect(stage.getAttribute('style')).toBe('padding: 4px; left: 5px !important;');
+    // Untouched by the game since mount: the authored text comes back verbatim, order included.
+    expect(shell.getAttribute('style')).toBe('background: black; width: 100%');
+    expect(stage.getAttribute('style')).toBe('padding: 4px; left: 5px !important');
     expect(leftRail.getAttribute('style')).toBe('color: red; width: 370px !important;');
     expect(rightRail.getAttribute('style')).toBe('top: 9px;');
     expect(document.documentElement.style.getPropertyValue(`${panelSlot.cssVariablePrefix}-width`)).toBe('');
@@ -340,9 +341,13 @@ describe('mounted shell', () => {
     window.dispatchEvent(new Event('resize'));
     frames.shift()?.(0);
     expect(second.shell.style.width).toBe('390px');
+    stage.style.color = 'blue';
     second.destroy();
-    // The replacement captured the authored value the first controller restored, not its px.
-    expect(stage.getAttribute('style')).toBe('width: 50%;');
+    // The replacement captured the authored value the first controller restored, not its px;
+    // a declaration the game added after mount survives the per-property restore.
+    expect(stage.style.width).toBe('50%');
+    expect(stage.style.color).toBe('blue');
+    expect(stage.style.left).toBe('');
     for (const element of [second.shell, second.leftRail, second.rightRail]) {
       expect(element.getAttribute('style') ?? '').toBe('');
     }

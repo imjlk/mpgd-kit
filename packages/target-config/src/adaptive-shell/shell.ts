@@ -61,6 +61,8 @@ interface InlineStyleEntry {
 
 interface InlineStyleClaim {
   readonly owners: Set<object>;
+  /** The `style` attribute before the shell's first write. */
+  readonly authored: string | null;
   readonly entries: Map<string, InlineStyleEntry>;
 }
 
@@ -516,7 +518,7 @@ function applyOptionalBounds(
 function writeInlineStyle(owner: object, element: HTMLElement, property: string, value: string): void {
   let claim = inlineStyleClaims.get(element);
   if (claim === undefined) {
-    claim = { owners: new Set(), entries: new Map() };
+    claim = { owners: new Set(), authored: element.getAttribute('style'), entries: new Map() };
     inlineStyleClaims.set(element, claim);
   }
   claim.owners.add(owner);
@@ -544,18 +546,42 @@ function releaseInlineStyles(owner: object, element: HTMLElement): void {
     return;
   }
   inlineStyleClaims.delete(element);
-  for (const [property, entry] of claim.entries) {
-    // The shell writes without priority, so an added `!important` is the game's too.
-    if (element.style.getPropertyValue(property) !== entry.applied
-      || element.style.getPropertyPriority(property) !== '') {
-      continue;
+  // The shell writes without priority, so an added `!important` is the game's too.
+  const shellOwned = [...claim.entries].filter(([property, entry]) =>
+    element.style.getPropertyValue(property) === entry.applied
+    && element.style.getPropertyPriority(property) === '');
+  if (shellOwned.length === claim.entries.size
+    && withoutProperties(element, element.getAttribute('style'), claim.entries)
+      === withoutProperties(element, claim.authored, claim.entries)) {
+    // Nothing else changed: put the authored text back verbatim. Per-property restore loses a
+    // `var()` shorthand and the order of physical and logical declarations.
+    if (claim.authored === null) {
+      element.removeAttribute('style');
+    } else {
+      element.setAttribute('style', claim.authored);
     }
+    return;
+  }
+  for (const [property, entry] of shellOwned) {
     if (entry.value === '') {
       element.style.removeProperty(property);
     } else {
       element.style.setProperty(property, entry.value, entry.priority);
     }
   }
+}
+
+function withoutProperties(
+  element: HTMLElement,
+  styleText: string | null,
+  properties: ReadonlyMap<string, unknown>,
+): string {
+  const probe = element.ownerDocument.createElement('div');
+  probe.setAttribute('style', styleText ?? '');
+  for (const property of properties.keys()) {
+    probe.style.removeProperty(property);
+  }
+  return probe.style.cssText;
 }
 
 function shellStateSignature(state: AdaptiveGameShellState): string {
