@@ -301,8 +301,9 @@ describe('mounted shell', () => {
     expect(stage.style.left).toBe('370px');
     expect(leftRail.style.width).toBe('370px');
     expect(document.documentElement.style.getPropertyValue(`${panelSlot.cssVariablePrefix}-width`)).toBe('320px');
-    // A value the game sets after the shell's last write belongs to the game.
+    // A value or priority the game sets after the shell's last write belongs to the game.
     rightRail.style.top = '9px';
+    leftRail.style.setProperty('width', leftRail.style.width, 'important');
 
     controller.destroy();
     setViewportSize(720, 320);
@@ -310,7 +311,7 @@ describe('mounted shell', () => {
     expect(frames).toHaveLength(0);
     expect(shell.getAttribute('style')).toBe('background: black; width: 100%;');
     expect(stage.getAttribute('style')).toBe('padding: 4px; left: 5px !important;');
-    expect(leftRail.getAttribute('style')).toBe('color: red;');
+    expect(leftRail.getAttribute('style')).toBe('color: red; width: 370px !important;');
     expect(rightRail.getAttribute('style')).toBe('top: 9px;');
     expect(document.documentElement.style.getPropertyValue(`${panelSlot.cssVariablePrefix}-width`)).toBe('');
     expect(stage.hasAttribute(adaptiveShellAttributes.stage)).toBe(true);

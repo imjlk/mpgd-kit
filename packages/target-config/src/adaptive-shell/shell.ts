@@ -488,10 +488,13 @@ function clearRailSlot(shell: HTMLElement, slot: AdaptiveShellRailSlot): void {
   rootStyle.removeProperty(`${slot.cssVariablePrefix}-width`);
 }
 
+/** `base.css` insets the stage to fill the shell after teardown; `auto` keeps px bounds in RTL. */
 function applyBounds(owner: object, element: HTMLElement, bounds: TargetViewportBounds): void {
   writeInlineStyle(owner, element, 'display', '');
   writeInlineStyle(owner, element, 'left', `${bounds.x}px`);
   writeInlineStyle(owner, element, 'top', `${bounds.y}px`);
+  writeInlineStyle(owner, element, 'right', 'auto');
+  writeInlineStyle(owner, element, 'bottom', 'auto');
   writeInlineStyle(owner, element, 'width', `${bounds.width}px`);
   writeInlineStyle(owner, element, 'height', `${bounds.height}px`);
 }
@@ -542,7 +545,9 @@ function releaseInlineStyles(owner: object, element: HTMLElement): void {
   }
   inlineStyleClaims.delete(element);
   for (const [property, entry] of claim.entries) {
-    if (element.style.getPropertyValue(property) !== entry.applied) {
+    // The shell writes without priority, so an added `!important` is the game's too.
+    if (element.style.getPropertyValue(property) !== entry.applied
+      || element.style.getPropertyPriority(property) !== '') {
       continue;
     }
     if (entry.value === '') {
