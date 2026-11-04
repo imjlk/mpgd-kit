@@ -35,8 +35,10 @@ is idempotent, detaches observers/listeners, ignores late callbacks and clears
 slot variables. It also restores the inline position and size it wrote on the
 shell, stage and rails, so `base.css` sizes the shell to the viewport again and
 a fallback UI rendered into the stage after teardown follows rotation. A property
-the game changed after the shell's last write is left alone, and so is an element
-a newer controller has written since. The elements and their attributes stay in
+the game changed after the shell's last write is left alone, and an authored
+inline value (including `display: none` on the stage) comes back. An element
+another live controller still writes, such as a shell shared by two stages, keeps
+its layout until that controller is destroyed too. The elements and their attributes stay in
 the DOM; remove them separately if the page outlives the game. Embedded stages
 use their own document/window. Subscriber errors do not skip other listeners and
 are rethrown in a microtask for the host's error reporting. Importing the module

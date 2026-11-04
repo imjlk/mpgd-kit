@@ -319,8 +319,10 @@ describe('mounted shell', () => {
   it('leaves a newer shell on the same stage alone when the older one is destroyed', () => {
     const frames = stubFrameLoop();
     setViewportSize(1_280, 720);
+    const stage = mountStage();
+    stage.style.width = '50%';
     const input = {
-      gameRoot: mountStage(),
+      gameRoot: stage,
       runtime: 'web-preview' as const,
       policy: { gameAspectRatio: 3 / 4, minRailWidth: 160 },
       railSlots: [panelSlot],
@@ -338,12 +340,14 @@ describe('mounted shell', () => {
     frames.shift()?.(0);
     expect(second.shell.style.width).toBe('390px');
     second.destroy();
-    for (const element of [second.shell, second.stage, second.leftRail, second.rightRail]) {
-      expect(element.hasAttribute('style') ? element.getAttribute('style') : '').toBe('');
+    // The replacement captured the authored value the first controller restored, not its px.
+    expect(stage.getAttribute('style')).toBe('width: 50%;');
+    for (const element of [second.shell, second.leftRail, second.rightRail]) {
+      expect(element.getAttribute('style') ?? '').toBe('');
     }
   });
 
-  it('leaves a shared shell to the stage that wrote it last', () => {
+  it('restores a shared shell only after every stage writing it is destroyed', () => {
     stubFrameLoop();
     setViewportSize(1_280, 720);
     document.body.innerHTML = `
@@ -355,12 +359,13 @@ describe('mounted shell', () => {
       </main>`;
     const policy = { gameAspectRatio: 3 / 4, minRailWidth: 160 };
     const firstStage = document.getElementById('first') as HTMLElement;
-    const first = mountAdaptiveGameShell({ gameRoot: firstStage, runtime: 'web-preview', policy });
-    const second = mountAdaptiveGameShell({
-      gameRoot: document.getElementById('second') as HTMLElement,
-      runtime: 'web-preview',
-      policy,
-    });
+    const secondStage = document.getElementById('second') as HTMLElement;
+    const mountBoth = () => [
+      mountAdaptiveGameShell({ gameRoot: firstStage, runtime: 'web-preview', policy }),
+      mountAdaptiveGameShell({ gameRoot: secondStage, runtime: 'web-preview', policy }),
+    ] as const;
+
+    const [first, second] = mountBoth();
     first.destroy();
     expect(firstStage.style.width).toBe('');
     expect(second.shell.style.width).toBe('1280px');
@@ -368,6 +373,15 @@ describe('mounted shell', () => {
     second.destroy();
     expect(second.shell.style.width).toBe('');
     expect(second.leftRail.style.width).toBe('');
+
+    const [older, newer] = mountBoth();
+    newer.destroy();
+    expect(secondStage.style.width).toBe('');
+    expect(older.shell.style.width).toBe('1280px');
+    expect(older.leftRail.style.width).toBe('370px');
+    older.destroy();
+    expect(older.shell.style.width).toBe('');
+    expect(older.leftRail.style.width).toBe('');
   });
 
   it('refuses an unmeasurable host before touching the DOM', () => {

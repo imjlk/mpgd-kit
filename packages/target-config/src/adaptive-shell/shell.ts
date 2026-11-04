@@ -60,14 +60,14 @@ interface InlineStyleEntry {
 }
 
 interface InlineStyleClaim {
-  owner: object;
+  readonly owners: Set<object>;
   readonly entries: Map<string, InlineStyleEntry>;
 }
 
 /**
  * Inline properties the shell replaced on each element, so destroy can hand the element back as
  * authored. Claims are per element, not per controller: stages sharing an authored shell keep the
- * first original value, and only the latest writer restores it.
+ * first original value, and it is restored only once every controller that wrote it is destroyed.
  */
 const inlineStyleClaims = new WeakMap<HTMLElement, InlineStyleClaim>();
 
@@ -513,10 +513,10 @@ function applyOptionalBounds(
 function writeInlineStyle(owner: object, element: HTMLElement, property: string, value: string): void {
   let claim = inlineStyleClaims.get(element);
   if (claim === undefined) {
-    claim = { owner, entries: new Map() };
+    claim = { owners: new Set(), entries: new Map() };
     inlineStyleClaims.set(element, claim);
   }
-  claim.owner = owner;
+  claim.owners.add(owner);
   let entry = claim.entries.get(property);
   if (entry === undefined) {
     entry = {
@@ -532,12 +532,12 @@ function writeInlineStyle(owner: object, element: HTMLElement, property: string,
 }
 
 /**
- * Restore what the shell replaced. A property the game changed after the shell's last write is
- * the game's and stays; so does every element a newer shell has written since.
+ * Restore what the shell replaced once no live controller still writes the element. A property
+ * the game changed after the shell's last write is the game's and stays.
  */
 function releaseInlineStyles(owner: object, element: HTMLElement): void {
   const claim = inlineStyleClaims.get(element);
-  if (claim === undefined || claim.owner !== owner) {
+  if (claim === undefined || !claim.owners.delete(owner) || claim.owners.size > 0) {
     return;
   }
   inlineStyleClaims.delete(element);
