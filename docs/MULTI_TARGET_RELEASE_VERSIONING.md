@@ -107,6 +107,19 @@ before packaging:
   target's `Release` configuration is inspected, so valid extension and Debug
   identities do not block the archive.
 
+The Android check follows every `apply from:` script of the settings, root
+and app Gradle files, and refuses task actions it cannot evaluate
+(`doFirst`/`doLast`, `whenReady`, `whenTaskAdded`, `tasks.*`, or a `task`
+body) other than the standard `task clean(type: Delete)` that deletes
+`rootProject.buildDir` or `rootProject.layout.buildDirectory`. On a clean
+checkout the source shell has not been through `cap sync`, so any applied
+script that is missing from the git-ignored
+`android/capacitor-cordova-android-plugins/` directory is tolerated there (the
+committed `app/capacitor.build.gradle` applies `cordova.variables.gradle` from
+it); `mpgd target init capacitor` tolerates it on an existing shell too. The
+staged shell is checked again after `cap sync`, where every applied script
+must exist.
+
 The values are also captured in the release manifest. A mismatch fails before
 an artifact is produced; the target tool never silently rewrites a store
 identity.
@@ -180,7 +193,10 @@ iOS, whose production behaviour is unchanged; rehearse iOS with a staging
 `unsigned-archive`. A game-owned Gradle guard that refuses an unsigned release
 task, for example a `MPGD_ANDROID_ALLOW_UNSIGNED=1` opt-out, stays the game's
 own contract: Kit neither reads nor sets it, so keep setting it alongside
-`rehearsal-archive` when your Gradle file requires it.
+`rehearsal-archive` when your Gradle file requires it. Write that guard as a
+configuration-time check, for example on `gradle.startParameter.taskNames`; a
+task-graph action such as `gradle.taskGraph.whenReady`, `doFirst`/`doLast`, or
+`tasks.*` is refused by the release preflight above.
 
 A rehearsal replaces the Android entry in the local
 `artifacts/release-manifest.json`. Recording a build refuses that manifest

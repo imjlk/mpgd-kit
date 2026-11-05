@@ -1,3 +1,6 @@
+/** `cap sync` generates this Android directory; the Capacitor template git-ignores it. */
+export const capacitorSyncGeneratedAndroidDirectory = 'capacitor-cordova-android-plugins';
+
 /** Inspect only the effective App target, not unrelated Xcode extensions. */
 export function assertNativeShellIdentity(
   platform: 'android' | 'ios',
@@ -177,7 +180,7 @@ export function hasAndroidManifestSourceSetOverride(source: string): boolean {
 export function hasGradleTaskAction(source: string): boolean {
   const code = maskGradleStrings(stripGradleComments(source));
   const withoutStandardClean = code.replace(
-    /\btask\s+clean\s*\(\s*type\s*:\s*Delete\s*\)\s*\{\s*delete\s+rootProject\.buildDir\s*;?\s*\}/gu,
+    /\btask\s+clean\s*\(\s*type\s*:\s*Delete\s*\)\s*\{\s*delete\s+rootProject\.(?:buildDir|layout\.buildDirectory)\s*;?\s*\}/gu,
     '',
   );
   return /\b(?:doFirst|doLast|whenTaskAdded|whenReady)\s*(?:\(|\{)/u.test(withoutStandardClean)

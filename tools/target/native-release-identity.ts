@@ -1,5 +1,5 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { existsSync, lstatSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { isMpgdFinalSemVer } from '@mpgd/target-config';
 import {
@@ -15,6 +15,7 @@ import {
   assertIosReleaseInfoPlistExpansion,
   assertIosReleasePackagingSettings,
   assertIosReleaseProductName,
+  capacitorSyncGeneratedAndroidDirectory,
   countGradleIdentityWrites,
   hasAndroidDisplayNameResourceOverride,
   hasAndroidManifestSourceSetOverride,
@@ -43,6 +44,13 @@ export interface NativeReleaseIdentityInput {
    * Defaults to `source`, where the source must already hold the values.
    */
   readonly versionSource?: NativeVersionSource;
+  /**
+   * The shell has not been through `cap sync` yet, so applied Gradle scripts
+   * under the git-ignored `capacitor-cordova-android-plugins/` directory may
+   * be missing. Present ones are still inspected; the staged shell is checked
+   * with every applied script required after sync.
+   */
+  readonly beforeSync?: boolean;
 }
 
 export type NativeVersionSource = 'source' | 'stamped';
@@ -97,7 +105,11 @@ export function assertNativeReleaseIdentity(input: NativeReleaseIdentityInput): 
       throw new Error('Android native release requires exactly one Gradle app build file.');
     }
     assertAndroidIdentity(candidates[0] ?? '', expected, checkVersions);
-    assertAndroidAppliedScripts(candidates[0] ?? '', join(input.shellApp, 'android'));
+    assertAndroidAppliedScripts(
+      candidates[0] ?? '',
+      join(input.shellApp, 'android'),
+      input.beforeSync === true,
+    );
     if (input.required) {
       const name = requireValue(input.metadata?.displayName, 'Android target metadata displayName');
       assertAndroidReleaseDisplayName(input.shellApp, name);
@@ -123,7 +135,7 @@ export function runNativeSyncWithIdentityCheck(
   synchronize: () => void,
 ): void {
   synchronize();
-  assertNativeReleaseIdentity(input);
+  assertNativeReleaseIdentity({ ...input, beforeSync: false });
 }
 
 /**
@@ -503,7 +515,11 @@ function assertAndroidSetting(
   assertSettingValues(values, expression, expected, file);
 }
 
-function assertAndroidAppliedScripts(appBuild: string, androidRoot: string): void {
+function assertAndroidAppliedScripts(
+  appBuild: string,
+  androidRoot: string,
+  beforeSync: boolean,
+): void {
   const visited = new Set<string>();
   const inspect = (file: string, isSettingsScript: boolean, ownerDirectory: string): void => {
     const visitKey = `${ownerDirectory}\0${isSettingsScript}\0${file}`;
@@ -511,6 +527,11 @@ function assertAndroidAppliedScripts(appBuild: string, androidRoot: string): voi
       return;
     }
     visited.add(visitKey);
+    if (beforeSync
+      && relative(androidRoot, file).split(sep)[0] === capacitorSyncGeneratedAndroidDirectory
+      && isAbsentPath(androidRoot, file)) {
+      return;
+    }
     const source = stripComments(readRequiredFile(file, 'applied Android Gradle script'));
     const code = maskGradleStrings(source);
     if (/(?:^|[\s;{])apply\s*\{/u.test(code)) {
@@ -1096,6 +1117,25 @@ function stripOptionalQuotes(value: string): string {
   }
 
   return value;
+}
+
+/** Absent without passing through any link: a path `cap sync` has yet to create. */
+function isAbsentPath(root: string, file: string): boolean {
+  let current = root;
+  for (const segment of relative(root, file).split(sep)) {
+    current = join(current, segment);
+    try {
+      if (lstatSync(current).isSymbolicLink()) {
+        return false;
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return true;
+      }
+      throw error;
+    }
+  }
+  return false;
 }
 
 function readRequiredFile(file: string, label: string): string {
