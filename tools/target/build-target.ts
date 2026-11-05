@@ -496,6 +496,12 @@ try {
       }
       await writeRemoteAssetPacks();
       writeManifest(targetName, profile, releaseArtifact, env);
+      if (nativePlan.rehearsal) {
+        console.warn(
+          `Built an unsigned Android release rehearsal at ${releaseArtifact}; `
+            + 'it is not a submission candidate.',
+        );
+      }
       nativeAttempt.complete(releaseArtifact, nativeOutput.symbols);
       nativeCompleted = true;
       break;
@@ -785,6 +791,7 @@ function writeManifest(
           mode: nativePlan.mode,
           signed: nativePlan.mode === 'signed-archive' || nativePlan.mode === 'store-export',
           submissionCandidate: nativePlan.submissionCandidate,
+          ...(nativePlan.rehearsal ? { rehearsal: true } : {}),
         },
       }),
       outputPath: releaseManifestPath(configBaseDir),

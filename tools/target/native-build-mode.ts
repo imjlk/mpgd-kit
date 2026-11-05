@@ -13,7 +13,12 @@ export interface NativeBuildPlan {
   readonly mode: NativeBuildMode;
   /** A signed archive still needs a store export on iOS. */
   readonly submissionCandidate: boolean;
+  /** An unsigned production-profile Android bundle; never a submission candidate. */
+  readonly rehearsal: boolean;
 }
+
+/** Selects an unsigned production-profile Android AAB without signing credentials. */
+export const nativeRehearsalBuildMode = 'rehearsal-archive';
 
 const androidModes = new Set<NativeBuildMode>(['debug', 'unsigned-archive', 'signed-archive']);
 const iosModes = new Set<NativeBuildMode>([
@@ -58,6 +63,25 @@ export function resolveNativeBuildPlan(input: {
   if (selected === undefined) {
     throw new Error('Production native builds require an explicit MPGD_NATIVE_BUILD_MODE.');
   }
+  if (selected === nativeRehearsalBuildMode) {
+    if (platform !== 'android') {
+      throw new Error(
+        'Production rehearsal archives are Android-only; use a staging unsigned-archive for iOS.',
+      );
+    }
+    if (profile !== 'production') {
+      throw new Error(
+        'rehearsal-archive applies only to the production profile; '
+          + 'other profiles already build an unsigned archive.',
+      );
+    }
+    return {
+      platform,
+      mode: 'unsigned-archive',
+      submissionCandidate: false,
+      rehearsal: true,
+    };
+  }
   const allowed = platform === 'android' ? androidModes : iosModes;
   if (!allowed.has(selected as NativeBuildMode)) {
     if (platform === 'android' && selected === 'sync') {
@@ -68,7 +92,10 @@ export function resolveNativeBuildPlan(input: {
   const mode = selected as NativeBuildMode;
   if (profile === 'production'
     && mode !== 'signed-archive' && mode !== 'store-export') {
-    throw new Error('Production native builds require a signed archive or store export.');
+    throw new Error(platform === 'android'
+      ? 'Production Android builds require a signed archive; '
+        + 'select rehearsal-archive for an unsigned release rehearsal.'
+      : 'Production native builds require a signed archive or store export.');
   }
 
   return {
@@ -77,5 +104,6 @@ export function resolveNativeBuildPlan(input: {
     submissionCandidate: profile === 'production' && (platform === 'android'
       ? mode === 'signed-archive'
       : mode === 'store-export'),
+    rehearsal: false,
   };
 }
