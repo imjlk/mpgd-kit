@@ -527,8 +527,9 @@ function assertAndroidAppliedScripts(
       return;
     }
     visited.add(visitKey);
-    if (beforeSync && isAbsentPath(file)
-      && relative(androidRoot, file).split(sep)[0] === capacitorSyncGeneratedAndroidDirectory) {
+    if (beforeSync
+      && relative(androidRoot, file).split(sep)[0] === capacitorSyncGeneratedAndroidDirectory
+      && isAbsentPath(androidRoot, file)) {
       return;
     }
     const source = stripComments(readRequiredFile(file, 'applied Android Gradle script'));
@@ -1118,17 +1119,23 @@ function stripOptionalQuotes(value: string): string {
   return value;
 }
 
-/** Not even a dangling link: only a path `cap sync` has yet to create. */
-function isAbsentPath(file: string): boolean {
-  try {
-    lstatSync(file);
-    return false;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return true;
+/** Absent without passing through any link: a path `cap sync` has yet to create. */
+function isAbsentPath(root: string, file: string): boolean {
+  let current = root;
+  for (const segment of relative(root, file).split(sep)) {
+    current = join(current, segment);
+    try {
+      if (lstatSync(current).isSymbolicLink()) {
+        return false;
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return true;
+      }
+      throw error;
     }
-    throw error;
   }
+  return false;
 }
 
 function readRequiredFile(file: string, label: string): string {

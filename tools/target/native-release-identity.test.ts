@@ -6,6 +6,7 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import os from 'node:os';
@@ -231,6 +232,13 @@ try {
     /identity override in applied Gradle script/u,
   );
   rmSync(cordovaPlugins, { recursive: true });
+  // A dangling link is not an unsynced path, even when the link is the directory.
+  symlinkSync(join(shellRoot, 'android/not-there'), cordovaPlugins, 'dir');
+  assert.throws(
+    () => assertNativeReleaseIdentity(beforeSyncInput),
+    /Missing applied Android Gradle script: .*cordova\.variables\.gradle/u,
+  );
+  rmSync(cordovaPlugins);
   // Only the sync-generated directory may be missing before sync.
   for (const applied of [
     'apply from: "missing.gradle"',
