@@ -112,10 +112,12 @@ and app Gradle files, and refuses task actions it cannot evaluate
 (`doFirst`/`doLast`, `whenReady`, `whenTaskAdded`, `tasks.*`, or a `task`
 body) other than the standard `task clean(type: Delete)` that deletes
 `rootProject.buildDir` or `rootProject.layout.buildDirectory`. On a clean
-checkout the source shell has not been through `cap sync`, so a missing script
-under the git-ignored `android/capacitor-cordova-android-plugins/` directory
-(applied by the generated `app/capacitor.build.gradle`) is tolerated there.
-The staged shell is checked again after `cap sync`, where every applied script
+checkout the source shell has not been through `cap sync`, so any applied
+script that is missing from the git-ignored
+`android/capacitor-cordova-android-plugins/` directory is tolerated there (the
+committed `app/capacitor.build.gradle` applies `cordova.variables.gradle` from
+it); `mpgd target init capacitor` tolerates it on an existing shell too. The
+staged shell is checked again after `cap sync`, where every applied script
 must exist.
 
 The values are also captured in the release manifest. A mismatch fails before

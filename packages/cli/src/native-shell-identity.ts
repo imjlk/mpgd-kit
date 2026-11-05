@@ -1,3 +1,6 @@
+/** `cap sync` generates this Android directory; the Capacitor template git-ignores it. */
+export const capacitorSyncGeneratedAndroidDirectory = 'capacitor-cordova-android-plugins';
+
 /** Inspect only the effective App target, not unrelated Xcode extensions. */
 export function assertNativeShellIdentity(
   platform: 'android' | 'ios',

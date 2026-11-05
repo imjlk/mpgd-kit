@@ -232,11 +232,16 @@ try {
   );
   rmSync(cordovaPlugins, { recursive: true });
   // Only the sync-generated directory may be missing before sync.
-  writeCapacitorBuild('apply from: "missing.gradle"');
-  assert.throws(
-    () => assertNativeReleaseIdentity(beforeSyncInput),
-    /Missing applied Android Gradle script: .*missing\.gradle/u,
-  );
+  for (const applied of [
+    'apply from: "missing.gradle"',
+    'apply from: "../capacitor-cordova-android-plugins/../missing.gradle"',
+  ]) {
+    writeCapacitorBuild(applied);
+    assert.throws(
+      () => assertNativeReleaseIdentity(beforeSyncInput),
+      /Missing applied Android Gradle script: .*missing\.gradle/u,
+    );
+  }
   rmSync(capacitorBuild);
   writeShellFiles(shellRoot);
   const productionInput = {

@@ -73,6 +73,7 @@ import {
   assertIosReleasePackagingSettings,
   assertIosReleaseProductName,
   assertNativeShellIdentity,
+  capacitorSyncGeneratedAndroidDirectory,
   hasAndroidDisplayNameResourceOverride,
   hasAndroidManifestSourceSetOverride,
   hasAndroidResourceSourceSetOverride,
@@ -2358,6 +2359,12 @@ function assertAppliedGradleScripts(
     return;
   }
   visited.add(visitKey);
+  if (script.split(path.sep)[0] === capacitorSyncGeneratedAndroidDirectory
+    && isAbsentPath(path.join(nativeDirectory, script))) {
+    // A clean checkout has not been through `cap sync`; the native build
+    // preflight requires and inspects this script on the synced stage.
+    return;
+  }
   inspectedScripts.add(script);
   if (!isNativeFile(nativeDirectory, script)) {
     throw new Error(
@@ -3142,6 +3149,19 @@ function readExisting(file: string): string | undefined {
   }
   assertNotSymlink(file);
   return readFileSync(file, 'utf8');
+}
+
+/** Not even a dangling link. */
+function isAbsentPath(file: string): boolean {
+  try {
+    lstatSync(file);
+    return false;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return true;
+    }
+    throw error;
+  }
 }
 
 function assertNotSymlink(file: string): void {
