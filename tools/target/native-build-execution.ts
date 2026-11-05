@@ -97,8 +97,9 @@ export async function executeNativeTargetBuild(
   };
   const versionSource = resolveNativeVersionSource(environment);
   // With stamping the source only has to keep readable version assignments;
-  // the reserved numbers are written into the stage and checked there.
-  assertNativeReleaseIdentity({ ...identityInput, versionSource });
+  // the reserved numbers are written into the stage and checked there. Scripts
+  // that only `cap sync` generates are required on the stage after sync.
+  assertNativeReleaseIdentity({ ...identityInput, versionSource, beforeSync: true });
   reportNativeStorePolicy(
     inspectNativeStorePolicy({
       platform,
