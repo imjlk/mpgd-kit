@@ -160,6 +160,14 @@ try {
     [{ ...rehearsal, platform: 'ios' }, 'production'],
   ];
   assert.equal(withNativeDelivery(rehearsal).targets.android?.nativeDelivery?.rehearsal, true);
+  assert.throws(() =>
+    withNativeDelivery({
+      platform: 'android',
+      mode: 'signed-archive',
+      signed: true,
+      submissionCandidate: true,
+      rehearsal: false,
+    } as unknown as ReleaseNativeDelivery));
   for (const [delivery, profile] of invalidRehearsals) {
     assert.throws(
       () => withNativeDelivery(delivery, profile),

@@ -161,9 +161,11 @@ rejected until its generated Gradle dependencies can be made portable.
 
 `MPGD_NATIVE_BUILD_MODE=rehearsal-archive` builds an unsigned Android AAB from
 the production profile, so a game can rehearse its release without upload
-credentials. It applies the production target config, the
-`MPGD_TARGET_VERSION_CODE`/`MPGD_TARGET_VERSION_NAME` reservation and the
-version stamp, then runs `bundleRelease` with no Kit signing inputs. The
+credentials. It applies the production target config and the same release
+version checks as a signed production build, so `MPGD_TARGET_VERSION_CODE`,
+`MPGD_TARGET_VERSION_NAME`, and a matching `APP_VERSION` are required (with
+`MPGD_NATIVE_VERSION_STAMP=1` when the committed shell does not hold those
+numbers). It then runs `bundleRelease` with no Kit signing inputs. The
 release manifest records it as `mode: "unsigned-archive"`, `signed: false`,
 `submissionCandidate: false`, and `rehearsal: true`, and `smoke:target`
 verifies it like any other AAB. The signer and bundle-manifest inspection of
@@ -179,6 +181,12 @@ iOS, whose production behaviour is unchanged; rehearse iOS with a staging
 task, for example a `MPGD_ANDROID_ALLOW_UNSIGNED=1` opt-out, stays the game's
 own contract: Kit neither reads nor sets it, so keep setting it alongside
 `rehearsal-archive` when your Gradle file requires it.
+
+A rehearsal replaces the Android entry in the local
+`artifacts/release-manifest.json`. Recording a build refuses that manifest
+while the rehearsal entry remains, so rebuild Android with `signed-archive`
+before recording a submission from the same checkout; `mpgd deploy run` builds
+in a fresh pinned workspace and is unaffected.
 
 For a production Android AAB, configure the game-owned Gradle project's
 release signing from the build host, select `signed-archive`, and provide
