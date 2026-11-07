@@ -379,8 +379,9 @@ export function newPlayRelease(
  *   https://developers.google.com/android-publisher/tracks).
  * - `draft` replaces an older `draft`.
  *
- * A `completed` release older than the `completed` release it would replace is
- * refused, so a stale submission or a late resume cannot roll a track back.
+ * A `completed` release older than any release it would replace is refused, so
+ * a stale submission or a late resume cannot roll back a completed release or
+ * end a newer rollout. A staged release is not compared.
  */
 export function mergeNewPlayRelease(
   current: readonly PlayTrackRelease[] | null | undefined,
@@ -393,10 +394,10 @@ export function mergeNewPlayRelease(
       ? existing.status === 'draft'
       : existing.status === 'inProgress' || existing.status === 'halted'
         || (release.status === 'completed' && existing.status === 'completed');
-    if (replaces && release.status === 'completed' && existing.status === 'completed'
+    if (replaces && release.status === 'completed'
       && highestVersionCode(existing) > highestVersionCode(release)) {
       throw new Error(
-        `Google Play already serves newer version ${highestVersionCode(existing)} as completed; `
+        `Google Play already has newer version ${highestVersionCode(existing)} as ${existing.status}; `
         + `version ${highestVersionCode(release)} would replace it. Inspect the track.`,
       );
     }

@@ -458,7 +458,7 @@ try {
     releases: [completedRelease],
     superseded: [],
   });
-  // Every version code counts, and only a completed release is compared.
+  // Every version code counts, and only a completed new release is compared.
   assert.throws(
     () =>
       mergeNewPlayRelease([{ status: 'completed', versionCodes: ['7', '10'] }], {
@@ -467,6 +467,25 @@ try {
       }),
     /newer/u,
   );
+  // A stale completed release does not end a newer rollout, halted or not.
+  for (const status of ['inProgress', 'halted'] as const) {
+    assert.throws(
+      () =>
+        mergeNewPlayRelease(
+          [
+            { status: 'completed', versionCodes: ['5'] },
+            { status, versionCodes: ['10'], userFraction: 0.2 },
+          ],
+          { status: 'completed', versionCodes: ['8'] },
+        ),
+      new RegExp(`newer version 10 as ${status}`, 'u'),
+    );
+  }
+  // The same version may replace its own rollout: that completes it.
+  assert.equal(mergeNewPlayRelease(
+    [{ status: 'inProgress', versionCodes: ['10'], userFraction: 0.2 }],
+    { status: 'completed', versionCodes: ['10'] },
+  ).superseded.length, 1);
   assert.equal(mergeNewPlayRelease(
     [{ status: 'completed', versionCodes: ['9'] }],
     { status: 'inProgress', versionCodes: ['8'], userFraction: 0.1 },

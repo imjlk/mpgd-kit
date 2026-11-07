@@ -71,9 +71,10 @@ the new one supersedes:
   the `completed` release, which goes on serving the users outside the rollout;
 - a `draft` replaces an older `draft` on that track.
 
-A `completed` release older than the `completed` release it would replace is
-refused before anything is uploaded, so a stale submission or a late resume
-cannot roll the track back.
+A `completed` release older than any release it would replace is refused before
+anything is uploaded, so a stale submission cannot roll back a completed release
+or end a newer rollout. A staged release is not compared. A resumed edit that
+already holds its release goes straight to commit without this check.
 
 No other track is read or written. The commit uses
 `changesInReviewBehavior=ERROR_IF_IN_REVIEW`, so changes already in review are
