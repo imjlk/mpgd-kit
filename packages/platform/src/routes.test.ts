@@ -387,7 +387,8 @@ function seededRandom(seed: number): () => number {
   let state = seed;
 
   return () => {
-    state = (state * 1_103_515_245 + 12_345) % 2_147_483_648;
+    // 32-bit multiply: a float product past 2^53 rounds and repeats states.
+    state = (Math.imul(state, 1_103_515_245) + 12_345) & 0x7fff_ffff;
     return state / 2_147_483_648;
   };
 }
