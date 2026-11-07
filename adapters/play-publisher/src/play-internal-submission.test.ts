@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import {
+  isPlayEditClosedError,
   PlaySubmissionUncertainError,
   submitVerifiedAndroidBundle,
   submitVerifiedAndroidBundleWithPublisher,
@@ -66,6 +67,9 @@ async function withPublisher(
       readonly operations: string[];
       readonly updates: PlayTrack[];
       readonly rootUrl: string;
+      /** The edit is finished outside this submission: Play answers failedPrecondition. */
+      closeEdit(editId: string): void;
+      setLive(state: EditState): void;
     },
   ) => Promise<void>,
 ): Promise<void> {
@@ -88,6 +92,7 @@ async function withPublisher(
   };
   let counter = 0;
   const edits = new Map<string, EditState>();
+  const closedEdits = new Set<string>();
   const handler = async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
     try {
       const url = new URL(request.url ?? '', 'http://localhost');
@@ -107,6 +112,10 @@ async function withPublisher(
         return;
       }
       const editId = editMatch?.[1]?.split(':')[0];
+      if (editId !== undefined && closedEdits.has(editId)) {
+        reply(response, 400, closedEditError);
+        return;
+      }
       const edit = editId === undefined ? undefined : edits.get(editId);
       if (edit === undefined) {
         reply(response, 404, { error: { message: 'edit missing' } });
@@ -138,7 +147,14 @@ async function withPublisher(
           reply(response, 400, { error: { message: 'track update rejected' } });
           return;
         }
-        edit.track = JSON.parse((await readBody(request)).toString('utf8'));
+        const desired = JSON.parse(
+          (await readBody(request)).toString('utf8'),
+        ) as EditState['track'];
+        if (desired.releases.filter((item) => item.status === 'completed').length > 1) {
+          reply(response, 400, { error: { message: 'Only one completed release is allowed.' } });
+          return;
+        }
+        edit.track = desired;
         updates.push(edit.track);
         reply(response, 200, edit.track);
       } else if (method === 'POST' && pathname.endsWith(':validate')) {
@@ -178,11 +194,30 @@ async function withPublisher(
     const address = server.address();
     assert.ok(address !== null && typeof address !== 'string');
     const publisher = createMockPublisher('mock-play-token', `http://127.0.0.1:${address.port}`);
-    await action(publisher, { operations, updates, rootUrl: `http://127.0.0.1:${address.port}` });
+    await action(publisher, {
+      operations,
+      updates,
+      rootUrl: `http://127.0.0.1:${address.port}`,
+      closeEdit: (editId) => {
+        closedEdits.add(editId);
+      },
+      setLive: (state) => {
+        live = structuredClone(state);
+      },
+    });
   } finally {
     server.close();
   }
 }
+
+const closedEditError = {
+  error: {
+    code: 400,
+    status: 'FAILED_PRECONDITION',
+    message: 'The edit is closed.',
+    errors: [{ domain: 'global', reason: 'failedPrecondition', message: 'The edit is closed.' }],
+  },
+};
 
 function reply(response: ServerResponse, status: number, body: unknown): void {
   response.writeHead(status, { 'content-type': 'application/json' });
@@ -216,12 +251,10 @@ try {
     assert.equal(result.status, 'committed');
     assert.equal(result.versionCode, 45);
     assert.equal(result.bundleSha256, sha256);
-    assert.deepEqual(observed.updates[0]?.releases?.map((item) => item.versionCodes), [['44'], ['45']]);
-    // Without release options the track body is the original one, byte for byte.
+    // Play allows one completed release per track: the new one replaces the older one.
     assert.equal(
       JSON.stringify(observed.updates[0]),
-      '{"track":"internal","releases":[{"name":"older","status":"completed","versionCodes":["44"]},'
-        + '{"name":"beta-01","status":"completed","versionCodes":["45"]}]}',
+      '{"track":"internal","releases":[{"name":"beta-01","status":"completed","versionCodes":["45"]}]}',
     );
     assert.equal(result.track, 'internal');
     assert.equal(result.releaseStatus, 'completed');
@@ -305,6 +338,157 @@ try {
     assert.equal(result.alreadyCommitted, true);
     assert.deepEqual(replaced, ['edit-1']);
     assert.equal(observed.operations.some((item) => item.includes(':commit')), false);
+  });
+  // An edit left open by a refused track update resumes and replaces the older release.
+  await withPublisher('ok', async (publisher, observed) => {
+    const editId = await publisher.insertEdit(packageName);
+    await publisher.uploadBundle({
+      packageName, editId, aabFile: input.aabFile, timeoutMs: 120_000,
+      requestRootUrl: observed.rootUrl,
+    });
+    const resumed = await submitVerifiedAndroidBundleWithPublisher({
+      ...input, resumeEditId: editId,
+    }, publisher, observed.rootUrl);
+    assert.equal(resumed.editId, editId);
+    assert.equal(resumed.alreadyCommitted, false);
+    assert.deepEqual(observed.updates[0]?.releases?.map((item) => item.versionCodes), [['45']]);
+  });
+  // The recorded edit was committed outside the Kit: the live track shows the
+  // release, so the resume marks it committed without another upload or commit.
+  await withPublisher('ok', async (publisher, observed) => {
+    const editId = await publisher.insertEdit(packageName);
+    await publisher.uploadBundle({
+      packageName, editId, aabFile: input.aabFile, timeoutMs: 120_000,
+      requestRootUrl: observed.rootUrl,
+    });
+    await publisher.updateTrack(packageName, editId, {
+      track: 'internal',
+      releases: [{ name: 'beta-01', status: 'completed', versionCodes: ['45'] }],
+    });
+    await publisher.commitEdit(packageName, editId);
+    observed.closeEdit(editId);
+    const replaced: string[] = [];
+    const result = await submitVerifiedAndroidBundleWithPublisher({
+      ...input,
+      resumeEditId: editId,
+      onEditCreated: async (id) => { replaced.push(id); },
+    }, publisher, observed.rootUrl);
+    assert.equal(result.status, 'committed');
+    assert.equal(result.alreadyCommitted, true);
+    assert.equal(result.editId, 'edit-2');
+    assert.deepEqual(replaced, ['edit-2']);
+    assert.equal(observed.operations.filter((item) => item.includes('/upload/')).length, 1);
+    assert.equal(observed.operations.filter((item) => item.includes(':commit')).length, 1);
+    assert.equal(observed.updates.length, 1);
+  });
+  // The recorded edit closed without reaching the track: submit in the new edit.
+  await withPublisher('ok', async (publisher, observed) => {
+    const editId = await publisher.insertEdit(packageName);
+    observed.closeEdit(editId);
+    const result = await submitVerifiedAndroidBundleWithPublisher({
+      ...input, resumeEditId: editId,
+    }, publisher, observed.rootUrl);
+    assert.equal(result.alreadyCommitted, false);
+    assert.equal(result.editId, 'edit-2');
+    assert.deepEqual(observed.updates[0]?.releases?.map((item) => item.versionCodes), [['45']]);
+    assert.equal(observed.operations.filter((item) => item.includes(':commit')).length, 1);
+  });
+  // Closed edit, and the live track has this version code with other or no bytes.
+  await withPublisher('ok', async (publisher, observed) => {
+    const editId = await publisher.insertEdit(packageName);
+    observed.closeEdit(editId);
+    const holding = { track: 'internal', releases: [{ status: 'completed', versionCodes: ['45'] }] };
+    observed.setLive({ bundles: [{ versionCode: 45, sha256: '0'.repeat(64) }], track: holding });
+    await assert.rejects(
+      submitVerifiedAndroidBundleWithPublisher({
+        ...input, resumeEditId: editId,
+      }, publisher, observed.rootUrl),
+      /different bundle version or SHA-256/u,
+    );
+    observed.setLive({ bundles: [], track: holding });
+    await assert.rejects(
+      submitVerifiedAndroidBundleWithPublisher({
+        ...input, resumeEditId: editId,
+      }, publisher, observed.rootUrl),
+      /without matching bundle bytes/u,
+    );
+    assert.equal(observed.operations.some((item) => item.includes(':commit')), false);
+  });
+  // The edit may close between the two reads of a resume.
+  await withPublisher('ok', async (publisher, observed) => {
+    const editId = await publisher.insertEdit(packageName);
+    observed.setLive({
+      bundles: [{ versionCode: 45, sha256 }],
+      track: { track: 'internal', releases: [{ status: 'completed', versionCodes: ['45'] }] },
+    });
+    const closesOnTrackRead: PlayPublisher = {
+      ...publisher,
+      async getTrack(name, id, track, signal) {
+        if (id === editId) {
+          throw Object.assign(new Error('The edit is closed.'), {
+            response: { status: 400, data: closedEditError },
+          });
+        }
+        return publisher.getTrack(name, id, track, signal);
+      },
+    };
+    const result = await submitVerifiedAndroidBundleWithPublisher({
+      ...input, resumeEditId: editId,
+    }, closesOnTrackRead, observed.rootUrl);
+    assert.equal(result.alreadyCommitted, true);
+    assert.equal(result.editId, 'edit-2');
+  });
+  // Any other refusal keeps the recorded edit: no replacement edit is opened.
+  await withPublisher('auth-failure', async (publisher, observed) => {
+    await assert.rejects(submitVerifiedAndroidBundleWithPublisher({
+      ...input, resumeEditId: 'edit-1',
+    }, publisher, observed.rootUrl));
+    assert.equal(observed.operations.some((item) => item.endsWith('/edits')), false);
+  });
+  assert.equal(isPlayEditClosedError({ response: { status: 404 } }), true);
+  assert.equal(
+    isPlayEditClosedError({
+      response: { status: 400, data: { error: { status: 'FAILED_PRECONDITION' } } },
+    }),
+    true,
+  );
+  assert.equal(
+    isPlayEditClosedError({
+      code: 400,
+      errors: [{ reason: 'failedPrecondition' }],
+    }),
+    true,
+  );
+  assert.equal(
+    isPlayEditClosedError({
+      response: { status: 400, data: { error: { status: 'INVALID_ARGUMENT' } } },
+    }),
+    false,
+  );
+  // A 5xx says nothing about the edit, whatever its body names.
+  assert.equal(
+    isPlayEditClosedError({
+      response: { status: 503, data: { error: { status: 'FAILED_PRECONDITION' } } },
+    }),
+    false,
+  );
+  assert.equal(isPlayEditClosedError(new Error('failedPrecondition')), false);
+  // A stale release never replaces a newer completed one, before anything is sent.
+  await withPublisher('ok', async (publisher, observed) => {
+    observed.setLive({
+      bundles: [],
+      track: { track: 'internal', releases: [{ status: 'completed', versionCodes: ['46'] }] },
+    });
+    const persisted: string[] = [];
+    await assert.rejects(
+      submitVerifiedAndroidBundleWithPublisher({
+        ...input, onEditCreated: async (id) => { persisted.push(id); },
+      }, publisher, observed.rootUrl),
+      /newer/u,
+    );
+    assert.deepEqual(persisted, []);
+    assert.equal(observed.operations.some((item) => item.includes('/upload/')), false);
+    assert.equal(observed.updates.length, 0);
   });
   await withPublisher('draft-existing', async (publisher, observed) => {
     await assert.rejects(
