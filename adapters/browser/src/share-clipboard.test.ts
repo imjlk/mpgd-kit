@@ -110,6 +110,21 @@ describe('browser share clipboard fallback', () => {
     expect(clipboard).toHaveLength(1);
   });
 
+  it('resolves against the location, not a document base on another origin', async () => {
+    vi.stubGlobal('document', { baseURI: 'https://cdn.example/assets/' });
+    vi.stubGlobal('location', { href: 'https://game.example/play/' });
+    const clipboard: string[] = [];
+
+    await expect(createBrowserPlatformGateway({
+      lifecycle,
+      async writeClipboardText(text) {
+        clipboard.push(text);
+      },
+    }).sharing?.share?.({ kind: 'invite', title: 'Join', text: 'Join me', deepLink: '/daily' }))
+      .resolves.toEqual({ status: 'shared' });
+    expect(clipboard).toEqual(['Join me\nhttps://game.example/daily']);
+  });
+
   it('falls back to the page URL it was given when the document base is not a web page', async () => {
     vi.stubGlobal('document', { baseURI: 'capacitor://localhost/' });
     const clipboard: string[] = [];

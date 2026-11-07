@@ -674,11 +674,13 @@ discards a link that rule refuses, such as `mygame://game//evil.example/x` or
 path as another host. A delivered event carries the checked path as `route`:
 `/daily` for `mygame://game/daily`, as in the example above, where the host
 only names the link kind. The host is never part of `route`, so
-`mygame://level/3` gives `/3`. A router that routes by path opens
-`event.route` rather than parsing `event.url`. A link with no path to check,
-such as `mygame://daily`, arrives without `route`. A router that builds its
-route from anything else in the URL, such as the host, checks that route with
-`normalizeRootRelativeRoute` and opens only what it returns.
+`mygame://level/3` gives `/3`, and a query or fragment alone after the host
+reads as `/` (`mygame://game?entry=daily` gives `/?entry=daily`). A router
+that routes by path opens `event.route` rather than parsing `event.url`. A
+link with no route to check, such as `mygame://daily`, arrives without
+`route`. A router that builds its route from anything else in the URL, such
+as the host, checks that route with `normalizeRootRelativeRoute` and opens only
+what it returns.
 
 Save progress at checkpoints and transaction boundaries. A pause callback can
 request a best-effort save, but neither pause nor back is guaranteed to run
