@@ -1,5 +1,11 @@
 # @mpgd/adapter-capacitor
 
+## 0.19.5 — 2026-11-07
+
+### Patch changes
+
+- Updated dependencies: @mpgd/target-config@0.24.11
+
 ## 0.19.4 — 2026-11-02
 
 ### Added
