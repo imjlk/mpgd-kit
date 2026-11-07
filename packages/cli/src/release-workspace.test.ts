@@ -299,6 +299,18 @@ fs.writeFileSync(manifest, JSON.stringify({
     }),
     /match the pinned deployment plan/u,
   );
+  // A production rehearsal or any other unsigned mode never enters the deployment workspace.
+  for (const mode of ['rehearsal-archive', 'unsigned-archive', 'debug', 'store-export']) {
+    await assert.rejects(
+      runPinnedNativeBuild(first, {
+        target: 'android',
+        profile: 'production',
+        mode,
+        environment: buildEnvironment,
+      }),
+      /signed submission mode/u,
+    );
+  }
   await assert.rejects(
     runPinnedNativeBuild(first, {
       target: 'ios',

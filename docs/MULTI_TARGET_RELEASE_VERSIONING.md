@@ -107,6 +107,19 @@ before packaging:
   target's `Release` configuration is inspected, so valid extension and Debug
   identities do not block the archive.
 
+The Android check follows every `apply from:` script of the settings, root
+and app Gradle files, and refuses task actions it cannot evaluate
+(`doFirst`/`doLast`, `whenReady`, `whenTaskAdded`, `tasks.*`, or a `task`
+body) other than the standard `task clean(type: Delete)` that deletes
+`rootProject.buildDir` or `rootProject.layout.buildDirectory`. On a clean
+checkout the source shell has not been through `cap sync`, so any applied
+script that is missing from the git-ignored
+`android/capacitor-cordova-android-plugins/` directory is tolerated there (the
+committed `app/capacitor.build.gradle` applies `cordova.variables.gradle` from
+it); `mpgd target init capacitor` tolerates it on an existing shell too. The
+staged shell is checked again after `cap sync`, where every applied script
+must exist.
+
 The values are also captured in the release manifest. A mismatch fails before
 an artifact is produced; the target tool never silently rewrites a store
 identity.
@@ -150,11 +163,46 @@ before.
 Set `MPGD_NATIVE_BUILD_MODE` explicitly for a production native build. Staging
 defaults to an unsigned Android AAB or an iOS Capacitor sync. Available modes
 are `sync` (iOS only), `debug` (Android APK), `simulator` (iOS app),
-`unsigned-archive`, `signed-archive`, and `store-export` (iOS IPA). A signed
-iOS archive is not yet an App Store export. Production rejects sync, debug,
-simulator, and unsigned modes. The older iOS smoke flags remain for staging
-only and cannot be combined with the new mode variable. Android sync packaging
-is rejected until its generated Gradle dependencies can be made portable.
+`unsigned-archive`, `signed-archive`, `store-export` (iOS IPA), and
+`rehearsal-archive` (Android production only). A signed iOS archive is not yet
+an App Store export. Production rejects sync, debug, simulator, and
+`unsigned-archive`. The older iOS smoke flags remain for staging only and
+cannot be combined with the new mode variable. Android sync packaging is
+rejected until its generated Gradle dependencies can be made portable.
+
+#### Android production rehearsal
+
+`MPGD_NATIVE_BUILD_MODE=rehearsal-archive` builds an unsigned Android AAB from
+the production profile, so a game can rehearse its release without upload
+credentials. It applies the production target config and the same release
+version checks as a signed production build, so `MPGD_TARGET_VERSION_CODE`,
+`MPGD_TARGET_VERSION_NAME`, and a matching `APP_VERSION` are required (with
+`MPGD_NATIVE_VERSION_STAMP=1` when the committed shell does not hold those
+numbers). It then runs `bundleRelease` with no Kit signing inputs. The
+release manifest records it as `mode: "unsigned-archive"`, `signed: false`,
+`submissionCandidate: false`, and `rehearsal: true`, and `smoke:target`
+verifies it like any other AAB. The signer and bundle-manifest inspection of
+`signed-archive` is skipped, so check the rehearsal bundle's version numbers
+in the game's own audit.
+
+A rehearsal is never submission evidence: the pinned deployment workspace
+builds only `signed-archive` (Android) or `store-export` (iOS), and recording
+a native build refuses a manifest whose delivery is a rehearsal. The mode is
+rejected for other profiles, which already default to an unsigned AAB, and for
+iOS, whose production behaviour is unchanged; rehearse iOS with a staging
+`unsigned-archive`. A game-owned Gradle guard that refuses an unsigned release
+task, for example a `MPGD_ANDROID_ALLOW_UNSIGNED=1` opt-out, stays the game's
+own contract: Kit neither reads nor sets it, so keep setting it alongside
+`rehearsal-archive` when your Gradle file requires it. Write that guard as a
+configuration-time check, for example on `gradle.startParameter.taskNames`; a
+task-graph action such as `gradle.taskGraph.whenReady`, `doFirst`/`doLast`, or
+`tasks.*` is refused by the release preflight above.
+
+A rehearsal replaces the Android entry in the local
+`artifacts/release-manifest.json`. Recording a build refuses that manifest
+while the rehearsal entry remains, so rebuild Android with `signed-archive`
+before recording a submission from the same checkout; `mpgd deploy run` builds
+in a fresh pinned workspace and is unaffected.
 
 For a production Android AAB, configure the game-owned Gradle project's
 release signing from the build host, select `signed-archive`, and provide
@@ -162,7 +210,8 @@ release signing from the build host, select `signed-archive`, and provide
 `MPGD_ANDROID_UPLOAD_CERT_SHA256` to the expected upload certificate's SHA-256
 fingerprint (64 hex digits, optional colons). The tool verifies the emitted AAB
 signature and signer, then reads its package ID, version code, and version name
-from the bundle manifest. An unsigned or staging AAB is not a submission candidate.
+from the bundle manifest. An unsigned, rehearsal, or staging AAB is not a
+submission candidate.
 Keep the keystore and passwords out of the repository and build logs.
 
 For iOS, select `signed-archive` or `store-export` and set

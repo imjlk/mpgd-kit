@@ -118,7 +118,7 @@ jobs:
           ref: ${{ needs.source.outputs.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+      - uses: jdx/mise-action@f5be966e4a917d54244728e6a5fdcd1d93a35e6c # v5.2.6
       # No repository pnpm install/build: the consumer must work using npm alone.
       - name: Generate and build from the public npm registry
         run: mise exec -- node tools/smoke/published-starter-consumer.mjs
@@ -128,7 +128,7 @@ jobs:
           MPGD_PUBLISHED_SOURCE_SHA: ${{ needs.source.outputs.sha }}
           MPGD_PUBLISHED_CLI_VERSION: ${{ needs.source.outputs.cli }}
           MPGD_PUBLISHED_CREATE_VERSION: ${{ needs.source.outputs.creator }}
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         if: ${{ runner.os == 'Windows' }}
         with:
           dotnet-version: 8.0.425

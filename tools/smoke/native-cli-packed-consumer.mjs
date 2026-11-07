@@ -169,6 +169,14 @@ try {
     /Production native builds require an explicit MPGD_NATIVE_BUILD_MODE/u);
   assert.doesNotMatch(`${result.stdout ?? ''}\n${result.stderr ?? ''}`,
     /Could not detect an mpgd-kit checkout|Expected an mpgd-kit checkout/u);
+  // The Android-only production rehearsal must not open an unsigned iOS route.
+  const iosRehearsal = run('pnpm', [
+    'exec', 'mpgd', 'target', 'build', 'ios', 'production',
+    '--targets-file', join(gameRoot, 'mpgd.targets.json'),
+  ], gameRoot, { ...env, MPGD_NATIVE_BUILD_MODE: 'rehearsal-archive' });
+  assert.notEqual(iosRehearsal.status, 0, 'an iOS production rehearsal must fail');
+  assert.match(`${iosRehearsal.stdout ?? ''}\n${iosRehearsal.stderr ?? ''}`,
+    /Production rehearsal archives are Android-only/u);
   const installedInfo = JSON.parse(readFileSync(join(
     gameRoot, 'node_modules/@mpgd/cli/dist/native-build-info.json',
   ), 'utf8'));

@@ -919,6 +919,23 @@ try {
     capacitorGradle,
     'apply from: "../capacitor-cordova-android-plugins/cordova.variables.gradle"',
   );
+  // A clean checkout has not run `cap sync`, so the git-ignored Cordova script is absent.
+  const cordovaVariables = path.join(
+    root,
+    'apps/mobile-capacitor/android/capacitor-cordova-android-plugins/cordova.variables.gradle',
+  );
+  renameSync(cordovaVariables, `${cordovaVariables}.saved`);
+  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  writeFileSync(capacitorGradle, 'apply from: "missing.gradle"');
+  assert.throws(
+    () => planCapacitorShellStarter(options),
+    /applied Gradle script .*missing\.gradle is missing/u,
+  );
+  writeFileSync(
+    capacitorGradle,
+    'apply from: "../capacitor-cordova-android-plugins/cordova.variables.gradle"',
+  );
+  renameSync(`${cordovaVariables}.saved`, cordovaVariables);
   const wrapperJar = path.join(
     root,
     'apps/mobile-capacitor/android/gradle/wrapper/gradle-wrapper.jar',

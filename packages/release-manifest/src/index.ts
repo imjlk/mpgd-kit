@@ -13,6 +13,11 @@ export interface ReleaseNativeDelivery {
   readonly signed: boolean;
   /** Candidate for store submission; not proof of store acceptance. */
   readonly submissionCandidate: boolean;
+  /**
+   * An unsigned production-profile Android AAB built to rehearse a release.
+   * Never signed and never a submission candidate.
+   */
+  readonly rehearsal?: true;
 }
 
 export interface ReleaseTargetManifest {
@@ -108,11 +113,14 @@ export function assertReleaseManifest(input: unknown): ReleaseManifest {
     const expectedCandidate = entry.profile === 'production' && (delivery.platform === 'android'
       ? delivery.mode === 'signed-archive'
       : delivery.mode === 'store-export');
-    if (!validPlatformMode || delivery.signed !== expectedSigned
+    const validRehearsal = delivery.rehearsal === undefined
+      || (delivery.platform === 'android' && delivery.mode === 'unsigned-archive'
+        && entry.profile === 'production');
+    if (!validPlatformMode || !validRehearsal || delivery.signed !== expectedSigned
       || delivery.submissionCandidate !== expectedCandidate) {
       throw new TypeError(`Release manifest native delivery state is inconsistent: ${target}.`);
     }
-    if (entry.profile === 'production' && !delivery.signed) {
+    if (entry.profile === 'production' && !delivery.signed && delivery.rehearsal !== true) {
       throw new TypeError(`Release manifest production native delivery is unsigned: ${target}.`);
     }
   }

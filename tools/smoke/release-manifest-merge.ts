@@ -143,6 +143,37 @@ try {
       }),
     /production native delivery is unsigned/u,
   );
+  const rehearsal = {
+    platform: 'android',
+    mode: 'unsigned-archive',
+    signed: false,
+    submissionCandidate: false,
+    rehearsal: true,
+  } as const;
+  const invalidRehearsals: readonly (readonly [ReleaseNativeDelivery, string])[] = [
+    [{ ...rehearsal, submissionCandidate: true }, 'production'],
+    [
+      { ...rehearsal, mode: 'signed-archive', signed: true, submissionCandidate: true },
+      'production',
+    ],
+    [rehearsal, 'staging'],
+    [{ ...rehearsal, platform: 'ios' }, 'production'],
+  ];
+  assert.equal(withNativeDelivery(rehearsal).targets.android?.nativeDelivery?.rehearsal, true);
+  assert.throws(() =>
+    withNativeDelivery({
+      platform: 'android',
+      mode: 'signed-archive',
+      signed: true,
+      submissionCandidate: true,
+      rehearsal: false,
+    } as unknown as ReleaseNativeDelivery));
+  for (const [delivery, profile] of invalidRehearsals) {
+    assert.throws(
+      () => withNativeDelivery(delivery, profile),
+      /native delivery state is inconsistent/u,
+    );
+  }
   assert.throws(
     () =>
       withNativeDelivery(

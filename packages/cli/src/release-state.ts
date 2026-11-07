@@ -342,6 +342,11 @@ function assertCompleteReleaseManifest(value: unknown): ReleaseManifest {
         || typeof rawEntry.nativeDelivery.submissionCandidate !== 'boolean') {
         throw new Error(`Native release manifest target ${name} delivery is malformed.`);
       }
+      if (rawEntry.nativeDelivery.rehearsal !== undefined) {
+        throw new Error(
+          `Native release manifest target ${name} is a rehearsal build, not submission evidence.`,
+        );
+      }
     }
   }
   const manifest = value as unknown as ReleaseManifest;

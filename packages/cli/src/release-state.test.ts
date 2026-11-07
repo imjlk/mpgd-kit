@@ -395,6 +395,27 @@ process.exit(result.status ?? 1);
     }),
     /iconManifest|expected|property|target android is malformed/u,
   );
+  const rehearsalManifest = JSON.parse(validManifestBytes.toString('utf8'));
+  rehearsalManifest.targets.android.nativeDelivery = {
+    platform: 'android',
+    mode: 'unsigned-archive',
+    signed: false,
+    submissionCandidate: false,
+    rehearsal: true,
+  };
+  // A valid rehearsal manifest is still refused as submission evidence.
+  assert.equal(
+    assertReleaseManifest(rehearsalManifest).targets.android?.nativeDelivery?.rehearsal,
+    true,
+  );
+  writeFileSync(releaseManifestFile, `${JSON.stringify(rehearsalManifest)}\n`);
+  await assert.rejects(
+    recordNativeReleaseBuild({
+      ...buildInput,
+      expectedReleaseManifestSha256: sha256(releaseManifestFile),
+    }),
+    /rehearsal build, not submission evidence/u,
+  );
   writeFileSync(releaseManifestFile, validManifestBytes);
   await assert.rejects(
     recordNativeReleaseBuild({ ...buildInput, inspectedSignerSha256: 'f'.repeat(64) }),

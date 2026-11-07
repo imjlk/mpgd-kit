@@ -302,6 +302,9 @@ export async function runPinnedNativeBuild(
     || input.profile !== workspace.input.buildProfile) {
     throw new Error('Native build target and profile must match the pinned deployment plan.');
   }
+  if (input.mode !== (input.target === 'android' ? 'signed-archive' : 'store-export')) {
+    throw new Error('Pinned native builds must select the signed submission mode.');
+  }
   const cliExecutable = assertInstalledKitIdentity(workspace);
   const targetsFile = path.join(workspace.gameRoot, 'mpgd.targets.json');
   const environment: NodeJS.ProcessEnv = {
