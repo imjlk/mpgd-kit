@@ -124,14 +124,16 @@ class FixtureGooglePlayClient implements GooglePlayProductPurchaseClient {
     }
     if (this.stallingConsumeTokens.has(input.purchaseToken)) {
       await new Promise<void>((_resolve, reject) => {
-        input.signal.addEventListener(
-          'abort',
-          () => {
-            this.abortedConsumeTokens.add(input.purchaseToken);
-            reject(input.signal.reason);
-          },
-          { once: true },
-        );
+        const abort = () => {
+          this.abortedConsumeTokens.add(input.purchaseToken);
+          reject(input.signal.reason);
+        };
+        // The timeout can fire before the finalizer reaches the write, as on a loaded runner.
+        if (input.signal.aborted) {
+          abort();
+          return;
+        }
+        input.signal.addEventListener('abort', abort, { once: true });
       });
     }
     if (this.failingConsumeTokens.has(input.purchaseToken)) {
@@ -461,8 +463,11 @@ const timedFinalizationResult = await timedFinalization.backend.purchases.verify
 assertEqual(timedFinalizationResult.verified, true, 'finalizer timeout follows the durable grant');
 assertEqual(timedFinalizationResult.finalization?.status, 'pending');
 assertEqual(timedFinalizationResult.finalization?.reason, 'PURCHASE_FINALIZER_TIMEOUT');
+// The finalizer keeps running after the timeout answers, so its write may start after this point.
 assert(
-  timedFinalization.client.abortedConsumeTokens.has('token-finalization-timeout'),
+  await eventually(() =>
+    timedFinalization.client.abortedConsumeTokens.has('token-finalization-timeout'),
+  ),
   'the dedicated finalization timeout must abort the provider write',
 );
 assertEqual((await timedFinalization.store.listEntitlementTransactions()).length, 1);
@@ -478,6 +483,14 @@ const ignoredAbortResult = await ignoredAbortFinalization.backend.purchases.veri
   ignoredAbortRequest,
 );
 assertEqual(ignoredAbortResult.finalization?.reason, 'PURCHASE_FINALIZER_TIMEOUT');
+// Let the timed-out write start and hang before allowing writes again, or it could consume the
+// purchase first and leave the retry nothing to finalize.
+assert(
+  await eventually(() =>
+    ignoredAbortFinalization.events.includes('provider:consume:token-ignored-finalization-abort'),
+  ),
+  'the timed-out finalizer must reach the provider write',
+);
 ignoredAbortFinalization.client.ignoringAbortConsumeTokens.delete(
   'token-ignored-finalization-abort',
 );
@@ -1264,6 +1277,22 @@ function assertThrows(action: () => unknown, message: string): void {
     return;
   }
   throw new Error(message);
+}
+
+/** Whether `check` holds within `timeoutMs`, polling on the timer queue. */
+async function eventually(check: () => boolean, timeoutMs = 2_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+
+  while (!check()) {
+    if (Date.now() >= deadline) {
+      return false;
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 1);
+    });
+  }
+
+  return true;
 }
 
 function assert(condition: unknown, message: string): asserts condition {
