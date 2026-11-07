@@ -319,3 +319,198 @@ describe('isHostedGameServicesPath', () => {
     }
   });
 });
+
+/**
+ * The `URL`-based rule this module ran before it stopped needing the `URL`
+ * global: the oracle the URL-free parser must match on every input.
+ */
+const oracleOrigin = 'https://mpgd.invalid';
+
+function oracleHasNetworkPathPrefix(pathname: string): boolean {
+  if (!pathname.startsWith('/')) {
+    return true;
+  }
+
+  const decoded = decodeOnce(pathname).replace(/[\t\n\r]/gu, '');
+
+  if (/^[/\\]{2}/u.test(decoded)) {
+    return true;
+  }
+
+  const ends = [...decoded.matchAll(/[?#]/gu)].map((match) => match.index);
+
+  if (ends.length > 16) {
+    return true;
+  }
+
+  return [...ends, decoded.length].some((end) => new URL(
+    `${keepDelimiters(decoded.slice(0, end))}#`,
+    oracleOrigin,
+  ).pathname.startsWith('//'));
+}
+
+function oracleNormalizeRootRelativeRoute(input: string): string | undefined {
+  if (
+    !input.startsWith('/')
+    || input.startsWith('//')
+    || input.startsWith('/\\')
+    || hasRouteControlCharacter(input)
+  ) {
+    return undefined;
+  }
+
+  const { pathname, search, hash } = new URL(input, oracleOrigin);
+
+  return oracleHasNetworkPathPrefix(pathname) ? undefined : `${pathname}${search}${hash}`;
+}
+
+/** Every `/`-led sequence of up to `length` tokens. */
+function* routesFrom(tokens: readonly string[], length: number): Generator<string> {
+  let current = [''];
+
+  for (let size = 1; size <= length; size += 1) {
+    const next: string[] = [];
+
+    for (const prefix of current) {
+      for (const token of tokens) {
+        next.push(`${prefix}${token}`);
+      }
+    }
+
+    yield* next.map((route) => `/${route}`);
+    current = next;
+  }
+}
+
+/** A small seeded generator, so a failure names an input that reproduces. */
+function seededRandom(seed: number): () => number {
+  let state = seed;
+
+  return () => {
+    // 32-bit multiply: a float product past 2^53 rounds and repeats states.
+    state = (Math.imul(state, 1_103_515_245) + 12_345) & 0x7fff_ffff;
+    return state / 2_147_483_648;
+  };
+}
+
+describe('URL-free route parsing', () => {
+  // Hundreds of thousands of parses: allow for a loaded machine.
+  it('matches WHATWG URL parsing on every short route', { timeout: 120_000 }, () => {
+    const tokens = [
+      '/',
+      '\\',
+      '.',
+      '..',
+      '%2e',
+      '%2E',
+      '%2f',
+      '%5c',
+      '%3f',
+      '%23',
+      '%25',
+      '%',
+      '?',
+      '#',
+      'a',
+      ' ',
+      'é',
+      '\ud800',
+      '😀',
+      '^',
+      '`',
+      '{',
+      '"',
+      "'",
+      '<',
+      '|',
+    ];
+    const mismatches: string[] = [];
+
+    for (const route of routesFrom(tokens, 4)) {
+      const expected = oracleNormalizeRootRelativeRoute(route);
+      const actual = normalizeRootRelativeRoute(route);
+
+      if (actual !== expected) {
+        mismatches.push(`${JSON.stringify(route)}: ${String(actual)} != ${String(expected)}`);
+      }
+
+      if (hasNetworkPathPrefix(route) !== oracleHasNetworkPathPrefix(route)) {
+        mismatches.push(`${JSON.stringify(route)}: network-path prefix differs`);
+      }
+    }
+
+    expect(mismatches.slice(0, 10)).toEqual([]);
+  });
+
+  // Hundreds of thousands of parses: allow for a loaded machine.
+  it('matches WHATWG URL parsing on random longer routes', { timeout: 120_000 }, () => {
+    const random = seededRandom(362);
+    const alphabet = [
+      '/',
+      '/',
+      '\\',
+      '.',
+      '.',
+      '%',
+      '2',
+      'e',
+      'E',
+      'f',
+      '5',
+      'c',
+      '3',
+      '?',
+      '#',
+      'a',
+      'z',
+      ' ',
+      '\t',
+      '\u0000',
+      '\u007f',
+      'é',
+      '\ud800',
+      '\udc00',
+      '😀',
+      '^',
+      '`',
+      '{',
+      '}',
+      '"',
+      "'",
+      '<',
+      '>',
+      '|',
+      '[',
+      ']',
+      '@',
+      ':',
+      '&',
+      '=',
+      '+',
+      '~',
+    ];
+    const mismatches: string[] = [];
+
+    for (let run = 0; run < 20_000; run += 1) {
+      const size = 1 + Math.floor(random() * 24);
+      let route = '/';
+
+      for (let index = 0; index < size; index += 1) {
+        route += alphabet[Math.floor(random() * alphabet.length)];
+      }
+
+      const expected = oracleNormalizeRootRelativeRoute(route);
+      const actual = normalizeRootRelativeRoute(route);
+
+      if (actual !== expected) {
+        mismatches.push(`${JSON.stringify(route)}: ${String(actual)} != ${String(expected)}`);
+      }
+
+      if (hasNetworkPathPrefix(route) !== oracleHasNetworkPathPrefix(route)) {
+        mismatches.push(`${JSON.stringify(route)}: network-path prefix differs`);
+      }
+    }
+
+    expect(mismatches.slice(0, 10)).toEqual([]);
+  });
+});

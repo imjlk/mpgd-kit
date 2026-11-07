@@ -40,8 +40,9 @@ function defaultVisibility(): CapacitorVisibilitySource | null {
 
 /**
  * Reads a game link the way `NativeOpenUrlEvent.route` describes: its path,
- * query, and fragment as a normalized route (the host is not part of it),
- * `undefined` when the URL has no path to check (`mygame:daily`,
+ * query, and fragment as a normalized route (the host is not part of it, and a
+ * link with only a query or fragment after the host reads as `/`),
+ * `undefined` when the URL has no route to check (`mygame:daily`,
  * `mygame://daily`), or `null` when the link is not delivered: it does not
  * parse, carries a control character, or has a path `normalizeRootRelativeRoute`
  * refuses because a client could read it as another host.

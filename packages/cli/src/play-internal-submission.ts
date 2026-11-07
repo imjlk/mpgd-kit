@@ -126,9 +126,11 @@ export async function planVerifiedAndroidBundleSubmission(
       'edits.bundles.upload (skipped when the edit already has this version code)',
       ...(request.mappingFile === undefined
         ? [] : ['edits.deobfuscationfiles.upload proguard']),
-      `edits.tracks.update ${request.track} (other releases kept; a ${
-        request.status === 'draft' ? 'draft replaces an older draft'
-          : 'new release replaces an in-progress or halted rollout'})`,
+      `edits.tracks.update ${request.track} (other releases kept; ${
+        request.status === 'draft' ? 'a draft replaces an older draft'
+          : request.status === 'completed'
+            ? 'a completed release replaces the completed release and any in-progress or halted rollout'
+            : 'a staged release replaces an in-progress or halted rollout'})`,
       'edits.validate',
       'edits.commit changesInReviewBehavior=ERROR_IF_IN_REVIEW',
     ],
@@ -171,30 +173,36 @@ export async function submitVerifiedAndroidBundleWithPublisher(
     editPersisted = true;
   };
 
-  let bundles: PlayBundle[];
+  const readEdit = async (): Promise<{ bundles: PlayBundle[]; track: PlayTrack }> => ({
+    bundles: await publisher.listBundles(packageName, editId, input.signal),
+    track: await getTrackOrEmpty(
+      publisher,
+      packageName,
+      editId,
+      trackName,
+      input.signal,
+      !isWellKnownPlayTrack(trackName),
+    ),
+  });
+  let snapshot: Awaited<ReturnType<typeof readEdit>>;
   try {
-    bundles = await publisher.listBundles(packageName, editId, input.signal);
+    snapshot = await readEdit();
   } catch (error) {
-    if (input.resumeEditId === undefined || !isHttpStatus(error, 404)) {
+    if (input.resumeEditId === undefined || !isPlayEditClosedError(error)) {
       throw error;
     }
-    // A successful commit may have invalidated the old edit while its response
-    // was lost. Open a new snapshot solely to inspect the live track.
+    // The recorded edit is finished: our commit landed and its response was
+    // lost, or it was committed or discarded outside the Kit. A new edit reads
+    // the live state, so the checks below find a release that already landed.
     editId = await publisher.insertEdit(packageName, input.signal);
     freshEdit = true;
     editPersisted = false;
     await persistEdit();
-    bundles = await publisher.listBundles(packageName, editId, input.signal);
+    snapshot = await readEdit();
   }
+  let { bundles } = snapshot;
+  const currentTrack = snapshot.track;
   let existing = findVersionBundle(bundles, versionCode, expectedSha256);
-  const currentTrack = await getTrackOrEmpty(
-    publisher,
-    packageName,
-    editId,
-    trackName,
-    input.signal,
-    !isWellKnownPlayTrack(trackName),
-  );
   const release = newPlayRelease(request, input.record.releaseKey, versionCode);
   const commit = async (status: PlayNewReleaseStatus): Promise<PlayInternalSubmissionResult> => {
     const committed = await validateAndCommit({
@@ -277,6 +285,7 @@ export async function submitVerifiedAndroidBundleWithPublisher(
       + 'release it with --status completed (or draft) first.',
     );
   }
+  const merged = mergeNewPlayRelease(currentTrack.releases, release);
   await persistEdit();
   if (existing === undefined) {
     try {
@@ -316,7 +325,7 @@ export async function submitVerifiedAndroidBundleWithPublisher(
 
   const desired: PlayTrack = {
     track: trackName,
-    releases: mergeNewPlayRelease(currentTrack.releases, release).releases,
+    releases: merged.releases,
   };
   await updateTrackChecked(
     publisher,
@@ -589,6 +598,29 @@ export function isHttpStatus(error: unknown, status: number): boolean {
   }
   const value = error as { code?: unknown; response?: { status?: unknown } };
   return value.code === status || value.response?.status === status;
+}
+
+/**
+ * A recorded edit can no longer be read: Play answers 404 for an unknown or
+ * expired edit and failedPrecondition for one that is already closed. Only a
+ * read of a resumed edit should ask this. A wrong yes costs a replacement edit,
+ * which is safe there because the new edit sees the live track first.
+ */
+export function isPlayEditClosedError(error: unknown): boolean {
+  if (isHttpStatus(error, 404)) {
+    return true;
+  }
+  if (!isDefinitiveHttpError(error)) {
+    return false;
+  }
+  const value = error as {
+    errors?: unknown;
+    response?: { data?: { error?: { status?: unknown; errors?: unknown } } };
+  };
+  const detail = value.response?.data?.error;
+  return detail?.status === 'FAILED_PRECONDITION'
+    || [value.errors, detail?.errors].some((errors) => Array.isArray(errors)
+      && errors.some((item: { reason?: unknown } | null) => item?.reason === 'failedPrecondition'));
 }
 
 export function isDefinitiveHttpError(error: unknown): boolean {
