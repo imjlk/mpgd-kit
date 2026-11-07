@@ -1,5 +1,12 @@
 # @mpgd/adapter-ait
 
+## 0.23.0 — 2026-11-07
+
+### Minor changes
+
+- [9757d887](https://github.com/imjlk/mpgd-kit/commit/9757d887b3b8989bb2d19dbf461db356c644d93c) Hosts can count rejected promotion observations with `onPromotionObservationFailure`. The docs now say
+  the reward key is opaque base64, so an authority does not refuse real receipts. — Thanks @imjlk!
+
 ## 0.22.0 — 2026-11-02
 
 ### Added

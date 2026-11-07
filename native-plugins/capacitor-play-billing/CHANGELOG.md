@@ -1,5 +1,11 @@
 # @mpgd/capacitor-play-billing
 
+## 0.6.6 — 2026-11-07
+
+### Patch changes
+
+- Updated dependencies: @mpgd/adapter-capacitor@0.19.5
+
 ## 0.6.5 — 2026-11-02
 
 ### Patch changes
