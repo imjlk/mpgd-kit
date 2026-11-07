@@ -339,6 +339,37 @@ describe('mounted shell', () => {
     expect(stage.getAttribute('style')).toBe('padding: 4px');
   });
 
+  it('stops a refresh scheduled by an observe call that then threw', () => {
+    const frames = stubFrameLoop();
+    setViewportSize(1_280, 720);
+    document.body.innerHTML = `
+      <main id="game-shell"><aside data-game-shell-rail="left"></aside>
+        <div id="game" style="padding: 4px"></div><aside data-game-shell-rail="right"></aside></main>`;
+    const stage = document.getElementById('game') as HTMLElement;
+    const disconnect = vi.fn();
+    vi.stubGlobal('ResizeObserver', class {
+      readonly #callback: () => void;
+      constructor(callback: () => void) {
+        this.#callback = callback;
+      }
+      observe() {
+        this.#callback();
+        throw new Error('observe failed');
+      }
+      disconnect = disconnect;
+    });
+
+    expect(() => mountAdaptiveGameShell({ gameRoot: stage, runtime: 'web-preview', policy: widePolicy }))
+      .toThrow('observe failed');
+    expect(disconnect).toHaveBeenCalledTimes(1);
+    expect(cancelAnimationFrame).toHaveBeenCalledTimes(1);
+    setViewportSize(720, 320);
+    for (const frame of frames.splice(0)) {
+      frame(0);
+    }
+    expect(stage.getAttribute('style')).toBe('padding: 4px');
+  });
+
   it('leaves a newer shell on the same stage alone when the older one is destroyed', () => {
     const frames = stubFrameLoop();
     setViewportSize(1_280, 720);

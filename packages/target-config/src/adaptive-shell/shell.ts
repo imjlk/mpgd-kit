@@ -225,13 +225,21 @@ export function mountAdaptiveGameShell(input: MountAdaptiveGameShellInput): Adap
     animationFrame = view.requestAnimationFrame(refresh);
   };
   let resizeObserver: ResizeObserver;
+  let createdObserver: ResizeObserver | undefined;
 
   try {
-    resizeObserver = new view.ResizeObserver(scheduleRefresh);
-    resizeObserver.observe(elements.shell);
+    createdObserver = new view.ResizeObserver(scheduleRefresh);
+    createdObserver.observe(elements.shell);
+    resizeObserver = createdObserver;
   } catch (error) {
     // A failed mount hands back what it wrote. A claim it kept would outlive it and stop a later
-    // controller on the same elements from restoring them on destroy.
+    // controller on the same elements from restoring them on destroy. A refresh `observe` scheduled
+    // before it threw must not write again.
+    destroyed = true;
+    createdObserver?.disconnect();
+    if (animationFrame !== undefined) {
+      view.cancelAnimationFrame(animationFrame);
+    }
     for (const slot of railSlots) {
       clearRailSlot(elements.shell, slot);
     }
