@@ -276,6 +276,46 @@ try {
   await submitRecordedNativeTargetWithPorts(androidInput, ports);
   assert.equal(androidCalls, 2);
 
+  // The unknown submission's edit is gone: a replacement edit reads the live
+  // track, which already holds the release, and the record settles as committed.
+  const beforeClosedEdit = checkpoints;
+  checkpoints = {};
+  await assert.rejects(
+    submitRecordedNativeTargetWithPorts(androidInput, {
+      ...ports,
+      async submitAndroid(input) {
+        await input.onEditCreated?.('edit-1');
+        throw new Error('Only one completed release is allowed.');
+      },
+    }),
+    /Only one completed release/u,
+  );
+  assert.equal(checkpoints.android?.status, 'unknown');
+  const recoveredStatuses: unknown[] = [];
+  const recovered = await submitRecordedNativeTargetWithPorts(androidInput, {
+    ...ports,
+    async submitAndroid(input) {
+      assert.equal(input.resumeEditId, 'edit-1');
+      await input.onEditCreated?.('edit-2');
+      recoveredStatuses.push(checkpoints.android?.status);
+      return {
+        status: 'committed',
+        packageName: 'dev.mpgd.test',
+        editId: 'edit-2',
+        track: 'internal',
+        releaseStatus: 'completed',
+        draftAppFallback: false,
+        versionCode: 42,
+        bundleSha256: android.artifactSha256,
+        alreadyCommitted: true,
+      };
+    },
+  });
+  assert.deepEqual(recoveredStatuses, ['edit-open']);
+  assert.equal(recovered.status, 'committed');
+  assert.equal(recovered.remoteEditId, 'edit-2');
+  checkpoints = beforeClosedEdit;
+
   // Google Play release options are bound to the checkpoint that starts with them.
   const savedCheckpoints = checkpoints;
   checkpoints = {};

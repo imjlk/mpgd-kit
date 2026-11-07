@@ -21,6 +21,7 @@ import type {
 import {
   createPlayReleaseRequest,
   isPlayDraftAppRejection,
+  mergeNewPlayRelease,
   parsePlayReleaseNotes,
   playReleaseRequestDigest,
 } from '../../../packages/cli/src/play-release-options.js';
@@ -417,6 +418,59 @@ try {
       [['completed', ['43']], ['inProgress', ['45']]],
     );
   });
+
+  // What a new release replaces on a track: Play allows one completed release.
+  const onTrack: Record<string, PlayTrackRelease> = {
+    completed: { name: 'android-internal-003', status: 'completed', versionCodes: ['3'] },
+    rolling: { name: 'rolling', status: 'inProgress', versionCodes: ['5'], userFraction: 0.5 },
+    halted: { name: 'halted', status: 'halted', versionCodes: ['6'], userFraction: 0.1 },
+    draft: { name: 'draft', status: 'draft', versionCodes: ['7'] },
+  };
+  const everyRelease = Object.values(onTrack);
+  const newRelease = (status: string, ...fraction: number[]): PlayTrackRelease => ({
+    name: 'android-internal-008',
+    status,
+    versionCodes: ['8'],
+    ...(fraction[0] === undefined ? {} : { userFraction: fraction[0] }),
+  });
+  const completedRelease = newRelease('completed');
+  assert.deepEqual(mergeNewPlayRelease(everyRelease, completedRelease), {
+    releases: [onTrack.draft, completedRelease],
+    superseded: [onTrack.completed, onTrack.rolling, onTrack.halted],
+  });
+  // The body Play refused on 2026-11-06 becomes the new release alone.
+  assert.deepEqual(mergeNewPlayRelease(
+    [{ name: 'android-internal-003', versionCodes: ['3'], status: 'completed' }],
+    { name: 'android-internal-004', status: 'completed', versionCodes: ['4'] },
+  ).releases, [{ name: 'android-internal-004', status: 'completed', versionCodes: ['4'] }]);
+  // A staged rollout runs on top of the completed release, which keeps serving the rest.
+  const stagedRelease = newRelease('inProgress', 0.1);
+  assert.deepEqual(mergeNewPlayRelease(everyRelease, stagedRelease), {
+    releases: [onTrack.completed, onTrack.draft, stagedRelease],
+    superseded: [onTrack.rolling, onTrack.halted],
+  });
+  const draftRelease = newRelease('draft');
+  assert.deepEqual(mergeNewPlayRelease(everyRelease, draftRelease), {
+    releases: [onTrack.completed, onTrack.rolling, onTrack.halted, draftRelease],
+    superseded: [onTrack.draft],
+  });
+  assert.deepEqual(mergeNewPlayRelease(null, completedRelease), {
+    releases: [completedRelease],
+    superseded: [],
+  });
+  // Every version code counts, and only a completed release is compared.
+  assert.throws(
+    () =>
+      mergeNewPlayRelease([{ status: 'completed', versionCodes: ['7', '10'] }], {
+        status: 'completed',
+        versionCodes: ['9'],
+      }),
+    /newer/u,
+  );
+  assert.equal(mergeNewPlayRelease(
+    [{ status: 'completed', versionCodes: ['9'] }],
+    { status: 'inProgress', versionCodes: ['8'], userFraction: 0.1 },
+  ).superseded.length, 0);
 
   // Play Console offers no rollout percentage for a first release.
   await withPlay({ bundles: [], tracks: {} }, {}, async (publisher, observed) => {
@@ -891,9 +945,8 @@ try {
       .catch((error: unknown) => { uncertain = error; });
     assert.ok(uncertain instanceof PlayPromoteUncertainError, 'lost multi-code commit');
     assert.deepEqual(uncertain.versionCodes, ['50', '51']);
-    // The completed promotion replaced the running beta rollout, as a dry run shows.
+    // The completed promotion replaced the beta rollout and completed release, as a dry run shows.
     assert.deepEqual(observed.live().tracks.beta, [
-      completed44,
       { name: 'split', status: 'completed', versionCodes: ['50', '51'] },
     ]);
     const rerun = await promotePlayReleaseWithPublisher(
@@ -909,6 +962,7 @@ try {
     assert.deepEqual(planned.versionCodes, ['50', '51']);
     assert.deepEqual(planned.superseded, [
       { name: 'staged', status: 'inProgress', versionCodes: ['49'], userFraction: 0.3 },
+      completed44,
     ]);
   });
 

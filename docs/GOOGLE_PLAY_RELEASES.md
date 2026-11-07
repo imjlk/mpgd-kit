@@ -64,11 +64,16 @@ What changes on the track. Play's `Track.releases` in an update request
 every release back as Play returned it, plus the new one, except the releases
 the new one supersedes:
 
-- a `completed` or `inProgress` release replaces an `inProgress` or `halted`
-  rollout on that track;
-- a `draft` replaces an older `draft` on that track;
-- `completed` releases are always kept. A track with only completed releases
-  (the usual internal track) gets the same body the kit sent before.
+- a `completed` release replaces the track's `completed` release and any
+  `inProgress` or `halted` rollout. Play answers "Only one completed release is
+  allowed." to a body with two, and serves the new one once it is committed;
+- an `inProgress` release replaces an `inProgress` or `halted` rollout and keeps
+  the `completed` release, which goes on serving the users outside the rollout;
+- a `draft` replaces an older `draft` on that track.
+
+A `completed` release older than the `completed` release it would replace is
+refused before anything is uploaded, so a stale submission or a late resume
+cannot roll the track back.
 
 No other track is read or written. The commit uses
 `changesInReviewBehavior=ERROR_IF_IN_REVIEW`, so changes already in review are
@@ -94,6 +99,16 @@ be re-run with corrected options. Once an edit is checkpointed, a resumed
 attempt must use the same options, so an open edit is never committed to a
 different track or status. A committed release cannot be re-submitted
 with other options: change it with `deploy rollout` or submit a new release.
+
+A checkpointed edit can finish without the kit: its own commit response was
+lost, or someone committed or discarded it from another tool or Play Console.
+Play then answers 404 or failedPrecondition when the resume reads it, so the
+kit opens a new edit, checkpoints it, and reads the live track. If the track
+holds this version code and the bundle has the recorded SHA-256 (with the
+requested status, fraction and notes), the submission is marked `committed`
+with `alreadyCommitted: true` and nothing is uploaded or committed. A
+different bundle, status, fraction or notes is refused for inspection. If the
+track does not hold the version, the release is submitted in the new edit.
 The original internal/completed submission has no digest, so its checkpoints
 are unchanged. A release-state file written by this version can carry the new
 field, which older CLI versions reject as malformed.
@@ -242,11 +257,13 @@ Rules:
   An `inProgress` source (a staged test) goes to the target with the target
   `--status`, so `--status completed` serves it to everyone on that track.
 - The promoted release keeps the source release's name. On the target track
-  it is merged like a submission: it replaces an `inProgress` or `halted`
-  rollout (a draft replaces an older draft), and every other release is sent
-  back unchanged. The result lists the replaced releases in `superseded`;
-  run `--dry-run` first to see them, because replacing a running rollout on a
-  testing track needs no `--confirm-production`.
+  it is merged like a submission: `--status completed` replaces the target's
+  `completed` release and any `inProgress` or `halted` rollout, `inProgress`
+  replaces a rollout and keeps the `completed` release, a draft replaces an
+  older draft, and every other release is sent back unchanged. The result lists
+  the replaced releases in `superseded`; run `--dry-run` first to see them,
+  because replacing a running rollout on a testing track needs no
+  `--confirm-production`.
 - A staged promotion needs a completed release on the target track, as for a
   submission ("Rollout percentage options are unavailable for a first
   release").
@@ -308,12 +325,13 @@ a real Play account (the D-12 live run) and correct the kit if Play disagrees:
       lists the internal testing track as `"qa"`. Confirm that `edits.tracks.get`
       and `update` accept `internal` (and see what `track` Play returns), or
       switch the default to `qa`.
-- [ ] **Track update body.** For a `completed` release the kit sends the
-      track's existing completed releases plus the new one (the body the kit
-      has always sent on the internal track). gradle-play-publisher sends only
-      the new release. Confirm Play accepts the kit's body on internal, a
-      closed track and production, and that the previous completed release
-      stops serving as expected.
+- [ ] **Track update body.** Play refused a body with two `completed` releases
+      on the internal track ("Only one completed release is allowed.",
+      2026-11-06). The kit now sends the new `completed` release without the
+      previous one, as gradle-play-publisher does. Confirm Play accepts it on
+      internal, a closed track and production, that the previous completed
+      release stops serving, and that halting the new release still falls back
+      to it.
 - [ ] **Draft app.** On a never-published app, confirm that a `completed`
       submission is rejected with "Only releases with status draft may be
       created on draft app.", on `edits.commit` (or `edits.validate`), that the
