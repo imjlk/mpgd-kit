@@ -118,7 +118,11 @@ claim's outcome at your authenticated authority. Observations contain the logica
 server-issued idempotency key and `status`; native success includes `receiptKey`, explicit failure
 includes a bounded `errorCode`. Raw provider messages are deliberately excluded. The observer is
 best effort and stops blocking the native response after three seconds. Its failure cannot turn a
-successful payment into a failure.
+successful payment into a failure, so it is also silent: set `onPromotionObservationFailure` to count
+rejected observations. It receives the campaign and status, never the receipt.
+
+`receiptKey` is opaque and has been seen as base64 with `+`, `/` and `=`. Check its length and whitespace
+at most. An authority that allow-lists characters refuses every real receipt while payments still succeed.
 
 Explicit failures retain the pending marker with their code. A restarted host reports that code
 again and returns `failed` without another SDK call. The resolver may still return a verified receipt;
