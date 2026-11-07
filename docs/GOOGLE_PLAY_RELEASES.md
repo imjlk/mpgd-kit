@@ -107,8 +107,10 @@ Play then answers 404 or failedPrecondition when the resume reads it, so the
 kit opens a new edit, checkpoints it, and reads the live track. If the track
 holds this version code and the bundle has the recorded SHA-256 (with the
 requested status, fraction and notes), the submission is marked `committed`
-with `alreadyCommitted: true` and nothing is uploaded or committed. A
-different bundle, status, fraction or notes is refused for inspection. If the
+with `alreadyCommitted: true`. Without a mapping, nothing is uploaded or
+committed. With a requested mapping, including a recorded R8 mapping, the kit
+uploads it and commits the new edit, and a lost response there can leave the
+submission uncertain. A different bundle, status, fraction or notes is refused for inspection. If the
 track does not hold the version, the release is submitted in the new edit.
 The original internal/completed submission has no digest, so its checkpoints
 are unchanged. A release-state file written by this version can carry the new
