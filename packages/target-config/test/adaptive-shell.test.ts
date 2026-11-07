@@ -318,6 +318,27 @@ describe('mounted shell', () => {
     expect(stage.hasAttribute(adaptiveShellAttributes.stage)).toBe(true);
   });
 
+  it('hands back what a failed mount wrote, so a later mount restores it on destroy', () => {
+    stubFrameLoop();
+    setViewportSize(1_280, 720);
+    document.body.innerHTML = `
+      <main id="game-shell"><aside data-game-shell-rail="left"></aside>
+        <div id="game" style="padding: 4px"></div><aside data-game-shell-rail="right"></aside></main>`;
+    const stage = document.getElementById('game') as HTMLElement;
+    const input = { gameRoot: stage, runtime: 'web-preview' as const, policy: widePolicy, railSlots: [panelSlot] };
+    vi.stubGlobal('ResizeObserver', class { constructor() { throw new Error('no observer'); } });
+
+    expect(() => mountAdaptiveGameShell(input)).toThrow('no observer');
+    expect(stage.getAttribute('style')).toBe('padding: 4px');
+    expect(document.documentElement.style.getPropertyValue(`${panelSlot.cssVariablePrefix}-width`)).toBe('');
+
+    stubFrameLoop();
+    const controller = mountAdaptiveGameShell(input);
+    expect(stage.style.width).not.toBe('');
+    controller.destroy();
+    expect(stage.getAttribute('style')).toBe('padding: 4px');
+  });
+
   it('leaves a newer shell on the same stage alone when the older one is destroyed', () => {
     const frames = stubFrameLoop();
     setViewportSize(1_280, 720);

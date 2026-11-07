@@ -224,9 +224,27 @@ export function mountAdaptiveGameShell(input: MountAdaptiveGameShellInput): Adap
 
     animationFrame = view.requestAnimationFrame(refresh);
   };
-  const resizeObserver = new view.ResizeObserver(scheduleRefresh);
+  let resizeObserver: ResizeObserver;
 
-  resizeObserver.observe(elements.shell);
+  try {
+    resizeObserver = new view.ResizeObserver(scheduleRefresh);
+    resizeObserver.observe(elements.shell);
+  } catch (error) {
+    // A failed mount hands back what it wrote. A claim it kept would outlive it and stop a later
+    // controller on the same elements from restoring them on destroy.
+    for (const slot of railSlots) {
+      clearRailSlot(elements.shell, slot);
+    }
+    for (const element of [
+      elements.shell,
+      elements.gameRoot,
+      elements.leftRail,
+      elements.rightRail,
+    ]) {
+      releaseInlineStyles(styleOwner, element);
+    }
+    throw error;
+  }
   view.addEventListener('resize', scheduleRefresh);
   view.visualViewport?.addEventListener('resize', scheduleRefresh);
   view.visualViewport?.addEventListener('scroll', scheduleRefresh);
