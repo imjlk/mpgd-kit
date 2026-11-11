@@ -441,7 +441,8 @@ function inspectPackage(input: {
       input.tempRoot,
       'Microsoft Store package inspection directory',
     );
-    // `/l` preserves links so the fail-closed traversal below can reject them explicitly.
+    // Unlike unpack, the Windows SDK's unbundle command does not accept `/l`.
+    // Canonical-path and symlink rejection remain enforced on the extracted files below.
     input.runtime.runCommand(input.runtime.makeAppxExecutable, [
       'unbundle',
       '/p',
@@ -449,7 +450,6 @@ function inspectPackage(input: {
       '/d',
       bundleDir,
       '/o',
-      '/l',
     ]);
     const canonicalBundleDir = readCanonicalDirectory(
       bundleDir,
@@ -527,7 +527,8 @@ function inspectSinglePackage(
     path.dirname(outputDir),
     'Microsoft Store package inspection directory',
   );
-  // `/l` preserves links so the fail-closed traversal below can reject them explicitly.
+  // `/l` supports localized packages; it is not a symlink-preservation flag.
+  // Canonical-path and symlink rejection are performed independently below.
   runtime.runCommand(runtime.makeAppxExecutable, [
     'unpack',
     '/p',
