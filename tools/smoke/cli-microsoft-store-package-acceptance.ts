@@ -386,7 +386,7 @@ function runCommand(command: string, args: readonly string[]): void {
     const action = args[0];
 
     if (action === 'unbundle') {
-      assert.ok(args.includes('/l'));
+      assert.equal(args.includes('/l'), false, 'Windows SDK unbundle rejects the /l option');
       const unpackedBundleDir = join(outputDirArg, 'fixture-bundle-full-name');
       mkdirSync(join(unpackedBundleDir, 'AppxMetadata'), { recursive: true });
       writeFileSync(
