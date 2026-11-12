@@ -62,7 +62,10 @@ const aitVectors = [
   'provider-ambiguous-replay',
   'provider-minute-limit',
   'provider-rejected',
+  'reminder-attempted-again-after-kept-attempt',
+  'reminder-cancel-keeps-attempt',
   'reminder-server-route',
+  'reminder-set-again-after-kept-attempt',
 ];
 
 /** The landing a fake launch carries before a `tap`: an ordinary launch. */
