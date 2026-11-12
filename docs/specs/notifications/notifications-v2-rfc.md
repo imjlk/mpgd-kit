@@ -989,20 +989,28 @@ the pending reminder, and cancelling removes it.
   while it exists. Before a stop drops it, the backend writes a delivery
   history record, once per provider, at the row's latest attempt, under a
   kept-attempt key (`<send key>#attempt:<digest of its content>.<attempt
-  time>`), not the send key. A later acceptance of the send, or of a
-  reminder set again at the same key and time with other content, still
-  records under the send key, and that reminder's gate counts the kept
-  attempt as another send. The same reminder set again is the same send:
-  its kept attempts do not cap it, and if it is attempted and stopped
-  again, its kept attempts count as one send, from the latest. While the
-  ledger still holds the send of that key and content (a row delivered to
-  another endpoint, or a holder that replayed the row and was accepted
-  before the drop), the gate counts the kept attempts as part of it, once,
-  and an acceptance on the same provider sets its time. A scheduler run that replays a row a cancel left (its
-  lease was live then) and finds the reminder stopped drops it the same
-  way. The record is idempotent (a retried stop writes nothing new) and
-  never replays the row. A row never attempted (`deferred`, or queued with
-  no claim) leaves no record.
+  time>`), not the send key. Only a record whose key starts with a
+  reminder's send key (`reminder:`, a prefix no caller's key may have) is
+  read as a kept attempt: a caller's own key of that form, such as
+  `user#attempt:a.1`, is a send of its own. A later acceptance of the
+  send, or of a reminder set again at the same key and time with other
+  content, still records under the send key, and that reminder's gate
+  counts the kept attempt as another send. The same reminder set again is
+  the same send: its kept attempts do not cap it, and if it is attempted
+  and stopped again, its kept attempts count as one send, from the latest
+  attempt on each provider. While the ledger still holds the send of that
+  key and content (a row delivered to another endpoint, or a holder that
+  replayed the row and was accepted before the drop), the gate counts the
+  kept attempts as part of it, once, and an acceptance on the same
+  provider sets its time. A scheduler run that replays a row a cancel left
+  (its lease was live then) and finds the reminder stopped drops it the
+  same way; if the record cannot be written, the row goes back as it was,
+  at its own attempt. The record is idempotent (a retried stop writes
+  nothing new) and never replays the row. A row never attempted
+  (`deferred`, or queued with no claim) leaves no record. The gate reads
+  the sends in flight before the delivery history: a row stops being in
+  flight only after its record is written, so a stop between the two
+  reads cannot hide the attempt from both.
   <!-- @link ../../../packages/game-services/src/notifications/service.ts#createNotificationService -->
 - A send the provider may already have accepted cannot be recalled. A row
   whose claim lease is still live is not deleted: its holder records the

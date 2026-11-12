@@ -993,7 +993,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
    * never letting two through a cap of one.
    *
    * The attempts a stop kept (`keepAttempts`) of one send (its key and
-   * content) count as that send, once, latest first on each provider. While
+   * content) count as that send, once, from the latest on each provider. While
    * the ledger still holds the send, they join its other entries, after
    * them, so an acceptance on their provider sets the time, and never count
    * against the send itself. Once the ledger no longer holds the send, or
@@ -1011,11 +1011,14 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     const add = (sendKey: string, entry: NotificationDeliveryHistoryEntry): void => {
       bySend.set(sendKey, [...(bySend.get(sendKey) ?? []), entry]);
     };
+    // The sends in flight first: an acceptance or a stop writes the row's
+    // delivery-history record before the row leaves them, so an attempt
+    // settled or dropped between the two reads is still in one of them.
+    const inFlight = await store.listInFlightSends(player);
     const delivered = await store.listHistory({
       player,
       since: formatNotificationInstant(at - longestWindowMs),
     });
-    const inFlight = await store.listInFlightSends(player);
     /** The content of each send a kept attempt may belong to; `undefined` when the ledger has none. */
     const contentOf = new Map<string, string | undefined>([[excluding.key, excluding.fingerprint]]);
     for (const send of inFlight) {
@@ -1027,7 +1030,12 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         contentOf.set(named, (await store.getSend(named))?.send.fingerprint);
       }
     }
-    const kept: { readonly sendKey: string; readonly entry: NotificationDeliveryHistoryEntry }[] = [];
+    /**
+     * The latest kept attempt of each send on each provider: an older one is
+     * never the one counted, also where another provider's row falls back
+     * to the send's earliest entry (`historyOn`).
+     */
+    const kept = new Map<string, { readonly sendKey: string; readonly entry: NotificationDeliveryHistoryEntry }>();
     for (const sent of delivered) {
       const entry = { provider: sent.provider, topic: sent.topic, at: sent.at };
       const attempt = keptAttemptOf(sent.sendKey);
@@ -1041,7 +1049,12 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       const fingerprint = contentOf.get(attempt.sendKey);
       const joins = fingerprint !== undefined
         && notificationKeptAttemptSend(attempt.sendKey, fingerprint) === attempt.send;
-      kept.push({ sendKey: joins ? attempt.sendKey : attempt.send, entry });
+      const sendKey = joins ? attempt.sendKey : attempt.send;
+      const slot = JSON.stringify([sendKey, sent.provider]);
+      const seen = kept.get(slot);
+      if (seen === undefined || Date.parse(sent.at) > Date.parse(seen.entry.at)) {
+        kept.set(slot, { sendKey, entry });
+      }
     }
     for (const send of inFlight) {
       if (send.key === excluding.key) {
@@ -1065,8 +1078,8 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         });
       }
     }
-    // Newest first: the latest kept attempt on a provider is the one counted.
-    for (const { sendKey, entry } of kept.reverse()) {
+    // After the send's own entries: an acceptance on their provider sets the time.
+    for (const { sendKey, entry } of kept.values()) {
       if (sendKey !== excluding.key) {
         add(sendKey, entry);
       }
@@ -1814,7 +1827,21 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       // is gone. A stopped reminder's earlier attempt, which may have
       // reached the provider, still counts, as `stopReminderSend` keeps it.
       if (stoppedReminder) {
-        await keepAttempts(send, [before], claimed.changedBefore);
+        try {
+          await keepAttempts(send, [before], claimed.changedBefore);
+        } catch (error) {
+          // Nothing was sent: the row goes back as it was, with the time
+          // the gate counted its attempt from, so the retry keeps that
+          // attempt rather than this claim.
+          await settleQuietly(
+            sendKey,
+            row,
+            token,
+            { kind: 'set', row: backedOff(withAttemptTime(before, claimed.changedBefore), nowMs()) },
+            claimed.at,
+          );
+          throw error;
+        }
       }
       await complete(sendKey, row, token, { kind: 'remove' }, nowMs());
       return {};
@@ -4571,13 +4598,18 @@ function notificationKeptAttemptKey(send: string, attemptedAt: number): string {
 }
 
 /**
- * The send key and kept-attempt send a history record names if it has the
- * form of a kept attempt. A caller's own key could have that form too, but
- * only one ending in `#attempt:<base 36>.<base 36>`; `loadHistory` merges a
- * record into a send in the ledger only when its digest matches that send.
+ * The send key and kept-attempt send a history record names if it is a kept
+ * attempt. Only a reminder's send is stopped with its attempts kept, and its
+ * key (`createNotificationReminderIdempotencyKey`) starts with `reminder:`,
+ * a prefix no caller's key may have (`sendInputIssue`, and a bulk send's
+ * key), and holds no `#` (its player and key are percent-encoded). So a
+ * record of any other send, whatever its key, is never read as one: a
+ * caller's `user#attempt:a.1` is a send of its own. `loadHistory` merges a
+ * kept attempt into a send in the ledger only when its digest matches that
+ * send.
  */
 function keptAttemptOf(recorded: string): { readonly sendKey: string; readonly send: string } | undefined {
-  const match = /^((.+)#attempt:[0-9a-z]+)\.[0-9a-z]+$/su.exec(recorded);
+  const match = /^((reminder:[^#]+)#attempt:[0-9a-z]+)\.[0-9a-z]+$/su.exec(recorded);
   return match?.[1] === undefined || match[2] === undefined
     ? undefined
     : { send: match[1], sendKey: match[2] };
@@ -4873,6 +4905,18 @@ function historyOn(history: SendHistory, provider: string): NotificationDelivery
       ?? [...entries].sort((left, right) => Date.parse(left.at) - Date.parse(right.at))[0])
     .filter((entry): entry is NotificationDeliveryHistoryEntry => entry !== undefined)
     .sort((left, right) => Date.parse(left.at) - Date.parse(right.at));
+}
+
+/**
+ * An attempted in-flight row with the time of its latest attempt written
+ * out. A row stored without `attemptedAt` counts from its send's
+ * `changedAt` (here the value before the claim), which writing the row
+ * back would move.
+ */
+function withAttemptTime(row: NotificationSendRow, changedAt: string): NotificationSendRow {
+  return row.state.status === 'in-flight' && row.state.attempted && row.state.attemptedAt === undefined
+    ? { ...row, state: { ...row.state, attemptedAt: changedAt } }
+    : row;
 }
 
 /**

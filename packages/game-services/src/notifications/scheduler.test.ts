@@ -917,6 +917,152 @@ const historyOf = (h: Harness) =>
   );
 }
 
+// The same on another provider: the older kept attempt on fcm is not the one
+// a platform row counts, even where a provider limit's longer window keeps it
+// in the history the gate reads.
+{
+  const unresolved = ['platform'];
+  const platform = fakeProvider('platform');
+  const h = harness({
+    topics: [capped],
+    answers: [{ status: 'ambiguous' }, { status: 'ambiguous' }],
+    fcmEntry: { ...fcmEntry, limits: [{ count: 100, windowSeconds: 7 * 86_400 }] },
+    extra: [{ entry: platformEntry, delivery: platform, targets: ['platform'] }],
+    unresolved,
+  });
+  await register(h, 'p-1');
+  await h.service.recordConsent(session('p-1'), {
+    kind: 'delivery-permission',
+    state: 'granted',
+    source: 'client-report',
+  });
+  const fireAt = '2026-10-19T03:00:00Z';
+  await fire(h, fireAt);
+  h.time.set('2026-10-19T03:05:00Z');
+  await h.service.cancelReminder(session('p-1'), { key: 'k' });
+  h.time.set('2026-10-19T20:00:00Z');
+  await h.service.setReminder(session('p-1'), { key: 'k', topic: 'friend-challenge', fireAt });
+  await h.service.runScheduler();
+  h.time.set('2026-10-19T20:05:00Z');
+  await h.service.cancelReminder(session('p-1'), { key: 'k' });
+  assert.equal(h.fcm.calls.length, 2);
+  assert.equal(historyOf(h).length, 2);
+  // The platform user resolves from now on: the next reminder has a row on each provider.
+  unresolved.length = 0;
+  await h.service.setReminder(session('p-1'), {
+    key: 'next',
+    topic: 'friend-challenge',
+    fireAt: '2026-10-20T03:01:00Z',
+  });
+  h.time.set('2026-10-20T03:01:00Z');
+  assert.deepEqual(
+    (await h.service.runScheduler()).results.map((result) => result.outcome),
+    [{ status: 'suppressed', reason: 'frequency-capped' }],
+  );
+  assert.equal(platform.calls.length, 0, 'counted from 20:00 on the platform row too');
+  assert.equal(h.fcm.calls.length, 2);
+}
+
+// A caller's own key may look like a kept attempt's: only a reminder send's
+// key (a prefix no caller may use) is read as one, so two such sends count
+// as two.
+{
+  const h = harness({ topics: [{ ...challenge, frequency: { maxPerDay: 2 } }] });
+  await register(h, 'p-1');
+  const send = (idempotencyKey: string) =>
+    h.service.deliver({ idempotencyKey, player: 'p-1', topic: 'friend-challenge' });
+  assert.equal((await send('user#attempt:a.1')).status, 'delivered');
+  assert.equal((await send('user#attempt:a.2')).status, 'delivered');
+  assert.deepEqual(await send('user-3'), { status: 'suppressed', reason: 'frequency-capped' });
+  assert.equal(h.fcm.calls.length, 2);
+}
+
+// A replay that finds its reminder stopped and cannot keep the earlier
+// attempt puts the row back as it was: the retry keeps that attempt at its
+// own time, not at the failed replay's claim.
+{
+  let failHistory = 0;
+  const h = harness({
+    topics: [capped],
+    answers: [{ status: 'ambiguous' }],
+    store: (inner) => ({
+      ...inner,
+      async addHistory(entry) {
+        if (failHistory > 0) {
+          failHistory -= 1;
+          throw new Error('D1 is unavailable.');
+        }
+        return inner.addHistory(entry);
+      },
+    }),
+  });
+  await register(h, 'p-1');
+  const fireAt = '2026-10-19T03:00:00Z';
+  await fire(h, fireAt);
+  h.time.set('2026-10-19T03:01:00Z');
+  assert.deepEqual(await h.service.cancelReminder(session('p-1'), { key: 'k' }), {
+    cancelled: false,
+  });
+  h.time.set('2026-10-19T03:05:00Z');
+  failHistory = 1;
+  await h.service.runScheduler().catch(() => undefined);
+  assert.equal(failHistory, 0, 'the replay tried to keep the attempt');
+  assert.equal(h.fcm.calls.length, 1);
+  const row = h.store.inspect().sends[0]?.rows[0];
+  assert.equal(
+    row?.state.status === 'in-flight' ? row.state.attemptedAt : undefined,
+    '2026-10-19T03:00:00Z',
+    'the row keeps its own attempt',
+  );
+  h.time.set('2026-10-19T06:00:00Z');
+  await h.service.runScheduler();
+  assert.equal(h.fcm.calls.length, 1);
+  assert.deepEqual(h.store.inspect().sends, []);
+  assert.deepEqual(historyOf(h), [attemptOf(fireAt, '2026-10-19T03:00:00Z')]);
+}
+
+// A stop that lands between the gate's two reads (the sends in flight and
+// the delivery history) cannot hide from both the attempt it keeps.
+{
+  let race: (() => Promise<unknown>) | undefined;
+  const between = async () => {
+    const run = race;
+    race = undefined;
+    await run?.();
+  };
+  const h = harness({
+    topics: [capped],
+    queue: true,
+    answers: [{ status: 'ambiguous' }],
+    store: (inner) => ({
+      ...inner,
+      async listHistory(input) {
+        const read = await inner.listHistory(input);
+        await between();
+        return read;
+      },
+      async listInFlightSends(player) {
+        const read = await inner.listInFlightSends(player);
+        await between();
+        return read;
+      },
+    }),
+  });
+  await register(h, 'p-1');
+  await fire(h, '2026-10-19T03:00:00Z');
+  // Queued before the reminder's attempt, so its first gate lets it through.
+  await h.service.deliver({ idempotencyKey: 'x', player: 'p-1', topic: 'friend-challenge' });
+  assert.equal(h.jobs.length, 2);
+  await h.service.dispatch(h.jobs[0] as NotificationDispatchJob);
+  assert.equal(h.fcm.calls.length, 1);
+  h.time.set('2026-10-19T03:05:00Z');
+  race = () => h.service.cancelReminder(session('p-1'), { key: 'k' });
+  await h.service.dispatch(h.jobs[1] as NotificationDispatchJob);
+  assert.equal(race, undefined, 'the stop ran between the reads');
+  assert.deepEqual(historyOf(h), [attemptOf('2026-10-19T03:00:00Z', '2026-10-19T03:00:00Z')]);
+  assert.equal(h.fcm.calls.length, 1, 'the kept attempt fills the cap');
+}
+
 // A cancel that lands while the scheduler makes the send: nothing is stored or sent.
 {
   let cancelOnFire: (() => Promise<unknown>) | undefined;

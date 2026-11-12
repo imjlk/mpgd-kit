@@ -347,9 +347,13 @@ invitation to buy.
      any 24 hours, including one the provider may have sent without saying
      so (an ambiguous answer, such as a timeout). Cancelling or replacing a
      server reminder does not free that count: the attempt stays in the
-     delivery history, so a reminder set again the same day is
-     `frequency-capped`. A reminder whose push was never attempted (still
-     queued, or held by quiet hours) leaves nothing behind.
+     delivery history, so another push of the topic within 24 hours of it
+     (a reminder set again with another time or content included) is
+     `frequency-capped` once the allowance is full. The same reminder set
+     again with the same key, time, and content is the same push: its own
+     attempt does not cap it, and the two count as one. A reminder whose
+     push was never attempted (still queued, or held by quiet hours) leaves
+     nothing behind.
      <!-- @link ../packages/game-services/src/notifications/service.ts#createNotificationService -->
      <!-- @evidence /docs/specs/notifications/notifications-v2-rfc.md#reminders -->
    - **Targets.** A target that does not map the topic never delivers it.
