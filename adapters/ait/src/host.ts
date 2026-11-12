@@ -256,6 +256,10 @@ export interface AitPromotionGrantObservation {
   readonly status: 'failed' | 'pending' | 'granted';
   /** Bounded provider code only; raw messages may contain personal data. */
   readonly errorCode?: string;
+  /**
+   * The SDK's opaque reward key, seen as base64 with `+`, `/` and `=`. Validate length and whitespace
+   * at most; an allow-list of characters refuses real receipts.
+   */
   readonly receiptKey?: string;
 }
 export type AitPromotionGrantObserver = (observation: AitPromotionGrantObservation) => Promise<void>;
@@ -275,6 +279,14 @@ export interface InstallAitHostBridgeOptions {
   readonly authorizePromotionGrant?: AitPromotionGrantAuthorizer;
   readonly resolvePendingPromotionGrant?: AitPendingPromotionGrantResolver;
   readonly observePromotionGrant?: AitPromotionGrantObserver;
+  /**
+   * Called when `observePromotionGrant` rejects. Its failure never affects the grant, so without this
+   * a backend that refuses every receipt looks like success. Carries no receipt.
+   */
+  readonly onPromotionObservationFailure?: (failure: {
+    readonly campaignId: string;
+    readonly status: AitPromotionGrantObservation['status'];
+  }) => void | Promise<void>;
   /** Enable IAP only with logical-to-native SKU mappings and both server hooks. */
   readonly iapProducts?: readonly AitIapProductConfig[];
   readonly prepareIap?: AitIapPreparer;
@@ -448,7 +460,18 @@ export function createAitHostBridge(
     if (observation.status === 'granted' && observation.receiptKey) {
       rememberGrantedReceipt(promotionClaims, observation);
     }
-    await options.observePromotionGrant?.(observation);
+    try {
+      await options.observePromotionGrant?.(observation);
+    } catch (error) {
+      // A reporting hook cannot change a grant, whether it throws or returns a rejected promise.
+      void Promise.resolve()
+        .then(() => options.onPromotionObservationFailure?.({
+          campaignId: observation.campaignId,
+          status: observation.status,
+        }))
+        .catch(() => undefined);
+      throw error;
+    }
   };
   const loadedAdGroupIds = new Set<string>();
   const loadingAdGroups = new Map<string, Promise<void>>();

@@ -149,8 +149,8 @@ drops `deepLink`.
 
 The browser adapter uses Web Share and then a clipboard fallback. Web Share
 receives a root-relative link as is and resolves it against the document; the
-clipboard fallback resolves it against the explicit game page (`locationHref`)
-first, then `document.baseURI` or the ambient location, and answers
+clipboard fallback resolves it against the page (the gateway's `locationHref`,
+else the location, else the document base), and answers
 `unavailable` without an HTTP(S) page to resolve it against. Apps in Toss
 uses a Toss share link before opening its native share sheet. Mobile and Reddit
 bridge contracts are present, but target config exposes their current setup

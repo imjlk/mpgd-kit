@@ -1,5 +1,25 @@
 # @mpgd/cli
 
+## 0.73.0 — 2026-11-07
+
+### Fixed
+
+- [0712d36f](https://github.com/imjlk/mpgd-kit/commit/0712d36f089cc96055fbd20ff7f86596791b0646) Google Play submissions and promotions no longer fail on a track that already has a completed release. A new `completed` release now replaces the track's `completed` release, as well as any `inProgress` or `halted` rollout, instead of sending both and getting "Only one completed release is allowed." A staged rollout still keeps the `completed` release and a draft still replaces only an older draft. A `completed` release older than the one it would replace is now refused before anything is uploaded. `deploy submit` also recovers when the recorded edit is closed: on a 404 or failedPrecondition it reads the live track in a new edit and marks the release committed when the track already holds this version code and artifact, or submits it in the new edit otherwise. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/adapter-ait@0.23.0, @mpgd/adapter-browser@0.12.8, @mpgd/adapter-capacitor@0.19.5, @mpgd/capacitor-play-billing@0.6.6, @mpgd/capacitor-storekit@0.7.5, @mpgd/target-config@0.24.11
+
+## 0.72.0 — 2026-11-05
+
+### Added
+
+- [43316f1f](https://github.com/imjlk/mpgd-kit/commit/43316f1fe241e9e462547153cfe5453cb4b7db2f) Native builds accept `MPGD_NATIVE_BUILD_MODE=rehearsal-archive` for an Android production rehearsal: an unsigned AAB built from the production profile and reserved version numbers without upload credentials. Its release manifest delivery is recorded as `rehearsal: true` and is never a submission candidate. Recording a native build refuses a rehearsal manifest, and `runPinnedNativeBuild` now rejects every mode except the submission modes it is used with: `signed-archive` for Android and `store-export` for iOS (an iOS `signed-archive` is no longer accepted there). iOS production builds are unchanged. — Thanks @imjlk!
+
+### Fixed
+
+- [c63eafac](https://github.com/imjlk/mpgd-kit/commit/c63eafac6e908bf40f9d4894ecbc15f5e82e4c9d) Production native builds no longer fail on a clean checkout because the Android release preflight required `capacitor-cordova-android-plugins/cordova.variables.gradle` before `cap sync` generated it. The source check, and `mpgd target init capacitor` on an existing shell, now tolerate only missing scripts in that git-ignored directory; the staged native build still requires and inspects every applied script after sync. The preflight also accepts the standard `clean` task when it deletes `rootProject.layout.buildDirectory`. — Thanks @imjlk!
+
 ## 0.71.2 — 2026-11-03
 
 ### Changed

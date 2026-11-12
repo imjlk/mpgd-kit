@@ -370,9 +370,18 @@ export function newPlayRelease(
 /**
  * Add a new release to the releases Play returned for the track. Every other
  * release is sent back unchanged, except the ones the new release supersedes:
- * a completed or staged release replaces an in-progress or halted rollout, and
- * a draft replaces an older draft. A track with only completed releases (the
- * usual internal track) therefore gets exactly the original appended body.
+ *
+ * - `completed` replaces `completed`, `inProgress` and `halted` releases. Play
+ *   answers "Only one completed release is allowed." to a body with two.
+ * - `inProgress` replaces `inProgress` and `halted` releases and keeps the
+ *   `completed` one, which goes on serving the users outside the rollout
+ *   ("create a new inProgress status release on top of the completed release",
+ *   https://developers.google.com/android-publisher/tracks).
+ * - `draft` replaces an older `draft`.
+ *
+ * A `completed` release older than any release it would replace is refused, so
+ * a stale submission or a late resume cannot roll back a completed release or
+ * end a newer rollout. A staged release is not compared.
  */
 export function mergeNewPlayRelease(
   current: readonly PlayTrackRelease[] | null | undefined,
@@ -383,10 +392,22 @@ export function mergeNewPlayRelease(
   for (const existing of current ?? []) {
     const replaces = release.status === 'draft'
       ? existing.status === 'draft'
-      : existing.status === 'inProgress' || existing.status === 'halted';
+      : existing.status === 'inProgress' || existing.status === 'halted'
+        || (release.status === 'completed' && existing.status === 'completed');
+    if (replaces && release.status === 'completed'
+      && highestVersionCode(existing) > highestVersionCode(release)) {
+      throw new Error(
+        `Google Play already has newer version ${highestVersionCode(existing)} as ${existing.status}; `
+        + `version ${highestVersionCode(release)} would replace it. Inspect the track.`,
+      );
+    }
     (replaces ? superseded : kept).push(existing);
   }
   return { releases: [...kept, release], superseded };
+}
+
+function highestVersionCode(release: PlayTrackRelease): number {
+  return Math.max(0, ...(release.versionCodes ?? []).map(Number));
 }
 
 /**

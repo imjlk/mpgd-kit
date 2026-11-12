@@ -1,5 +1,11 @@
 # @mpgd/adapter-browser
 
+## 0.12.8 — 2026-11-07
+
+### Fixed
+
+- [a659a18e](https://github.com/imjlk/mpgd-kit/commit/a659a18e3104605d2941bf64ed314d95d23ace04) The web share clipboard fallback no longer copies a link on another origin when the page's `<base>` points elsewhere, such as an asset CDN. A root-relative share link is now resolved against the page URL the gateway was given (`locationHref`), then the location, and only then the document base, for an embedded or `file:` page with no HTTP(S) URL. Such a page can still copy a link on the document base's origin, and a game whose public page is not the page it runs on passes `locationHref`. Web Share still receives the normalized route unchanged. — Thanks @imjlk!
+
 ## 0.12.7 — 2026-11-02
 
 ### Added

@@ -2,7 +2,7 @@
  *
  * Only the layout mechanism lives here: a fixed full-viewport shell, an absolutely positioned
  * stage and rails whose inline bounds are written by `mountAdaptiveGameShell`, and the safe-area
- * tokens it reads back. Every selector is wrapped in :where() so any game rule overrides it
+ * tokens it reads back. Once `destroy()` restores those inline bounds, the stage fills the shell. Every selector is wrapped in :where() so any game rule overrides it
  * without specificity work. Backgrounds, borders, shadows, touch policy and container names
  * are game-owned. */
 
@@ -22,6 +22,7 @@
 
 :where([data-game-shell-stage]) {
   position: absolute;
+  inset: 0;
   z-index: 2;
   box-sizing: border-box;
   min-width: 0;

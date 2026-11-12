@@ -1787,6 +1787,48 @@ describe('AIT production host bridge', () => {
     expect(observer).toHaveBeenLastCalledWith({ ...payload, status: 'granted', receiptKey: 'late-success' });
   });
 
+  it('tells the host when an observation is rejected, without the receipt or changing the grant', async () => {
+    const receiptKey = 'q83vEjRWeJCrze8SNFZ4kKvN7xI0VniQq83vEjRWeJA=';
+    const onPromotionObservationFailure = vi.fn(async () => { throw new Error('hook failed'); });
+    const bridge = createAitHostBridge({
+      promotionRewards: { DAILY: { promotionCode: 'PROMO', amount: 1 } },
+      authorizePromotionGrant: vi.fn(async () => ({ status: 'authorized' as const })),
+      observePromotionGrant: vi.fn(async (): Promise<void> => { throw new Error('INVALID_PROMOTION_REQUEST'); }),
+      onPromotionObservationFailure,
+      dependencies: createDependencies({ grantPromotionReward: vi.fn(async () => ({ key: receiptKey })) }),
+    });
+    const payload = { campaignId: 'DAILY', idempotencyKey: 'refused-receipt' };
+    expect(await request(bridge, 'promotions.grantReward', payload)).toEqual({ status: 'granted', receiptKey });
+    await vi.waitFor(() => expect(onPromotionObservationFailure).toHaveBeenCalled());
+    expect(onPromotionObservationFailure).toHaveBeenCalledWith({ campaignId: 'DAILY', status: 'granted' });
+    expect(JSON.stringify(onPromotionObservationFailure.mock.calls)).not.toContain(receiptKey);
+  });
+
+  it('still reports an observation rejected after the three-second bound', async () => {
+    vi.useFakeTimers();
+    try {
+      const onPromotionObservationFailure = vi.fn();
+      const bridge = createAitHostBridge({
+        promotionRewards: { DAILY: { promotionCode: 'PROMO', amount: 1 } },
+        authorizePromotionGrant: vi.fn(async () => ({ status: 'authorized' as const })),
+        observePromotionGrant: () => new Promise<void>((_, reject) => {
+          setTimeout(() => { reject(new Error('slow refusal')); }, 5_000);
+        }),
+        onPromotionObservationFailure,
+        dependencies: createDependencies({ grantPromotionReward: vi.fn(async () => ({ key: 'receipt' })) }),
+      });
+      const payload = { campaignId: 'DAILY', idempotencyKey: 'late-refusal' };
+      const granted = request(bridge, 'promotions.grantReward', payload);
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(await granted).toEqual({ status: 'granted', receiptKey: 'receipt' });
+      expect(onPromotionObservationFailure).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(onPromotionObservationFailure).toHaveBeenCalledWith({ campaignId: 'DAILY', status: 'granted' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('reads a persisted receipt even when native payout is currently unsupported', async () => {
     const grant = vi.fn(async () => ({ key: 'must-not-pay' }));
     const bridge = createAitHostBridge({

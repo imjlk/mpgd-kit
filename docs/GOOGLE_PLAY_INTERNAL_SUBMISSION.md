@@ -10,13 +10,14 @@ the signer inspected from those AAB bytes before storing the record; submission
 independently repeats the signer check on the file it sends.
 
 The submission creates a Play edit, checks for a conflicting version code,
-uploads a missing bundle, preserves existing internal-track releases, validates
-the edit, and commits it. The commit explicitly uses
-`ERROR_IF_IN_REVIEW` so unrelated changes already in review are not cancelled.
-The result says `committed` only when the edit is accepted. A lost commit
-response remains uncertain: creating a fresh edit to check it would invalidate
-the original edit for the same API user. It does **not** assert that the build is
-processed, installable, or available to testers.
+uploads a missing bundle, replaces the track's completed release with the new
+one (keeping any draft), validates the edit, and commits it. The commit
+explicitly uses `ERROR_IF_IN_REVIEW` so unrelated changes already in review are not cancelled.
+The result says `committed` only when the edit is accepted, or when a resume
+finds the recorded edit closed and the live track already holds this version
+code and artifact. A lost commit response remains uncertain: creating a fresh
+edit to check it would invalidate the original edit for the same API user. It
+does **not** assert that the build is processed, installable, or available to testers.
 
 Persist the edit ID supplied to `onEditCreated` before uploading. If an upload,
 track update, validation, or commit cannot be reconciled, the API raises
@@ -24,9 +25,8 @@ track update, validation, or commit cannot be reconciled, the API raises
 upload merely because an HTTP response was lost; inspect that edit and the
 remote track first. Definitive upload rejections retain the original Play error.
 SDK retries are disabled for mutating edit operations.
-Without release options this is the whole flow, and the internal track body is
-unchanged. Other tracks, drafts, staged rollouts, release notes, R8 mapping
-upload, the draft-app fallback and `mpgd deploy rollout` are described in
+Without release options this is the whole flow. Other tracks, drafts, staged
+rollouts, release notes, R8 mapping upload, the draft-app fallback and `mpgd deploy rollout` are described in
 [Google Play releases](./GOOGLE_PLAY_RELEASES.md).
 
 The credential-free test uses the pinned official Google SDK against a local

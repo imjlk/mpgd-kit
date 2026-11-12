@@ -568,10 +568,12 @@ export interface NativeOpenUrlEvent {
    * For a game link, the URL's path, query, and fragment, normalized with
    * `normalizeRootRelativeRoute` from `@mpgd/platform/routes`. The host is not
    * part of it: `mygame://game/daily` and `https://game.example/daily` give
-   * `/daily`, and `mygame://level/3` gives `/3`. Adapters do not deliver a game
-   * link whose path that rule refuses, so a router that routes by path opens
-   * this route as is. It is absent when the URL has no path to check, such as
-   * `mygame:daily` or `mygame://daily`. A router that builds its route from
+   * `/daily`, `mygame://level/3` gives `/3`, and a query or fragment alone
+   * after the host reads as `/` (`mygame://game?entry=daily` gives
+   * `/?entry=daily`). Adapters do not deliver a game link whose path that rule
+   * refuses, so a router that routes by path opens this route as is. It is
+   * absent when the URL has no route to check, such as `mygame:daily` or
+   * `mygame://daily`. A router that builds its route from
    * anything else in the URL, such as a custom-scheme host, checks that route
    * with `normalizeRootRelativeRoute` and opens only what it returns.
    */
