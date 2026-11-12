@@ -236,16 +236,24 @@ try {
       })(),
     ]));
     assert.equal(untracked.stats.queries, 2);
+    // Node fires a timer up to 1 ms before `performance.now()` shows its full
+    // delay (libuv counts whole milliseconds), so time bounds allow for that.
+    const timerSlackMs = 2;
     const started = performance.now();
+    let statementMs = Number.NaN;
     const outlasted = await runWithD1Batching(async () =>
       Promise.all([
-        db.prepare('SELECT 1 AS n').first(),
+        db.prepare('SELECT 1 AS n').first().then((row) => {
+          statementMs = performance.now() - started;
+          return row;
+        }),
         trackD1BatchingIo(() => lookup(d1BatchMaxWaitMs * 4)),
       ]),
     );
     assert.equal(outlasted.stats.queries, 1);
     // The statement went at the wait bound, not after the outside call.
-    assert.ok(performance.now() - started >= d1BatchMaxWaitMs * 4);
+    assert.ok(statementMs >= d1BatchMaxWaitMs - timerSlackMs, `statement settled after ${statementMs} ms`);
+    assert.ok(statementMs < d1BatchMaxWaitMs * 4 - timerSlackMs, `statement settled after ${statementMs} ms`);
   }
 
   // The notifications store keeps its contract with every statement batched,
