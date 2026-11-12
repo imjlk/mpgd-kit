@@ -502,6 +502,421 @@ const pending = (h: Harness) =>
   assert.equal(h.store.inspect().sends[0]?.rows[0]?.state.status, 'delivered');
 }
 
+/** A topic the gate lets through once a day. */
+const capped: NotificationTopicDeclaration = { ...challenge, frequency: { maxPerDay: 1 } };
+
+/** Sets `k` for `fireAt`, and runs the scheduler at that time. */
+async function fire(h: Harness, fireAt: string) {
+  await h.service.setReminder(session('p-1'), { key: 'k', topic: 'friend-challenge', fireAt });
+  h.time.set(fireAt);
+  return h.service.runScheduler();
+}
+
+/** The delivery-history record a stop keeps of an attempt of `k` at `fireAt`, made at `at`. */
+const attemptOf = (fireAt: string, at: string) => ({
+  sendKey: `reminder:p-1:k:${fireAt}#attempt`,
+  provider: 'fcm',
+  player: 'p-1',
+  topic: 'friend-challenge',
+  at,
+});
+
+/** The delivery history, with a kept attempt's content digest and time left out of its key. */
+const historyOf = (h: Harness) =>
+  h.store.inspect().history.map((entry) => ({
+    ...entry,
+    sendKey: entry.sendKey.replace(/#attempt:[0-9a-z]+\.[0-9a-z]+$/u, '#attempt'),
+  }));
+
+// A cancel after an ambiguous attempt keeps it in the delivery history: the
+// provider may have sent it, so a new reminder the same day is frequency-capped.
+{
+  const h = harness({ topics: [capped], answers: [{ status: 'ambiguous' }] });
+  await register(h, 'p-1');
+  await fire(h, '2026-10-19T03:00:00Z');
+  assert.equal(h.fcm.calls.length, 1);
+  assert.deepEqual(historyOf(h), [], 'an ambiguous answer writes no history');
+  // The claim lease ended: the row waits for its replay, and the cancel drops it.
+  h.time.set('2026-10-19T03:05:00Z');
+  assert.deepEqual(await h.service.cancelReminder(session('p-1'), { key: 'k' }), {
+    cancelled: true,
+  });
+  assert.deepEqual(h.store.inspect().sends, []);
+  assert.deepEqual(
+    historyOf(h),
+    [attemptOf('2026-10-19T03:00:00Z', '2026-10-19T03:00:00Z')],
+    'recorded at the attempt, not at the cancel',
+  );
+  await h.service.runScheduler();
+  assert.equal(h.fcm.calls.length, 1, 'never replayed');
+  assert.deepEqual((await fire(h, '2026-10-19T09:00:00Z')).results, [
+    {
+      sendKey: 'reminder:p-1:k:2026-10-19T09:00:00Z',
+      outcome: { status: 'suppressed', reason: 'frequency-capped' },
+    },
+  ]);
+  assert.equal(h.fcm.calls.length, 1);
+  // A day after the attempt, it no longer counts.
+  await fire(h, '2026-10-20T03:00:01Z');
+  assert.equal(h.fcm.calls.length, 2);
+  assert.equal(historyOf(h).length, 2);
+}
+
+// A set that replaces the reminder keeps the attempt the same way.
+{
+  const h = harness({ topics: [capped], answers: [{ status: 'ambiguous' }] });
+  await register(h, 'p-1');
+  await fire(h, '2026-10-19T03:00:00Z');
+  h.time.set('2026-10-19T03:10:00Z');
+  assert.deepEqual(
+    await h.service.setReminder(session('p-1'), { key: 'k', topic: 'friend-challenge', fireAt: '2026-10-19T09:00:00Z' }),
+    { status: 'replaced' },
+  );
+  assert.deepEqual(historyOf(h), [attemptOf('2026-10-19T03:00:00Z', '2026-10-19T03:00:00Z')]);
+  h.time.set('2026-10-19T09:00:00Z');
+  assert.deepEqual(
+    (await h.service.runScheduler()).results.map((result) => result.outcome),
+    [{ status: 'suppressed', reason: 'frequency-capped' }],
+  );
+  assert.equal(h.fcm.calls.length, 1);
+}
+
+// A cancel inside the ambiguous claim's lease leaves the row to its holder;
+// the replay finds the reminder gone, drops the row without a call, and
+// keeps the earlier attempt, at its own time.
+{
+  const h = harness({ topics: [capped], answers: [{ status: 'ambiguous' }] });
+  await register(h, 'p-1');
+  await fire(h, '2026-10-19T03:00:00Z');
+  h.time.set('2026-10-19T03:01:00Z');
+  assert.deepEqual(await h.service.cancelReminder(session('p-1'), { key: 'k' }), {
+    cancelled: false,
+  });
+  assert.equal(h.store.inspect().sends.length, 1, 'the live claim is not deleted');
+  assert.deepEqual(historyOf(h), []);
+  h.time.set('2026-10-19T03:05:00Z');
+  await h.service.runScheduler();
+  assert.equal(h.fcm.calls.length, 1, 'the replay of a cancelled reminder does not call');
+  assert.deepEqual(h.store.inspect().sends, []);
+  assert.deepEqual(historyOf(h), [attemptOf('2026-10-19T03:00:00Z', '2026-10-19T03:00:00Z')]);
+  assert.deepEqual(
+    (await fire(h, '2026-10-19T09:00:00Z')).results.map((result) => result.outcome),
+    [{ status: 'suppressed', reason: 'frequency-capped' }],
+  );
+}
+
+// With a queue, an attempted row taken again for a job keeps its attempt
+// when a cancel drops it; a row queued and never claimed leaves nothing.
+{
+  const h = harness({ topics: [capped], queue: true, answers: [{ status: 'ambiguous' }] });
+  await register(h, 'p-1');
+  await fire(h, '2026-10-19T03:00:00Z');
+  await h.service.dispatch(h.jobs[0] as NotificationDispatchJob);
+  assert.equal(h.fcm.calls.length, 1);
+  h.time.set('2026-10-19T03:05:00Z');
+  await h.service.runScheduler();
+  assert.equal(h.jobs.length, 2, 'the attempted row is taken again for a job');
+  await h.service.cancelReminder(session('p-1'), { key: 'k' });
+  assert.deepEqual(h.store.inspect().sends, []);
+  assert.deepEqual(historyOf(h), [attemptOf('2026-10-19T03:00:00Z', '2026-10-19T03:00:00Z')]);
+  await h.service.dispatch(h.jobs[1] as NotificationDispatchJob);
+  assert.equal(h.fcm.calls.length, 1);
+
+  const fresh = harness({ topics: [capped], queue: true });
+  await register(fresh, 'p-1');
+  await fire(fresh, '2026-10-19T03:00:00Z');
+  assert.equal(fresh.jobs.length, 1, 'queued, never claimed');
+  assert.deepEqual(await fresh.service.cancelReminder(session('p-1'), { key: 'k' }), {
+    cancelled: true,
+  });
+  assert.deepEqual(fresh.store.inspect().sends, []);
+  assert.deepEqual(historyOf(fresh), [], 'a never-attempted cancel leaves no history');
+  await fresh.service.dispatch(fresh.jobs[0] as NotificationDispatchJob);
+  assert.equal(fresh.fcm.calls.length, 0);
+  // The cap was never spent: the next reminder the same day is delivered.
+  await fire(fresh, '2026-10-19T09:00:00Z');
+  await fresh.service.dispatch(fresh.jobs[1] as NotificationDispatchJob);
+  assert.equal(fresh.fcm.calls.length, 1);
+  assert.equal(fresh.store.inspect().sends[0]?.rows[0]?.state.status, 'delivered');
+}
+
+// A deferred send (never attempted) that a cancel stops leaves no history either.
+{
+  const h = harness({ topics: [{ ...capped, quietHours: { start: '22:00', end: '08:00' } }] });
+  await register(h, 'p-1');
+  // 22:30 in Seoul: deferred to 08:00.
+  assert.deepEqual(
+    (await fire(h, '2026-10-19T13:30:00Z')).results.map((result) => result.outcome),
+    [{ status: 'deferred', reason: 'quiet-hours', until: '2026-10-19T23:00:00Z' }],
+  );
+  assert.deepEqual(await h.service.cancelReminder(session('p-1'), { key: 'k' }), {
+    cancelled: true,
+  });
+  assert.deepEqual(h.store.inspect().sends, []);
+  assert.deepEqual(historyOf(h), []);
+  await fire(h, '2026-10-19T23:00:00Z');
+  assert.equal(h.fcm.calls.length, 1, 'the cap was never spent');
+}
+
+// The record is written before the drop: a history write that fails fails
+// the cancel and leaves the row, which the gate still counts, and the retry
+// (or a stop whose compare-and-set lost) writes one record.
+{
+  let failHistory = 0;
+  let loseUpdates = 0;
+  const h = harness({
+    topics: [capped],
+    answers: [{ status: 'ambiguous' }],
+    store: (inner) => ({
+      ...inner,
+      async addHistory(entry) {
+        if (failHistory > 0) {
+          failHistory -= 1;
+          throw new Error('D1 is unavailable.');
+        }
+        return inner.addHistory(entry);
+      },
+      async updateSend(input) {
+        if (loseUpdates > 0 && input.send === undefined) {
+          loseUpdates -= 1;
+          return false;
+        }
+        return inner.updateSend(input);
+      },
+    }),
+  });
+  await register(h, 'p-1');
+  await fire(h, '2026-10-19T03:00:00Z');
+  h.time.set('2026-10-19T03:05:00Z');
+  failHistory = 1;
+  await assert.rejects(
+    h.service.cancelReminder(session('p-1'), { key: 'k' }),
+    /D1 is unavailable/u,
+  );
+  assert.equal(h.store.inspect().sends.length, 1);
+  assert.deepEqual(historyOf(h), []);
+  assert.equal(h.store.inspect().schedule.length, 1, 'the reminder stays');
+  loseUpdates = 1;
+  assert.deepEqual(await h.service.cancelReminder(session('p-1'), { key: 'k' }), {
+    cancelled: true,
+  });
+  assert.deepEqual(h.store.inspect().sends, []);
+  assert.deepEqual(historyOf(h), [attemptOf('2026-10-19T03:00:00Z', '2026-10-19T03:00:00Z')]);
+}
+
+// A reminder set again at the same key and time with another topic makes its
+// own send under the same key: its acceptance still writes its own record,
+// and the kept attempt still spends the first topic's cap.
+{
+  const other: NotificationTopicDeclaration = { ...capped, id: 'match-ready' };
+  const h = harness({ topics: [capped, other], answers: [{ status: 'ambiguous' }] });
+  await register(h, 'p-1');
+  const fireAt = '2026-10-19T03:00:00Z';
+  await fire(h, fireAt);
+  h.time.set('2026-10-19T03:05:00Z');
+  assert.deepEqual(
+    await h.service.setReminder(session('p-1'), { key: 'k', topic: 'match-ready', fireAt }),
+    { status: 'replaced' },
+  );
+  await h.service.runScheduler();
+  assert.equal(h.fcm.calls.length, 2, 'the other topic is not capped by the first');
+  assert.deepEqual(
+    historyOf(h).map((entry) => [entry.sendKey, entry.topic, entry.at]),
+    [
+      [`reminder:p-1:k:${fireAt}#attempt`, 'friend-challenge', '2026-10-19T03:00:00Z'],
+      [`reminder:p-1:k:${fireAt}`, 'match-ready', '2026-10-19T03:05:00Z'],
+    ],
+  );
+  const later = '2026-10-19T09:00:00Z';
+  await h.service.setReminder(session('p-1'), {
+    key: 'a',
+    topic: 'friend-challenge',
+    fireAt: later,
+  });
+  await h.service.setReminder(session('p-1'), { key: 'b', topic: 'match-ready', fireAt: later });
+  h.time.set(later);
+  const run = await h.service.runScheduler();
+  assert.equal(run.results.length, 2);
+  for (const { outcome } of run.results) {
+    assert.deepEqual(outcome, { status: 'suppressed', reason: 'frequency-capped' });
+  }
+  assert.equal(h.fcm.calls.length, 2);
+}
+
+// The same with other template data on the same topic: the kept attempt is
+// another send, so the reminder set again is capped by it.
+{
+  const h = harness({ topics: [capped], answers: [{ status: 'ambiguous' }] });
+  await register(h, 'p-1');
+  const fireAt = '2026-10-19T03:00:00Z';
+  await fire(h, fireAt);
+  h.time.set('2026-10-19T03:05:00Z');
+  assert.deepEqual(
+    await h.service.setReminder(session('p-1'), {
+      key: 'k',
+      topic: 'friend-challenge',
+      fireAt,
+      templateData: { round: 2 },
+    }),
+    { status: 'replaced' },
+  );
+  assert.deepEqual(
+    (await h.service.runScheduler()).results.map((result) => result.outcome),
+    [{ status: 'suppressed', reason: 'frequency-capped' }],
+  );
+  assert.equal(h.fcm.calls.length, 1);
+}
+
+// A stop that loses its drop to a holder that replays the row and is accepted:
+// the acceptance records its own time, and the send counts once, from then.
+{
+  let race: (() => Promise<unknown>) | undefined;
+  const h = harness({
+    topics: [{ ...challenge, frequency: { maxPerDay: 2 } }],
+    answers: [{ status: 'ambiguous' }],
+    store: (inner) => ({
+      ...inner,
+      async updateSend(input) {
+        const run = race;
+        if (run !== undefined && input.send === undefined) {
+          race = undefined;
+          await run();
+        }
+        return inner.updateSend(input);
+      },
+    }),
+  });
+  await register(h, 'p-1');
+  const fireAt = '2026-10-19T03:00:00Z';
+  await fire(h, fireAt);
+  h.time.set('2026-10-19T03:05:00Z');
+  race = () => h.service.runScheduler();
+  assert.deepEqual(await h.service.cancelReminder(session('p-1'), { key: 'k' }), {
+    cancelled: false,
+  });
+  assert.equal(h.fcm.calls.length, 2, 'the replay that won was sent');
+  assert.equal(h.store.inspect().sends[0]?.rows[0]?.state.status, 'delivered');
+  assert.deepEqual(
+    historyOf(h).map((entry) => [entry.sendKey, entry.at]),
+    [
+      [`reminder:p-1:k:${fireAt}#attempt`, '2026-10-19T03:00:00Z'],
+      [`reminder:p-1:k:${fireAt}`, '2026-10-19T03:05:00Z'],
+    ],
+  );
+  // Counted once: a second push the same day fits the cap of two.
+  await h.service.setReminder(session('p-1'), {
+    key: 'second',
+    topic: 'friend-challenge',
+    fireAt: '2026-10-19T09:00:00Z',
+  });
+  h.time.set('2026-10-19T09:00:00Z');
+  await h.service.runScheduler();
+  assert.equal(h.fcm.calls.length, 3);
+  // Counted from the acceptance: at 03:02 the next day it still fills the cap.
+  await h.service.setReminder(session('p-1'), {
+    key: 'third',
+    topic: 'friend-challenge',
+    fireAt: '2026-10-20T03:02:00Z',
+  });
+  h.time.set('2026-10-20T03:02:00Z');
+  assert.deepEqual(
+    (await h.service.runScheduler()).results.map((result) => result.outcome),
+    [{ status: 'suppressed', reason: 'frequency-capped' }],
+  );
+}
+
+// A send delivered to one device and ambiguous on another counts once after
+// a cancel drops the ambiguous row: its kept attempt joins the delivered send.
+{
+  const h = harness({
+    topics: [{ ...challenge, frequency: { maxPerDay: 2 } }],
+    answers: [{ status: 'accepted' }, { status: 'ambiguous' }],
+  });
+  await register(h, 'p-1');
+  await h.service.registerEndpoint(session('p-1', 'install-b'), {
+    registration: {
+      provider: 'fcm',
+      address: { kind: 'fcm-token', value: 'tok-p-1-b', permission: 'granted' },
+    },
+  });
+  await fire(h, '2026-10-19T03:00:00Z');
+  assert.equal(h.fcm.calls.length, 2);
+  h.time.set('2026-10-19T03:05:00Z');
+  assert.deepEqual(await h.service.cancelReminder(session('p-1'), { key: 'k' }), {
+    cancelled: true,
+  });
+  assert.equal(h.store.inspect().sends[0]?.rows.length, 1, 'the delivered row stays');
+  assert.equal(historyOf(h).length, 2);
+  await h.service.setReminder(session('p-1'), {
+    key: 'second',
+    topic: 'friend-challenge',
+    fireAt: '2026-10-19T09:00:00Z',
+  });
+  h.time.set('2026-10-19T09:00:00Z');
+  await h.service.runScheduler();
+  assert.equal(h.fcm.calls.length, 4, 'one send so far: the second reaches both devices');
+  await h.service.setReminder(session('p-1'), {
+    key: 'third',
+    topic: 'friend-challenge',
+    fireAt: '2026-10-19T10:00:00Z',
+  });
+  h.time.set('2026-10-19T10:00:00Z');
+  assert.deepEqual(
+    (await h.service.runScheduler()).results.map((result) => result.outcome),
+    [{ status: 'suppressed', reason: 'frequency-capped' }],
+  );
+}
+
+// The same reminder set again after a cancel is the same send: its kept
+// attempt does not cap it, and when it is attempted and cancelled again,
+// both kept attempts count as one send, from the latest.
+{
+  const h = harness({
+    topics: [{ ...challenge, frequency: { maxPerDay: 2 } }],
+    answers: [{ status: 'ambiguous' }, { status: 'ambiguous' }],
+  });
+  await register(h, 'p-1');
+  const fireAt = '2026-10-19T03:00:00Z';
+  await fire(h, fireAt);
+  h.time.set('2026-10-19T03:05:00Z');
+  await h.service.cancelReminder(session('p-1'), { key: 'k' });
+  h.time.set('2026-10-19T20:00:00Z');
+  await h.service.setReminder(session('p-1'), { key: 'k', topic: 'friend-challenge', fireAt });
+  await h.service.runScheduler();
+  assert.equal(h.fcm.calls.length, 2, 'not capped by its own kept attempt');
+  h.time.set('2026-10-19T20:05:00Z');
+  assert.deepEqual(await h.service.cancelReminder(session('p-1'), { key: 'k' }), {
+    cancelled: true,
+  });
+  assert.deepEqual(
+    historyOf(h).map((entry) => [entry.sendKey, entry.at]),
+    [
+      [`reminder:p-1:k:${fireAt}#attempt`, '2026-10-19T03:00:00Z'],
+      [`reminder:p-1:k:${fireAt}#attempt`, '2026-10-19T20:00:00Z'],
+    ],
+  );
+  // One send so far: another fits the cap of two.
+  await h.service.setReminder(session('p-1'), {
+    key: 'second',
+    topic: 'friend-challenge',
+    fireAt: '2026-10-19T21:00:00Z',
+  });
+  h.time.set('2026-10-19T21:00:00Z');
+  await h.service.runScheduler();
+  assert.equal(h.fcm.calls.length, 3);
+  // Counted from 20:00: at 03:01 the next day the cap is still full.
+  await h.service.setReminder(session('p-1'), {
+    key: 'third',
+    topic: 'friend-challenge',
+    fireAt: '2026-10-20T03:01:00Z',
+  });
+  h.time.set('2026-10-20T03:01:00Z');
+  assert.deepEqual(
+    (await h.service.runScheduler()).results.map((result) => result.outcome),
+    [{ status: 'suppressed', reason: 'frequency-capped' }],
+  );
+}
+
 // A cancel that lands while the scheduler makes the send: nothing is stored or sent.
 {
   let cancelOnFire: (() => Promise<unknown>) | undefined;

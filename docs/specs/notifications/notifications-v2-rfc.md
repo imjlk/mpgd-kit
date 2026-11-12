@@ -983,6 +983,27 @@ the pending reminder, and cancelling removes it.
 - Replacing or cancelling also stops a send of the reminder that waits
   (`deferred`) or whose provider answer was `ambiguous` (`in-flight`); the
   scheduler replays neither, and `cancel` answers `remote`.
+- **A stop keeps what the gate counts.** A row that was attempted (its
+  answer was `ambiguous` or never came) may have reached the player, and
+  the gate counts it toward the frequency caps and provider limits only
+  while it exists. Before a stop drops it, the backend writes a delivery
+  history record, once per provider, at the row's latest attempt, under a
+  kept-attempt key (`<send key>#attempt:<digest of its content>.<attempt
+  time>`), not the send key. A later acceptance of the send, or of a
+  reminder set again at the same key and time with other content, still
+  records under the send key, and that reminder's gate counts the kept
+  attempt as another send. The same reminder set again is the same send:
+  its kept attempts do not cap it, and if it is attempted and stopped
+  again, its kept attempts count as one send, from the latest. While the
+  ledger still holds the send of that key and content (a row delivered to
+  another endpoint, or a holder that replayed the row and was accepted
+  before the drop), the gate counts the kept attempts as part of it, once,
+  and an acceptance on the same provider sets its time. A scheduler run that replays a row a cancel left (its
+  lease was live then) and finds the reminder stopped drops it the same
+  way. The record is idempotent (a retried stop writes nothing new) and
+  never replays the row. A row never attempted (`deferred`, or queued with
+  no claim) leaves no record.
+  <!-- @link ../../../packages/game-services/src/notifications/service.ts#createNotificationService -->
 - A send the provider may already have accepted cannot be recalled. A row
   whose claim lease is still live is not deleted: its holder records the
   acceptance, and does not call the provider if the reminder was cancelled
@@ -2807,6 +2828,9 @@ listed fields of each item asserted:
 | `reminder-local-quiet-hours` | On the local route a reminder inside quiet hours is scheduled for their end; a `deferrable: false` topic answers `quiet-hours` and schedules nothing |
 | `reminder-server-set-checks` | A server reminder answers gate steps 3 to 5 when it is set (`permission-required`, `request-missing`, `preference-off`, `advertising-consent-missing`), and a refusal stores nothing |
 | `reminder-server-deferred-cancel` | A server reminder deferred by quiet hours when it comes due is stopped by a cancel, which answers `remote`; nothing is sent when the quiet hours end |
+| `reminder-cancel-keeps-attempt` | A cancel after an ambiguous answer, once the claim lease ended, stops the replay but keeps the attempt in the delivery history: another send of the topic the same day is `suppressed: frequency-capped` and the provider is called once |
+| `reminder-set-again-after-kept-attempt` | The same reminder (key, time, and content) set again after that cancel is the same send: its kept attempt does not cap it, and once delivered the two count as one send toward `maxPerDay` |
+| `reminder-attempted-again-after-kept-attempt` | That reminder set again, answered `ambiguous` again, and cancelled again counts once, from its latest attempt: a send the next morning, a day after the first attempt but not the second, is `suppressed: frequency-capped` |
 | `landing-open-before-listener` | On a `landing-url` host the cold open reaches the first subscriber once with the landing route; a later subscriber receives nothing |
 | `open-before-listener` | A cold-start open reaches the game's first subscriber once |
 | `endpoint-lifecycle` | Authentication alone moves a device address to the newly authenticated player; `UNREGISTERED` invalidates it |

@@ -1,0 +1,220 @@
+{
+  "vector": "reminder-set-again-after-kept-attempt",
+  "protocol": "2.0.0-draft.1",
+  "summary": "A server reminder set again with the same key, time, and content after a cancel kept its ambiguous attempt is the same send: its gate does not count the kept attempt against it, and once it is delivered the two count as one send toward frequency.maxPerDay.",
+  "appliesTo": [
+    {
+      "path": "local.supported",
+      "equals": false
+    },
+    {
+      "path": "remote.supported",
+      "equals": true
+    },
+    {
+      "path": "permission.scope",
+      "equals": "topic"
+    },
+    {
+      "path": "permission.allowance",
+      "equals": "persistent"
+    }
+  ],
+  "profile": {
+    "provider": "fixture.host-template",
+    "capabilities": {
+      "availability": "available",
+      "permission": {
+        "scope": "topic",
+        "prompt": "host",
+        "readable": false,
+        "serverReadable": false,
+        "allowance": "persistent",
+        "userGesture": true,
+        "settings": false
+      },
+      "remote": {
+        "supported": true,
+        "purposes": [
+          "service",
+          "requested"
+        ],
+        "addressing": "platform-user",
+        "content": "host-template"
+      },
+      "local": {
+        "supported": false
+      },
+      "open": "landing-url"
+    }
+  },
+  "catalog": [
+    {
+      "id": "daily-puzzle",
+      "purpose": "requested",
+      "channels": [
+        "remote"
+      ],
+      "route": "/?entry=daily",
+      "frequency": {
+        "maxPerDay": 2
+      },
+      "mapping": {
+        "templateSetCode": "fixture-daily-puzzle",
+        "agreement": "required"
+      }
+    }
+  ],
+  "context": {
+    "player": "p-1",
+    "now": "2026-10-12T03:00:00Z",
+    "timeZone": "Asia/Seoul"
+  },
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "backend",
+      "action": "authenticate",
+      "player": "p-1"
+    },
+    {
+      "actor": "host",
+      "action": "queuePrompt",
+      "result": "granted"
+    },
+    {
+      "actor": "game",
+      "action": "requestPermission",
+      "input": {
+        "topics": [
+          "daily-puzzle"
+        ],
+        "gesture": true
+      }
+    },
+    {
+      "actor": "game",
+      "action": "setReminder",
+      "input": {
+        "key": "daily",
+        "topic": "daily-puzzle",
+        "fireAt": "2026-10-12T06:00:00Z"
+      },
+      "returns": {
+        "route": "remote",
+        "status": "scheduled"
+      }
+    },
+    {
+      "actor": "clock",
+      "action": "set",
+      "at": "2026-10-12T06:00:00Z"
+    },
+    {
+      "actor": "backend",
+      "action": "queueProviderResult",
+      "result": "ambiguous"
+    },
+    {
+      "actor": "backend",
+      "action": "runScheduler"
+    },
+    {
+      "actor": "clock",
+      "action": "set",
+      "at": "2026-10-12T06:05:00Z"
+    },
+    {
+      "actor": "game",
+      "action": "cancelReminder",
+      "input": {
+        "key": "daily"
+      },
+      "returns": {
+        "route": "remote",
+        "status": "cancelled"
+      }
+    },
+    {
+      "actor": "game",
+      "action": "setReminder",
+      "input": {
+        "key": "daily",
+        "topic": "daily-puzzle",
+        "fireAt": "2026-10-12T06:00:00Z"
+      },
+      "returns": {
+        "route": "remote",
+        "status": "scheduled"
+      }
+    },
+    {
+      "actor": "backend",
+      "action": "runScheduler"
+    },
+    {
+      "actor": "clock",
+      "action": "set",
+      "at": "2026-10-12T09:00:00Z"
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "daily-puzzle",
+        "idempotencyKey": "puzzle-1"
+      },
+      "returns": {
+        "status": "delivered"
+      }
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "daily-puzzle",
+        "idempotencyKey": "puzzle-2"
+      },
+      "returns": {
+        "status": "suppressed",
+        "reason": "frequency-capped"
+      }
+    }
+  ],
+  "expect": {
+    "deliveries": [
+      {
+        "idempotencyKey": "reminder:p-1:daily:2026-10-12T06:00:00Z",
+        "status": "in-flight"
+      },
+      {
+        "idempotencyKey": "reminder:p-1:daily:2026-10-12T06:00:00Z",
+        "status": "delivered"
+      },
+      {
+        "idempotencyKey": "puzzle-1",
+        "status": "delivered"
+      },
+      {
+        "idempotencyKey": "puzzle-2",
+        "status": "suppressed",
+        "reason": "frequency-capped"
+      }
+    ],
+    "providerCalls": [
+      {
+        "topic": "daily-puzzle"
+      },
+      {
+        "topic": "daily-puzzle"
+      },
+      {
+        "topic": "daily-puzzle"
+      }
+    ],
+    "reminders": []
+  }
+}

@@ -343,6 +343,15 @@ invitation to buy.
      Toss or Devvit.
    - **Routes** are root-relative and already normalized (`/a/../b` is
      refused, not rewritten).
+   - **Frequency.** `maxPerDay` counts the topic's pushes to one player in
+     any 24 hours, including one the provider may have sent without saying
+     so (an ambiguous answer, such as a timeout). Cancelling or replacing a
+     server reminder does not free that count: the attempt stays in the
+     delivery history, so a reminder set again the same day is
+     `frequency-capped`. A reminder whose push was never attempted (still
+     queued, or held by quiet hours) leaves nothing behind.
+     <!-- @link ../packages/game-services/src/notifications/service.ts#createNotificationService -->
+     <!-- @evidence /docs/specs/notifications/notifications-v2-rfc.md#reminders -->
    - **Targets.** A target that does not map the topic never delivers it.
      Apps in Toss needs the console template's code and `agreement`
      (`none` only for a `service` template without an agreement statement);

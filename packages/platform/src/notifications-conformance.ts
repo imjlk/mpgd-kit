@@ -917,6 +917,16 @@ interface Recipient {
   readonly timeZone?: string;
 }
 
+/**
+ * What names the attempts a reminder stop kept of one send: apart from the
+ * send key a delivery records under, and from the attempts of another
+ * content at the same key. The fake keeps the whole fingerprint; a backend
+ * may digest it.
+ */
+function keptAttemptSend(sendKey: string, fingerprint: string): string {
+  return `${sendKey}#attempt:${fingerprint}`;
+}
+
 /** A fresh `unavailable: no-endpoint` answer: callers may keep or change what they get. */
 function noEndpoint(): NotificationDeliveryRefusal {
   return { status: 'unavailable', reason: 'no-endpoint' };
@@ -1090,10 +1100,16 @@ export function createNotificationConformanceBackend(
   const providerCalls: NotificationConformanceProviderCall[] = [];
   const reminders: NotificationConformanceServerReminder[] = [];
   const noticesGiven: NotificationConformanceNoticeRecord[] = [];
-  /** Delivered sends, oldest first, with the send key each delivery belongs to. */
+  /**
+   * Delivered sends, with the send key each delivery belongs to, and the
+   * attempts reminder stops kept of sends dropped in flight, each with its
+   * time in its key and its send in `keptOf` (`keptAttemptSend`);
+   * `historyFor` orders them and counts each send once.
+   */
   const history: (NotificationDeliveryHistoryEntry & {
     readonly player: string;
     readonly sendKey: string;
+    readonly keptOf?: string;
   })[] = [];
   const ledger = new Map<string, LedgerEntry>();
   /** Send keys being evaluated, with their fingerprint: a concurrent send of the key answers `in-flight`. */
@@ -1246,20 +1262,48 @@ export function createNotificationConformanceBackend(
   /**
    * Delivered sends, and in-flight ones holding their reservation, oldest
    * first: the gate reads them from the newest. The send being made is left
-   * out, including its earlier delivery to another endpoint.
+   * out, including its earlier delivery to another endpoint. The attempts
+   * reminder stops kept of one send (`keptAttemptSend`) are part of that
+   * send while the ledger holds it delivered or in flight (its own entry
+   * stands for them, once), and are left out with the send being made;
+   * otherwise they count as one send of their own, at the latest.
    */
-  const historyFor = (player: string, excluding?: string): NotificationDeliveryHistoryEntry[] =>
-    [
-      ...history.filter((sent) => sent.player === player && sent.sendKey !== excluding),
+  const historyFor = (
+    player: string,
+    excluding?: { readonly key: string; readonly fingerprint: string },
+  ): NotificationDeliveryHistoryEntry[] => {
+    const merged = new Set(
+      [...ledger]
+        .filter(([, held]) => held.outcome.status === 'delivered' || held.outcome.status === 'in-flight')
+        .map(([key, held]) => keptAttemptSend(key, held.fingerprint)),
+    );
+    if (excluding !== undefined) {
+      merged.add(keptAttemptSend(excluding.key, excluding.fingerprint));
+    }
+    const latestKept = new Map<string, NotificationDeliveryHistoryEntry>();
+    for (const sent of history) {
+      if (sent.player !== player || sent.keptOf === undefined || merged.has(sent.keptOf)) {
+        continue;
+      }
+      const seen = latestKept.get(sent.keptOf);
+      if (seen === undefined || Date.parse(sent.at) > Date.parse(seen.at)) {
+        latestKept.set(sent.keptOf, sent);
+      }
+    }
+    return [
+      ...history.filter((sent) =>
+        sent.player === player && sent.keptOf === undefined && sent.sendKey !== excluding?.key),
+      ...latestKept.values(),
       ...[...ledger]
         .filter(([key, held]) =>
-          key !== excluding && held.request.player === player && held.outcome.status === 'in-flight')
+          key !== excluding?.key && held.request.player === player && held.outcome.status === 'in-flight')
         .map(([, held]) => ({
           provider: entry?.provider ?? '',
           topic: held.request.topic,
           at: formatInstant(held.changedAt),
         })),
     ].sort((left, right) => Date.parse(left.at) - Date.parse(right.at));
+  };
   const readServerPermission = async (
     request: SendRequest,
   ): Promise<NotificationPermissionState | undefined> => {
@@ -1324,7 +1368,10 @@ export function createNotificationConformanceBackend(
     const topic = topicFor(request, origin);
     const at = clock.now();
     const consent = recordsOf(request.player);
-    const sent = historyFor(request.player, request.idempotencyKey);
+    const sent = historyFor(request.player, {
+      key: request.idempotencyKey,
+      fingerprint: notificationSendFingerprint(request),
+    });
     const evaluated = recipients.map((recipient) => {
       const locale = request.locale ?? recipient.locale;
       const decision = decide({
@@ -1595,12 +1642,32 @@ export function createNotificationConformanceBackend(
   /**
    * Drops the rows of a reminder's sends that wait (deferred) or are in
    * flight, so the scheduler replays none of them: whether there were any. A
-   * send the provider may already have accepted cannot be recalled.
+   * send the provider may already have accepted cannot be recalled: one in
+   * flight after an ambiguous answer, which the gate counts until now, goes
+   * into the delivery history at the time the gate counted it from, so the
+   * frequency caps and provider limits still count it. It is recorded under
+   * its own key (its send's `keptAttemptSend` and its time), so a reminder
+   * set again at the same key and time with other content still counts it
+   * and records its own delivery, and a later attempt of the same send
+   * moves the count to its time. A deferred one was never sent and leaves
+   * nothing.
    */
   const dropReminderSends = (player: string, key: string): boolean => {
     let dropped = false;
     for (const [sendKey, held] of [...ledger]) {
       if (held.origin.kind === 'reminder' && held.origin.key === key && held.request.player === player) {
+        const keptOf = keptAttemptSend(sendKey, held.fingerprint);
+        const kept = `${keptOf}@${formatInstant(held.changedAt)}`;
+        if (held.outcome.status === 'in-flight' && !history.some((sent) => sent.sendKey === kept)) {
+          history.push({
+            player,
+            provider: entry?.provider ?? '',
+            topic: held.request.topic,
+            at: formatInstant(held.changedAt),
+            sendKey: kept,
+            keptOf,
+          });
+        }
         dropped = dropRows(sendKey, held, (row) => row.state.status !== 'delivered') || dropped;
       }
     }
