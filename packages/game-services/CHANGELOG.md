@@ -1,5 +1,15 @@
 # @mpgd/game-services
 
+## 0.36.1 — 2026-11-13
+
+### Fixed
+
+- [d0e412ae](https://github.com/imjlk/mpgd-kit/commit/d0e412aede9e452bc797e7a6a373f9d389c02d8a) Keep an attempted notification send counted when a server reminder is cancelled or replaced. In `@mpgd/game-services/notifications`, `cancelReminder`, a replacing `setReminder`, and a scheduler run that drops the replay of a stopped reminder used to delete a send row whose provider answer was ambiguous (or never came) once its claim lease ended. That row has no delivery history, so the policy gate's `frequency.maxPerDay` and provider limits stopped counting it, and the same player could get a second push the same day. The stop now writes a delivery-history record per provider at the row's latest attempt before it drops the row, and never replays it. The record uses its own key, `<send key>#attempt:<content digest>.<attempt time>`, so a later acceptance of the send, or of a reminder set again at the same key and time with other content, still records under the send key. Only a record whose key starts with a reminder's send key (the reserved `reminder:` prefix) is read as a kept attempt, so a caller's own idempotency key of that form still counts as a send of its own. The gate counts every kept attempt of one send (key and content) as that send, once, from its latest attempt on each provider, and with the send itself while the ledger still holds it (for example a row delivered to another device). It reads the sends in flight before the delivery history, so a stop between the two reads cannot hide an attempt from both, and a stopped reminder's replay that cannot write the record puts the row back at its own attempt time. A reminder set again with the same key, time, and content is the same send and is not capped by its own kept attempts. A send that was never attempted (deferred, or queued with no claim) still leaves no record. The `@mpgd/platform/notifications-conformance` reference backend follows the same rule, and three new vectors (`reminder-cancel-keeps-attempt`, `reminder-set-again-after-kept-attempt`, `reminder-attempted-again-after-kept-attempt`) check it on every backend. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/analytics@0.5.12, @mpgd/catalog@0.15.4, @mpgd/platform@0.37.1
+
 ## 0.36.0 — 2026-11-02
 
 ### Added

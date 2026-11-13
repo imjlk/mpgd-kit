@@ -1,5 +1,15 @@
 # @mpgd/cli
 
+## 0.73.1 — 2026-11-13
+
+### Fixed
+
+- [8b60251d](https://github.com/imjlk/mpgd-kit/commit/8b60251d2dae125936085091170ffafe8a01664f) Use supported Windows SDK options when inspecting MSIX/AppX bundles. Remove the unsupported `/l` option from `makeappx unbundle` while preserving package identity, payload, path, symlink and hash checks. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/adapter-ait@0.23.1, @mpgd/adapter-browser@0.12.9, @mpgd/adapter-capacitor@0.19.6, @mpgd/adapter-devvit@0.15.4, @mpgd/adapter-verse8@0.7.24, @mpgd/analytics@0.5.12, @mpgd/bridge@0.20.1, @mpgd/capacitor-play-billing@0.6.7, @mpgd/capacitor-storekit@0.7.6, @mpgd/catalog@0.15.4, @mpgd/game-runtime@0.10.5, @mpgd/game-services@0.36.1, @mpgd/i18n@0.6.33, @mpgd/platform@0.37.1, @mpgd/target-config@0.24.12
+
 ## 0.73.0 — 2026-11-07
 
 ### Fixed
