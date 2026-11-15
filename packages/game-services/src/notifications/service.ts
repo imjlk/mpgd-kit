@@ -1105,13 +1105,18 @@ export function createNotificationService(input: CreateNotificationServiceInput)
    * the drop and was accepted). The store ignores a second record of the
    * same key and provider, so a retried drop writes nothing new. Written
    * before the drop: a failure leaves the rows, which the gate still counts.
-   * Only the record is kept; the dropped rows are never replayed.
+   * Only the record is kept; the dropped rows are never replayed. Only the
+   * scheduler's own sends (a reminder's or a notice's) leave one: no other
+   * send's record is read as a kept attempt (`keptAttemptOf`).
    */
   const keepAttempts = async (
     send: NotificationStoredSend,
     rows: readonly NotificationSendRow[],
     changedAt: string = send.changedAt,
   ): Promise<void> => {
+    if (!keepsAttempts(send.key)) {
+      return;
+    }
     const latest = new Map<string, number>();
     for (const row of rows) {
       if (row.state.status !== 'in-flight' || !row.state.attempted) {
@@ -1650,6 +1655,9 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         // The game gave the notice while the push waited: it is not sent again.
         // A lost compare-and-set is retried; a row another holder claimed is
         // left for that holder, which checks again immediately before the call.
+        // An earlier attempt of the push, which may have reached the provider,
+        // still counts (`keepAttempts`), written before the row goes.
+        await keepAttempts(held.send, [row]);
         const rows = rowsWith(held.send, row, { kind: 'remove' });
         const dropped = await store.updateSend({
           key: sendKey,
@@ -1698,9 +1706,55 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       throw busy(sendKey);
     }
     const { send, before, row, token } = claimed;
+    /**
+     * Keeps the attempt this claim replays (`before`, when it was attempted:
+     * its answer was ambiguous or never came, so it may have reached the
+     * provider) before a change that stops the gate counting it: the row is
+     * dropped, or waits deferred, without this claim's call being accepted
+     * (which records the send) or ambiguous (which keeps it in flight). As a
+     * stop does (`keepAttempts`), at the time the gate counted it from. A
+     * row never attempted leaves nothing.
+     */
+    const keepEarlierAttempt = (): Promise<void> => keepAttempts(
+      send,
+      [before],
+      claimed.changedBefore,
+    );
+    /**
+     * `keepEarlierAttempt` before the provider is called. A record that
+     * cannot be written fails the run: nothing was sent, so the row goes
+     * back as it was, with the time the gate counted its attempt from, and
+     * the retry keeps that attempt rather than this claim.
+     */
+    const keepEarlierAttemptOrRelease = async (): Promise<void> => {
+      try {
+        await keepEarlierAttempt();
+      } catch (error) {
+        await settleQuietly(
+          sendKey,
+          row,
+          token,
+          { kind: 'set', row: backedOff(withAttemptTime(before, claimed.changedBefore), nowMs()) },
+          claimed.at,
+        );
+        throw error;
+      }
+    };
+    /**
+     * `keepEarlierAttempt` after the provider answered this claim's call
+     * (refused, or asked to wait). The row settles either way, as after an
+     * acceptance: a record that keeps failing is reported, since an
+     * undercounted limit is better than a call made again for an answer
+     * already given.
+     */
+    const keepEarlierAttemptAfterCall = (): Promise<void> =>
+      withRetries(keepEarlierAttempt, (error) =>
+        report(error, 'history.add', { sendKey, provider: row.provider, rowKey: row.key }),
+      );
     const registered = registry.provider(row.provider);
     if (registered === undefined) {
       // The deployment no longer serves this provider.
+      await keepEarlierAttemptOrRelease();
       await complete(sendKey, row, token, { kind: 'remove' }, claimed.at);
       return { refusal: noEndpoint() };
     }
@@ -1769,6 +1823,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     } catch (error) {
       if (error instanceof NotificationSendInputError) {
         // A send that cannot be made as asked fails once, not on every replay.
+        await keepEarlierAttemptOrRelease();
         await settleQuietly(sendKey, row, token, { kind: 'remove' }, claimed.at);
         throw invalidInput(error.message, error);
       }
@@ -1794,6 +1849,9 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       ...(before.ambiguousAttempts === undefined ? {} : { ambiguousAttempts: before.ambiguousAttempts }),
     };
     if (decision.status === 'deferred') {
+      // A deferred row is not counted while it waits, and a stop leaves
+      // nothing of it: the attempt it replays is kept first.
+      await keepEarlierAttemptOrRelease();
       await complete(
         sendKey,
         row,
@@ -1811,6 +1869,8 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       return {};
     }
     if (decision.status !== 'allowed' || topic === undefined) {
+      // The gate refuses the replay now; the attempt it replays still counts.
+      await keepEarlierAttemptOrRelease();
       await complete(sendKey, row, token, { kind: 'remove' }, at);
       return { refusal: decision.status === 'allowed' ? noEndpoint() : decision };
     }
@@ -1824,25 +1884,10 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       // recipient, or before it: a cancel leaves a row whose claim lease
       // was live, and its replay ends here. Drop while the claim still
       // holds; a lost compare-and-set is retried until it wins or the claim
-      // is gone. A stopped reminder's earlier attempt, which may have
-      // reached the provider, still counts, as `stopReminderSend` keeps it.
-      if (stoppedReminder) {
-        try {
-          await keepAttempts(send, [before], claimed.changedBefore);
-        } catch (error) {
-          // Nothing was sent: the row goes back as it was, with the time
-          // the gate counted its attempt from, so the retry keeps that
-          // attempt rather than this claim.
-          await settleQuietly(
-            sendKey,
-            row,
-            token,
-            { kind: 'set', row: backedOff(withAttemptTime(before, claimed.changedBefore), nowMs()) },
-            claimed.at,
-          );
-          throw error;
-        }
-      }
+      // is gone. The earlier attempt of a stopped reminder, or of a notice
+      // the game has given, may have reached the provider and still counts,
+      // as `stopReminderSend` keeps it.
+      await keepEarlierAttemptOrRelease();
       await complete(sendKey, row, token, { kind: 'remove' }, nowMs());
       return {};
     }
@@ -1947,6 +1992,8 @@ export function createNotificationService(input: CreateNotificationServiceInput)
             at: formatNotificationInstant(answeredAt),
           });
         }
+        // This call was refused; the attempt it replays may still have arrived.
+        await keepEarlierAttemptAfterCall();
         await complete(sendKey, row, token, { kind: 'remove' }, answeredAt);
         return { refusal: { status: 'unavailable', reason: 'endpoint-invalid' } };
       case 'rejected':
@@ -1967,6 +2014,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         if (answer.reason === 'agreement') {
           await recordProviderDenial(send.request.player, send.request.topic, answeredAt);
         }
+        await keepEarlierAttemptAfterCall();
         await complete(sendKey, row, token, { kind: 'remove' }, answeredAt);
         return { refusal: { status: 'unavailable', reason: 'provider-rejected' } };
       case 'not-sent':
@@ -1984,6 +2032,9 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       case 'rate-limited': {
         // Nothing was sent: the claim is released and the row waits.
         const next = nextRateLimit(row.rateLimit, answer.retryAfterSeconds, answeredAt);
+        // This call sent nothing; the attempt it replays stops being counted
+        // once the row waits deferred or is given up.
+        await keepEarlierAttemptAfterCall();
         if (next === undefined) {
           await complete(sendKey, row, token, { kind: 'remove' }, answeredAt);
           return { refusal: { status: 'unavailable', reason: 'provider-rate-limited' } };
@@ -4599,20 +4650,33 @@ function notificationKeptAttemptKey(send: string, attemptedAt: number): string {
 
 /**
  * The send key and kept-attempt send a history record names if it is a kept
- * attempt. Only a reminder's send is stopped with its attempts kept, and its
- * key (`createNotificationReminderIdempotencyKey`) starts with `reminder:`,
- * a prefix no caller's key may have (`sendInputIssue`, and a bulk send's
- * key), and holds no `#` (its player and key are percent-encoded). So a
+ * attempt. Only the scheduler's own sends leave their attempts kept
+ * (`keepsAttempts`): a reminder's and a notice's, whose keys
+ * (`createNotificationReminderIdempotencyKey`,
+ * `createNotificationNoticeIdempotencyKey`) start with `reminder:` or
+ * `notice:`, prefixes no caller's key may have (`sendInputIssue`, and a
+ * bulk send's key), and hold no `#` (the player and a reminder's key are
+ * percent-encoded; the rest is a notice's kinds and timestamps). So a
  * record of any other send, whatever its key, is never read as one: a
  * caller's `user#attempt:a.1` is a send of its own. `loadHistory` merges a
  * kept attempt into a send in the ledger only when its digest matches that
  * send.
  */
 function keptAttemptOf(recorded: string): { readonly sendKey: string; readonly send: string } | undefined {
-  const match = /^((reminder:[^#]+)#attempt:[0-9a-z]+)\.[0-9a-z]+$/su.exec(recorded);
+  const match = /^(((?:reminder|notice):[^#]+)#attempt:[0-9a-z]+)\.[0-9a-z]+$/su.exec(recorded);
   return match?.[1] === undefined || match[2] === undefined
     ? undefined
     : { send: match[1], sendKey: match[2] };
+}
+
+/**
+ * Whether a send's attempts are kept when its rows stop being counted
+ * (`keepAttempts`): only a send under a key `keptAttemptOf` reads back, a
+ * reminder's or a notice's. A caller's send (or a bulk send's) has a key of
+ * the caller's own, which a kept-attempt key could not be told from.
+ */
+function keepsAttempts(sendKey: string): boolean {
+  return /^(?:reminder|notice):[^#]+$/su.test(sendKey);
 }
 
 /** A holder still owns the row: its claim lease has not ended. */
