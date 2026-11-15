@@ -59,10 +59,10 @@
     "@mpgd/catalog": "workspace:*",
     "@mpgd/i18n": "workspace:*",
     "@mpgd/platform": "workspace:*",
-    "typia": "15.2.1"
+    "typia": "15.4.1"
   },
   "devDependencies": {
-    "ttsc": "0.34.2",
+    "ttsc": "0.37.1",
     "typescript": "7.0.2",
     "jsdom": "24.1.0",
     "vitest": "^4.0.0",
