@@ -16,9 +16,9 @@ pnpm check
 pnpm build
 ```
 
-ttsc 0.34 compiles its type-transform plugins with Go 1.27 or later. It uses
+ttsc 0.37 compiles its type-transform plugins with Go 1.27 or later. It uses
 the Go it bundles unless `TTSC_GO_BINARY` names another one; if your mise or
-CI configuration pins Go for ttsc, pin 1.27 or later (the Kit uses 1.27.3).
+CI configuration pins Go for ttsc, pin 1.27 or later (the Kit uses 1.27.4).
 
 The starter keeps game code behind `PlatformGateway` and demonstrates:
 

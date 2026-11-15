@@ -45,10 +45,10 @@
   },
   "dependencies": {
     "@mpgd/platform": "workspace:*",
-    "typia": "15.2.1"
+    "typia": "15.4.1"
   },
   "devDependencies": {
-    "ttsc": "0.34.2",
+    "ttsc": "0.37.1",
     "typescript": "7.0.2"
   },
   "main": "./dist/index.js",

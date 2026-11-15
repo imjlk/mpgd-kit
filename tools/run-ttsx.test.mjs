@@ -19,7 +19,7 @@ const tsgoBinary = resolveTsgoBinary(repoRoot);
 
 // A project that selects `src/**` next to a same-named file it does not select.
 // ttsx 0.30.x substituted the in-project emit here. The 0.32.1 and later
-// runtimes (pinned: 0.34.2) must execute the requested source; our wrapper separately requires
+// runtimes (pinned: 0.37.1) must execute the requested source; our wrapper separately requires
 // entries to be selected by their check project.
 function stemCollisionFixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'mpgd-run-ttsx-gate-'));

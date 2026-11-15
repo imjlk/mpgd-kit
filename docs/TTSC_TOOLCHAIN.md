@@ -20,7 +20,7 @@ Generated Phaser and Lite games have a `tsconfig.tools.json` selecting
 `tools/**/*.ts`. Their `check`, `lint`, `format`, and `fix` commands include both
 the game and tools projects. `pnpm accept` executes the typed acceptance entry
 through that project with no authored JavaScript bootstrap. ttsx 0.32.1 and
-later (the pin is 0.34.2) forward terminal flags such as `--help` after the
+later (the pin is 0.37.1) forward terminal flags such as `--help` after the
 entry; the old 0.30.4 runner intercepted them even after `--`. Keep the argument-forwarding regression
 check when changing the runner.
 `pnpm test:template-tools` creates both templates in
@@ -44,10 +44,15 @@ boundaries, not a precedent for unrelated scripts:
   JavaScript sources.
 - `strip.config.js` remains a small, type-checked loader boundary: the 0.32.1
   native strip loader resolved the config under the wrong root when macOS
-  `TMPDIR` is a symlink. A minimal `strip.config.ts` project under the symlinked
-  `/var/folders` temporary directory strips correctly with 0.34.2, but the
-  generated-template cases have not been rerun with a TS config, so the boundary
-  stays until they pass. Its `@satisfies` contract is checked by the maintenance
+  `TMPDIR` is a symlink. Re-measured on 0.37.1 with a root `strip.config.ts`:
+  under the default macOS `TMPDIR` (`/var/folders/...`, a symlink into
+  `/private`), `pnpm check`, `pnpm test:ttsx-assertions`,
+  `pnpm test:template-tools`, and `pnpm test:cli-output` all stop with
+  `@ttsc/strip: load TypeScript config file ... Cannot find module
+  '/private/<checkout>/strip.config.js'`: the generated loader prefixes the
+  checkout path with the temporary directory's `/private` root. With `TMPDIR`
+  set to its real `/private/var/folders/...` path the same commands load the
+  config. The boundary stays until a TS config loads without that override. Its `@satisfies` contract is checked by the maintenance
   project. Do not normalize users' environments just to hide this limitation.
   The lint entry is `lint.config.ts` with typed Evidence options. Source rules
   live in `lint.source.config.ts` with `satisfies` and a checkout-relative
@@ -56,7 +61,8 @@ boundaries, not a precedent for unrelated scripts:
 Windows package builds default to one compiler process. The 0.32.1 isolated
 config evaluator uses ttsx for JS as well as TS, so a JS wrapper does not avoid
 its parallel emitted-source ownership race. The race has not been re-measured on
-0.34.2, whose notes mention concurrent-emit work only for independent Programs. Keep TS configs and ownership
+0.37.1 (it needs Windows runners), and the 0.35 to 0.37 release notes do not
+mention this evaluator. Keep TS configs and ownership
 checks; restore Windows parallelism only after the upstream race is fixed and
 both installed starter variants pass. Other platforms retain parallel builds.
 
@@ -124,8 +130,11 @@ value is rejected too. The project's
 TypeScript-Go resolution and application arguments consistent; emitted runtime
 files are owned by ttsx. It does not delete authored `.js` or `.d.ts` source siblings.
 
-Each `ttsx` process type-checks and emits the whole tools program again, because
-its execution cache is scoped to one process. Orchestrating commands that spawn
+Each `ttsx` process type-checks and emits the whole tools program again. The
+ttsx 0.35 release notes describe reusing a verified project emit across runs, but
+on 0.37.1 three consecutive runs of one tool through `tools/run-ttsx.mjs` took
+about 20 seconds each here (macOS arm64), the same as on 0.34.2, so this
+repository does not rely on that reuse. Orchestrating commands that spawn
 more tool processes, such as `build:target` and its validators and package build,
 pass `--compile-once`. The runner then emits `tsconfig.ci-tools.json` once into
 `node_modules/.cache/mpgd-tools-emit/<pid>-*` and runs the entry from that emit.
@@ -172,20 +181,21 @@ setting, so a sibling checkout does not inherit the kit's narrower root.
 ## Go and typia requirements
 
 ttsc builds its plugins (typia, lint, strip, paths) from Go source on each
-machine. ttsc 0.34's own module declares `go 1.27` and its platform package
-bundles go1.27.3; typia 15.2 states that its native plugin needs Go 1.27 or
+machine. ttsc 0.37's own module declares `go 1.27` and its platform package
+bundles go1.27.4; typia has stated since 15.2 that its native plugin needs Go 1.27 or
 later, even though typia's own `native/go.mod` still says `go 1.26` (the build
-runs inside ttsc's module). `.mise.toml` therefore pins `go = "1.27.3"`, the
+runs inside ttsc's module). `.mise.toml` therefore pins `go = "1.27.4"`, the
 bundled release, and its `TTSC_GO_BINARY` points ttsc at that SDK so the
 compiler and `GOROOT` agree. With Go 1.26.x and `GOTOOLCHAIN=local` the typia
 plugin build stops with `go.mod requires go >= 1.27`; with the default
 `GOTOOLCHAIN=auto` Go would fetch another toolchain instead, outside the pinned
 SDK. A shell that still exports an older mise `GOROOT` makes the build fail
-with `compile: version "go1.26.5" does not match go tool version "go1.27.3"`;
+with a message such as `compile: version "go1.26.5" does not match go tool
+version "go1.27.3"` (seen on the 1.27.3 bump);
 run builds through `mise exec --` (or re-activate mise) after a Go bump. Jobs
 without mise leave `TTSC_GO_BINARY` unset and use the bundled compiler. CI's
-mise-action jobs install the `.mise.toml` Go, so they get 1.27.3 too. Games on
-ttsc 0.34 have the same floor: a game whose own mise or CI pins Go for ttsc
+mise-action jobs install the `.mise.toml` Go, so they get 1.27.4 too. Games on
+ttsc 0.34 or later have the same floor: a game whose own mise or CI pins Go for ttsc
 (through `TTSC_GO_BINARY`) must pin Go 1.27 or later; the generated README
 says so. The
 Windows plugin cache key hashes `pnpm-lock.yaml` and `.mise.toml`, which cover

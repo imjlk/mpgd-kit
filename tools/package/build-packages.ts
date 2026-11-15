@@ -317,7 +317,7 @@ function buildPackagedNativeTarget(workspacePackage: WorkspacePackage, distDir: 
 function packageBuildConcurrency(value: string | undefined): number {
   if (value === undefined || value === '') {
     // ttsc 0.32.1 config evaluators raced on Windows source ctime during parallel
-    // emission; not re-measured on 0.34.2, so Windows stays sequential.
+    // emission; not re-measured on 0.37.1, so Windows stays sequential.
     return process.platform === 'win32' ? 1 : availableParallelism();
   }
   const parsed = Number(value);
