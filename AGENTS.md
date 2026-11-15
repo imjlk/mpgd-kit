@@ -33,7 +33,7 @@ This repository is `mpgd-kit`: a Multi-Platform Game Distribution / Development 
 - Do not grant purchases or ad rewards solely from client callbacks. All grants must go through backend ledger APIs.
 - Do not put side effects inside debug calls that may be removed by `@ttsc/strip`.
 
-Windows package builds default to one compiler process because the 0.32.1 config loader raced on source ownership during parallel emission; this has not been re-measured on 0.37.1. Do not bypass ownership checks.
+Windows package builds run in parallel like the other platforms. The 0.32.1 config loader raced on source ownership during parallel emission there; three Windows CI runs on 0.37.1 did not reproduce it. If it returns, set `MPGD_PACKAGE_BUILD_CONCURRENCY=1` for Windows rather than bypassing ownership checks.
 
 ## Pure Packages
 
