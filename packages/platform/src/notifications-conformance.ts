@@ -918,10 +918,11 @@ interface Recipient {
 }
 
 /**
- * What names the attempts a reminder stop kept of one send: apart from the
- * send key a delivery records under, and from the attempts of another
- * content at the same key. The fake keeps the whole fingerprint; a backend
- * may digest it.
+ * What names the attempts kept of one send when its in-flight rows stop
+ * being counted (a reminder stop, or a replay that drops or defers them):
+ * apart from the send key a delivery records under, and from the attempts
+ * of another content at the same key. The fake keeps the whole fingerprint;
+ * a backend may digest it.
  */
 function keptAttemptSend(sendKey: string, fingerprint: string): string {
   return `${sendKey}#attempt:${fingerprint}`;
@@ -991,7 +992,11 @@ function noEndpoint(): NotificationDeliveryRefusal {
  *   it throw `NOTIFICATIONS_INVALID_INPUT`.
  * - Setting or cancelling a reminder drops its sends' rows that still wait
  *   (deferred) or are in flight, so neither is replayed; a send the provider
- *   may already have accepted cannot be recalled. A send's limits count the
+ *   may already have accepted cannot be recalled. A reminder's or a
+ *   notice's send in flight after an ambiguous answer keeps counting toward
+ *   the frequency caps and provider limits, from that attempt, once its
+ *   rows are dropped (a stop, a replay the gate or the provider refuses, a
+ *   notice the game has given) or wait deferred. A send's limits count the
  *   player's other sends, never an earlier delivery of the same send to
  *   another endpoint. A send the gate cannot evaluate as asked (such as missing
  *   template data) answers `NOTIFICATIONS_INVALID_INPUT` directly and fails
@@ -1102,9 +1107,10 @@ export function createNotificationConformanceBackend(
   const noticesGiven: NotificationConformanceNoticeRecord[] = [];
   /**
    * Delivered sends, with the send key each delivery belongs to, and the
-   * attempts reminder stops kept of sends dropped in flight, each with its
-   * time in its key and its send in `keptOf` (`keptAttemptSend`);
-   * `historyFor` orders them and counts each send once.
+   * attempts kept of the scheduler's sends whose in-flight rows stopped
+   * being counted (`keepAttempt`), each with its time in its key and its
+   * send in `keptOf` (`keptAttemptSend`); `historyFor` orders them and
+   * counts each send once.
    */
   const history: (NotificationDeliveryHistoryEntry & {
     readonly player: string;
@@ -1263,10 +1269,11 @@ export function createNotificationConformanceBackend(
    * Delivered sends, and in-flight ones holding their reservation, oldest
    * first: the gate reads them from the newest. The send being made is left
    * out, including its earlier delivery to another endpoint. The attempts
-   * reminder stops kept of one send (`keptAttemptSend`) are part of that
-   * send while the ledger holds it delivered or in flight (its own entry
-   * stands for them, once), and are left out with the send being made;
-   * otherwise they count as one send of their own, at the latest.
+   * kept of one send (`keepAttempt`) are part of that send while the
+   * ledger holds it delivered or in flight (its own entry stands for them,
+   * once), and are left out with the send being made; otherwise (the send
+   * is gone, or waits deferred) they count as one send of their own, at
+   * the latest.
    */
   const historyFor = (
     player: string,
@@ -1565,9 +1572,38 @@ export function createNotificationConformanceBackend(
   };
 
   /**
+   * Keeps what the gate counts of a send in flight after an ambiguous
+   * answer, before a change that stops counting it (its rows are dropped,
+   * or wait deferred): the provider may have sent it, so it goes into the
+   * delivery history at the time the gate counted it from, under its own
+   * key (its send's `keptAttemptSend` and its time). Only the scheduler's
+   * own sends leave one, a reminder's or a notice's: a caller's key could
+   * not be told from a kept attempt's. A second record of the same attempt
+   * is not written.
+   */
+  const keepAttempt = (sendKey: string, held: LedgerEntry): void => {
+    if (held.outcome.status !== 'in-flight' || held.origin.kind === 'send') {
+      return;
+    }
+    const keptOf = keptAttemptSend(sendKey, held.fingerprint);
+    const kept = `${keptOf}@${formatInstant(held.changedAt)}`;
+    if (!history.some((sent) => sent.sendKey === kept)) {
+      history.push({
+        player: held.request.player,
+        provider: entry?.provider ?? '',
+        topic: held.request.topic,
+        at: formatInstant(held.changedAt),
+        sendKey: kept,
+        keptOf,
+      });
+    }
+  };
+  /**
    * Replays `due` rows of a stored send through the gate and the provider,
    * without the key lookup, and replaces them with the new answers; a replay
-   * that leaves no row deletes the entry. Answers the send's result, or
+   * that leaves no row deletes the entry. A replayed in-flight row that the
+   * replay drops (the gate or the provider refused it) or leaves deferred
+   * keeps its earlier attempt (`keepAttempt`). Answers the send's result, or
    * `undefined` when `stillWanted` turned false during the wait.
    */
   const replay = async (
@@ -1590,6 +1626,15 @@ export function createNotificationConformanceBackend(
         new Map(due.map((row) => [row.key, row])),
       );
       const wasDelivered = held.outcome.status === 'delivered';
+      const counted = (row: LedgerRow | undefined): boolean =>
+        row?.state.status === 'in-flight' || row?.state.status === 'delivered';
+      if (
+        due.some((row) =>
+          row.state.status === 'in-flight' && !counted(rows.find((next) => next.key === row.key)))
+      ) {
+        // The earlier attempt may have reached the provider: it still counts.
+        keepAttempt(key, held);
+      }
       held.rows = [...held.rows.filter((row) => !due.includes(row)), ...rows];
       const stored = bestOutcome(held.rows.map(rowOutcome));
       if (stored === undefined) {
@@ -1656,18 +1701,7 @@ export function createNotificationConformanceBackend(
     let dropped = false;
     for (const [sendKey, held] of [...ledger]) {
       if (held.origin.kind === 'reminder' && held.origin.key === key && held.request.player === player) {
-        const keptOf = keptAttemptSend(sendKey, held.fingerprint);
-        const kept = `${keptOf}@${formatInstant(held.changedAt)}`;
-        if (held.outcome.status === 'in-flight' && !history.some((sent) => sent.sendKey === kept)) {
-          history.push({
-            player,
-            provider: entry?.provider ?? '',
-            topic: held.request.topic,
-            at: formatInstant(held.changedAt),
-            sendKey: kept,
-            keptOf,
-          });
-        }
+        keepAttempt(sendKey, held);
         dropped = dropRows(sendKey, held, (row) => row.state.status !== 'delivered') || dropped;
       }
     }
@@ -1749,7 +1783,11 @@ export function createNotificationConformanceBackend(
       return;
     }
     if (held.origin.kind === 'notice' && !noticeListed(held.request.player, held.origin.notice)) {
-      // The game gave the notice while the push waited: it is not sent again.
+      // The game gave the notice while the push waited: it is not sent
+      // again. An attempt of it that may have reached the provider still counts.
+      if (due.some((row) => row.state.status === 'in-flight')) {
+        keepAttempt(key, held);
+      }
       dropRows(key, held, (row) => due.includes(row));
       return;
     }
@@ -1768,6 +1806,9 @@ export function createNotificationConformanceBackend(
       if (error instanceof NotificationSendInputError && ledger.get(key) === held) {
         // A replay that cannot be made fails once instead of on every run. A
         // notice that cannot render is not sent again: the game still owes it.
+        if (due.some((row) => row.state.status === 'in-flight')) {
+          keepAttempt(key, held);
+        }
         dropRows(key, held, (row) => due.includes(row));
         if (held.origin.kind === 'notice') {
           failedNotices.add(key);

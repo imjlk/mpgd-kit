@@ -353,7 +353,13 @@ invitation to buy.
      again with the same key, time, and content is the same push: its own
      attempt does not cap it, and the two count as one. A reminder whose
      push was never attempted (still queued, or held by quiet hours) leaves
-     nothing behind.
+     nothing behind. The count also survives a retry that ends without a
+     push: when the scheduler tries such a reminder (or a consent notice)
+     again and the push is refused (the player turned the topic off, the
+     provider rejected it), held (quiet hours began), or no longer needed
+     (the game showed the notice), the earlier attempt stays counted, also
+     toward the provider's own limits. A push the game sends itself with
+     `deliver` keeps no such record; its caller gets the refusal.
      <!-- @link ../packages/game-services/src/notifications/service.ts#createNotificationService -->
      <!-- @evidence /docs/specs/notifications/notifications-v2-rfc.md#reminders -->
    - **Targets.** A target that does not map the topic never delivers it.

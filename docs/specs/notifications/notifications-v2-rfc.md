@@ -990,11 +990,12 @@ the pending reminder, and cancelling removes it.
   history record, once per provider, at the row's latest attempt, under a
   kept-attempt key (`<send key>#attempt:<digest of its content>.<attempt
   time>`), not the send key. Only a record whose key starts with a
-  reminder's send key (`reminder:`, a prefix no caller's key may have) is
-  read as a kept attempt: a caller's own key of that form, such as
-  `user#attempt:a.1`, is a send of its own. A later acceptance of the
-  send, or of a reminder set again at the same key and time with other
-  content, still records under the send key, and that reminder's gate
+  reminder's or a notice's send key (`reminder:` or `notice:`, prefixes no
+  caller's key may have) is read as a kept attempt: a caller's own key of
+  that form, such as `user#attempt:a.1`, is a send of its own. A later
+  acceptance of the send, or of a reminder set again at the same key and
+  time with other content, still records under the send key, and that
+  reminder's gate
   counts the kept attempt as another send. The same reminder set again is
   the same send: its kept attempts do not cap it, and if it is attempted
   and stopped again, its kept attempts count as one send, from the latest
@@ -1011,6 +1012,31 @@ the pending reminder, and cancelling removes it.
   the sends in flight before the delivery history: a row stops being in
   flight only after its record is written, so a stop between the two
   reads cannot hide the attempt from both.
+  <!-- @link ../../../packages/game-services/src/notifications/service.ts#createNotificationService -->
+- **So does a replay that ends without an acceptance.** A scheduler run
+  that replays an attempted row can end it in other ways than a stop, and
+  each one would stop the gate counting the earlier attempt: the gate
+  refuses the replay (the player turned the topic off, withdrew a consent,
+  or lost the endpoint), or defers it (quiet hours or the night window
+  opened, a provider limit is full), since a deferred row is not counted
+  while it waits and a later stop leaves nothing of it; the provider
+  answers the replay `rejected`, `unregistered`, or `rate-limited`, which
+  speaks for that call only; the send cannot be made as asked any more; the
+  deployment no longer serves the provider; or the send is a consent
+  notice the game has recorded as given, which is dropped without a call.
+  In each case the backend writes the same kept-attempt record first, at
+  the attempt the replay stood for. A replay that is `accepted` records
+  the send itself, and one that is `ambiguous` again stays in flight, so
+  neither needs it. A deferred row is still the same send: when its wait
+  ends it is not capped by its own kept attempt, and once accepted the two
+  count as one. Before the provider is called, a record that cannot be
+  written fails the run and puts the row back at its own attempt, as for a
+  stop; after the provider answered, the row settles and the failure is
+  reported, so the answered call is not made again. Only a reminder's or
+  a notice's send keeps attempts this way. A caller's own send (`deliver`,
+  or a bulk send) does not: its key is the caller's, so a kept-attempt
+  record under it could not be told from another send, and the caller
+  already holds the refusal.
   <!-- @link ../../../packages/game-services/src/notifications/service.ts#createNotificationService -->
 - A send the provider may already have accepted cannot be recalled. A row
   whose claim lease is still live is not deleted: its holder records the
@@ -2839,6 +2865,8 @@ listed fields of each item asserted:
 | `reminder-cancel-keeps-attempt` | A cancel after an ambiguous answer, once the claim lease ended, stops the replay but keeps the attempt in the delivery history: another send of the topic the same day is `suppressed: frequency-capped` and the provider is called once |
 | `reminder-set-again-after-kept-attempt` | The same reminder (key, time, and content) set again after that cancel is the same send: its kept attempt does not cap it, and once delivered the two count as one send toward `maxPerDay` |
 | `reminder-attempted-again-after-kept-attempt` | That reminder set again, answered `ambiguous` again, and cancelled again counts once, from its latest attempt: a send the next morning, a day after the first attempt but not the second, is `suppressed: frequency-capped` |
+| `reminder-refused-replay-keeps-attempt` | A replay the gate refuses (the player turned the topic off after the ambiguous answer) drops the row but keeps the attempt: once the topic is on again, another send of it the same day is `suppressed: frequency-capped` and the provider is called once |
+| `reminder-deferred-replay-keeps-attempt` | A replay the gate defers (quiet hours began after the ambiguous answer) keeps the attempt when the row starts to wait: a cancel then stops the waiting row, and another send of the topic the same day is still `suppressed: frequency-capped` |
 | `landing-open-before-listener` | On a `landing-url` host the cold open reaches the first subscriber once with the landing route; a later subscriber receives nothing |
 | `open-before-listener` | A cold-start open reaches the game's first subscriber once |
 | `endpoint-lifecycle` | Authentication alone moves a device address to the newly authenticated player; `UNREGISTERED` invalidates it |

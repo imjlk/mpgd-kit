@@ -64,6 +64,8 @@ const aitVectors = [
   'provider-rejected',
   'reminder-attempted-again-after-kept-attempt',
   'reminder-cancel-keeps-attempt',
+  'reminder-deferred-replay-keeps-attempt',
+  'reminder-refused-replay-keeps-attempt',
   'reminder-server-route',
   'reminder-set-again-after-kept-attempt',
 ];
