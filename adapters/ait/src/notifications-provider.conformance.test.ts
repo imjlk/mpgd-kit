@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { NotificationProvider } from '@mpgd/platform/notifications';
 import {
@@ -75,6 +75,30 @@ const plainLaunchUrl = 'intoss://fixture-game/';
 
 type Transport = 'direct' | 'bridge';
 
+/**
+ * The time zone the device reports while a vector runs through the host
+ * bridge. The bridge takes no time zone option: it reads the device's
+ * (`Intl`), which on a player's phone is the player's. Here the vector's
+ * player zone stands in for it, as the direct provider's `timeZone` option
+ * does, so a vector whose gate depends on the zone (quiet hours) runs the
+ * same on a machine in any zone.
+ */
+let deviceTimeZone: string | undefined;
+const resolvedOptions = Intl.DateTimeFormat.prototype.resolvedOptions;
+
+beforeAll(() => {
+  vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockImplementation(
+    function resolvedOptionsOnDevice(this: Intl.DateTimeFormat) {
+      const resolved = resolvedOptions.call(this);
+      return deviceTimeZone === undefined ? resolved : { ...resolved, timeZone: deviceTimeZone };
+    },
+  );
+});
+
+afterAll(() => {
+  vi.restoreAllMocks();
+});
+
 /** The catalog's Apps in Toss mappings, as a game passes them to the host bridge. */
 function topicsOf(context: NotificationConformanceContext): Record<string, AitNotificationTopicMapping> {
   const topics: Record<string, AitNotificationTopicMapping> = {};
@@ -100,6 +124,8 @@ function createAitHarness(
 ): NotificationConformanceHarness {
   const fake = createFakeAitNotificationHost({ initialUrl: plainLaunchUrl });
   const topics = topicsOf(context);
+  // Vectors run one after the other, each with its own harness.
+  deviceTimeZone = transport === 'bridge' ? context.timeZone : undefined;
   const build = (): NotificationProvider => {
     if (transport === 'direct') {
       return createAitNotificationProvider({
