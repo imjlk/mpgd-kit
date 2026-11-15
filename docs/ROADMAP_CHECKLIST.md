@@ -296,8 +296,8 @@ See the [mobile launch checklist](./MOBILE_LAUNCH_CHECKLIST.md).
 - [x] Restore Purchases in the Phaser and lite templates
 - [x] Credential patterns in the generated `.gitignore`
 - [x] Store privacy disclosures guide and privacy policy template with SDK, retention, and deletion sections
-- [ ] Sandbox purchases against production backends, refunds and voided purchases, server-side acknowledgement retry (L2)
-- [ ] Server-issued identity and account deletion in app and on the web (L3)
+- [x] Sandbox purchases against production backends, refunds and voided purchases, server-side acknowledgement retry (L2; [store refunds and server-side finalization](./GAME_SERVICES_BACKEND.md#store-refunds-and-server-side-finalization); not yet run against live store accounts)
+- [x] Server-issued identity and account deletion in app and on the web (L3; [guest identity Worker](./CLOUDFLARE_WORKER_DEPLOY.md#guest-identity-worker), [account deletion](./GAME_SERVICES_BACKEND.md#account-deletion))
 - [x] Play closed/open/production tracks, staged rollout and `deploy rollout`, release notes, R8 mapping upload, first-upload draft fallback (L4; not yet run against a live Play account)
 - [x] Crash reporting and dSYM / mapping upload (L5a, L6b: `deploy run` records R8 mappings and dSYMs and uploads the dSYMs; not yet run against a live Firebase project)
-- [ ] Catalog sync to Play and App Store Connect products
+- [x] Catalog sync to Play and App Store Connect products (L4b; [store product sync](./STORE_PRODUCT_SYNC.md); not yet run against live store accounts)
