@@ -1,5 +1,16 @@
 # @mpgd/cli
 
+## 0.73.2 — 2026-11-16
+
+### Changed
+
+- [bf175795](https://github.com/imjlk/mpgd-kit/commit/bf175795ac187e6513e99a5f0ca5051e9758adf0) The Phaser game template's Devvit target now pins `@devvit/web`, `@devvit/start`, and the `devvit` CLI to 0.15.3, the current stable Devvit release. — Thanks @imjlk!
+- [4341cf0e](https://github.com/imjlk/mpgd-kit/commit/4341cf0e80ede6dd73e14724fe4ecbe2a6a6e2c0) Generated games, and `mpgd kit migrate-tools`, now pin `ttsc` and `@ttsc/unplugin` 0.37.1 (from 0.34.2), and the CLI's runtime `typia` dependency moves to 15.4.1. ttsc 0.37 still builds its plugins with Go 1.27 or later; it uses the Go 1.27.4 it bundles unless `TTSC_GO_BINARY` names another Go. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/adapter-ait@0.23.2, @mpgd/adapter-browser@0.12.10, @mpgd/adapter-capacitor@0.19.7, @mpgd/adapter-devvit@0.15.5, @mpgd/adapter-verse8@0.7.25, @mpgd/analytics@0.5.13, @mpgd/bridge@0.20.2, @mpgd/capacitor-play-billing@0.6.8, @mpgd/capacitor-storekit@0.7.7, @mpgd/catalog@0.15.5, @mpgd/game-runtime@0.10.6, @mpgd/game-services@0.36.2, @mpgd/i18n@0.6.34, @mpgd/platform@0.37.2, @mpgd/target-config@0.24.13
+
 ## 0.73.1 — 2026-11-13
 
 ### Fixed

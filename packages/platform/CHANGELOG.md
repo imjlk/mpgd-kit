@@ -1,5 +1,15 @@
 # @mpgd/platform
 
+## 0.37.2 — 2026-11-16
+
+### Changed
+
+- [4341cf0e](https://github.com/imjlk/mpgd-kit/commit/4341cf0e80ede6dd73e14724fe4ecbe2a6a6e2c0) The runtime `typia` dependency moves from 15.2.1 to 15.4.1, and the shipped validators are rebuilt with typia 15.4.1 through ttsc 0.37.1. The generated JSON schemas and the validation messages are unchanged. — Thanks @imjlk!
+
+### Fixed
+
+- [d2361a52](https://github.com/imjlk/mpgd-kit/commit/d2361a52c4c8719aa6f0c574a2e8d6e3a6d2ab94) Keep an attempted notification send counted when its replay ends without an acceptance. In `@mpgd/game-services/notifications`, a scheduler run that replays a reminder's or a consent notice's send after an ambiguous provider answer (or one that never came) stopped counting that attempt toward `frequency.maxPerDay` and the provider limits whenever the replay did not go through: the gate refused it (the player turned the topic off, withdrew a consent, or lost the endpoint), the gate deferred it (quiet hours or the night window opened, or a provider limit was full) and the waiting row was not counted and left nothing when the reminder was then cancelled, the provider answered the replay `rejected`, `unregistered`, or `rate-limited`, the send could no longer be made as asked, the deployment no longer served the provider, or the game had recorded the notice as given. The same player could then get another push the same day. Each of these now writes the delivery-history record a reminder stop already writes, `<send key>#attempt:<content digest>.<attempt time>`, at the attempt the replay stood for, before the row is dropped or starts to wait. A deferred row is still the same send: when its wait ends it is not capped by its own kept attempt, and once accepted the two count as one. Before the provider is called, a record that cannot be written fails the run and puts the row back at its own attempt time; after the provider answered, the row settles and the failure is reported as `history.add`. A kept attempt is now read from a record whose key starts with a notice's send key (the reserved `notice:` prefix) as well as a reminder's. A send made with `deliver` or a bulk send keeps no attempt, as before: its key is the caller's own. The `@mpgd/platform/notifications-conformance` reference backend follows the same rule, and two new vectors (`reminder-refused-replay-keeps-attempt`, `reminder-deferred-replay-keeps-attempt`) check it on every backend. — Thanks @imjlk!
+
 ## 0.37.1 — 2026-11-13
 
 ### Fixed

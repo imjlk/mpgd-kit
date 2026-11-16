@@ -1,5 +1,11 @@
 # @mpgd/capacitor-play-billing
 
+## 0.6.8 — 2026-11-16
+
+### Patch changes
+
+- Updated dependencies: @mpgd/adapter-capacitor@0.19.7, @mpgd/bridge@0.20.2, @mpgd/game-services@0.36.2, @mpgd/platform@0.37.2
+
 ## 0.6.7 — 2026-11-13
 
 ### Patch changes
