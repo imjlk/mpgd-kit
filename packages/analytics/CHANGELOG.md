@@ -1,5 +1,15 @@
 # @mpgd/analytics
 
+## 0.5.13 — 2026-11-16
+
+### Changed
+
+- [4341cf0e](https://github.com/imjlk/mpgd-kit/commit/4341cf0e80ede6dd73e14724fe4ecbe2a6a6e2c0) The runtime `typia` dependency moves from 15.2.1 to 15.4.1, and the shipped validators are rebuilt with typia 15.4.1 through ttsc 0.37.1. The generated JSON schemas and the validation messages are unchanged. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/platform@0.37.2
+
 ## 0.5.12 — 2026-11-13
 
 ### Patch changes
