@@ -316,9 +316,10 @@ function buildPackagedNativeTarget(workspacePackage: WorkspacePackage, distDir: 
 
 function packageBuildConcurrency(value: string | undefined): number {
   if (value === undefined || value === '') {
-    // ttsc 0.32.1 config evaluators raced on Windows source ctime during parallel
-    // emission; not re-measured on 0.37.1, so Windows stays sequential.
-    return process.platform === 'win32' ? 1 : availableParallelism();
+    // Windows built one package at a time while ttsc 0.32.1 config evaluators
+    // raced on source ctime during parallel emission. On 0.37.1 three CI runs
+    // built both shards in parallel without it (docs/TTSC_TOOLCHAIN.md).
+    return availableParallelism();
   }
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 1) {

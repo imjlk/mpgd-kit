@@ -58,13 +58,17 @@ boundaries, not a precedent for unrelated scripts:
   live in `lint.source.config.ts` with `satisfies` and a checkout-relative
   `files` scope so external workspace dependencies are not linted as Kit sources.
 
-Windows package builds default to one compiler process. The 0.32.1 isolated
-config evaluator uses ttsx for JS as well as TS, so a JS wrapper does not avoid
-its parallel emitted-source ownership race. The race has not been re-measured on
-0.37.1 (it needs Windows runners), and the 0.35 to 0.37 release notes do not
-mention this evaluator. Keep TS configs and ownership
-checks; restore Windows parallelism only after the upstream race is fixed and
-both installed starter variants pass. Other platforms retain parallel builds.
+Windows package builds run in parallel, like the other platforms. They built
+one package at a time from 0.32.1, whose isolated config evaluator raced on
+emitted-source ownership during parallel emission (it uses ttsx for JS as well
+as TS, so a JS wrapper did not avoid it). On 0.37.1 the limit was lifted on an
+experiment branch and three Windows CI runs passed: six
+`prepare-windows-starter` shard builds, and both installed starter variants on
+x64 and ARM64. The 0.35 to 0.37 release notes do not name a fix for that
+evaluator, and an intermittent race can pass three runs, so this is evidence,
+not proof. If a Windows build fails an ownership check again, set
+`MPGD_PACKAGE_BUILD_CONCURRENCY=1` on the Windows jobs and record the failure
+here; keep TS configs and the ownership checks either way.
 
 Windows CI builds `--shard=starter` and `--shard=remaining` on separate runners.
 The starter shard owns the create-game dependency closure; the remaining shard
@@ -93,7 +97,7 @@ orchestration and imported helpers without first compiling every unrelated tool,
 test and package source. Those helpers remain covered by the full tools check in
 `pnpm check`. Every selected package still builds from scratch through `ttsc`
 and the stock TypeScript declaration emitter, and the CLI native builder retains
-its own checked project. The Windows compiler concurrency limit is unchanged.
+its own checked project.
 
 ## Updating the toolchain
 
