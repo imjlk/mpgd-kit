@@ -13,7 +13,7 @@ import {
 import { stageNativeIconResources } from '../icons/staging';
 import type { GeneratedTargetIcons } from '../icons/types';
 import { inspectSignedAndroidBundle } from './native-android-inspection';
-import type { NativeBuildPlan } from './native-build-mode';
+import { androidBundleFileName, type NativeBuildPlan } from './native-build-mode';
 import { createNativeShellStage } from './native-build-stage';
 import { applyCapacitorShellCsp } from './native-shell-csp';
 import {
@@ -131,8 +131,16 @@ export async function executeNativeTargetBuild(
   }
 }
 
-function executeAndroidBuild(
-  input: NativeBuildExecutionInput,
+/** The part of a native build's input that the Android Gradle step reads. */
+export type AndroidBuildInput = Pick<
+  NativeBuildExecutionInput,
+  'plan' | 'artifactRoot' | 'environment' | 'target' | 'targetPath' | 'replaceDirectory'
+  | 'copyFile' | 'run'
+>;
+
+/** Runs Gradle in the staged shell and copies its output under the artifact root. */
+export function executeAndroidBuild(
+  input: AndroidBuildInput,
   stagedShell: string,
 ): NativeBuildOutput {
   const { plan, artifactRoot, environment, target } = input;
@@ -158,7 +166,8 @@ function executeAndroidBuild(
       environment,
       androidProject,
     );
-    releaseArtifact = `${artifactRoot}/app-release.aab`;
+    // Gradle always emits app-release.aab; a rehearsal bundle is renamed on copy.
+    releaseArtifact = `${artifactRoot}/${androidBundleFileName(plan)}`;
     input.copyFile(
       `${androidProject}/app/build/outputs/bundle/release/app-release.aab`,
       input.targetPath(releaseArtifact),

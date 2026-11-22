@@ -1,3 +1,5 @@
+import type { ReleaseNativeDelivery } from '../../packages/release-manifest/src/index';
+
 export type NativePlatform = 'android' | 'ios';
 
 export type NativeBuildMode =
@@ -19,6 +21,15 @@ export interface NativeBuildPlan {
 
 /** Selects an unsigned production-profile Android AAB without signing credentials. */
 export const nativeRehearsalBuildMode = 'rehearsal-archive';
+
+/** The App Bundle a signed, staging, or development Android archive build writes. */
+export const androidReleaseBundleFileName = 'app-release.aab';
+
+/**
+ * A production rehearsal writes its unsigned bundle under its own name, so it
+ * cannot be mistaken for, or copied over, a signed submission bundle.
+ */
+export const androidRehearsalBundleFileName = 'app-rehearsal-unsigned.aab';
 
 const androidModes = new Set<NativeBuildMode>(['debug', 'unsigned-archive', 'signed-archive']);
 const iosModes = new Set<NativeBuildMode>([
@@ -105,5 +116,21 @@ export function resolveNativeBuildPlan(input: {
       ? mode === 'signed-archive'
       : mode === 'store-export'),
     rehearsal: false,
+  };
+}
+
+/** The file name an Android archive build gives the App Bundle it copies out of the stage. */
+export function androidBundleFileName(plan: NativeBuildPlan): string {
+  return plan.rehearsal ? androidRehearsalBundleFileName : androidReleaseBundleFileName;
+}
+
+/** The release manifest's `nativeDelivery` record for a native build plan. */
+export function nativeReleaseDelivery(plan: NativeBuildPlan): ReleaseNativeDelivery {
+  return {
+    platform: plan.platform,
+    mode: plan.mode,
+    signed: plan.mode === 'signed-archive' || plan.mode === 'store-export',
+    submissionCandidate: plan.submissionCandidate,
+    ...(plan.rehearsal ? { rehearsal: true } : {}),
   };
 }
