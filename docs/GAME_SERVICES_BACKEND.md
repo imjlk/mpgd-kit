@@ -646,7 +646,7 @@ is only not this player's, and its own account can still recover it
   handler answers it as 409 `{ "error": "PURCHASE_BOUND_TO_ANOTHER_ACCOUNT",
   "reason": "GOOGLE_PLAY_ACCOUNT_MISMATCH" }`, the oRPC router as that error
   code with `data.reason` (409 through `createGameServicesRpcFetchHandler`;
-  oRPC 2.0.0-beta.46 errors carry no status of their own, so a host that
+  oRPC 2.0.0-beta.52 errors carry no status of their own, so a host that
   mounts `createGameServicesRouter` in its own `RPCHandler` passes
   `errorStatusMap: gameServicesRpcErrorStatusMap`, or answers 500 with the
   same code), and the Worker's service-binding method throws it

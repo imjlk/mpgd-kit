@@ -798,7 +798,7 @@ owner's own recovery.
   'PURCHASE_BOUND_TO_ANOTHER_ACCOUNT', reason }`, the oRPC error code
   `PURCHASE_BOUND_TO_ANOTHER_ACCOUNT` (status 409, `data.reason`), and in
   process `GameServicesPurchaseBoundToAnotherAccountError` (its message starts
-  with the code). oRPC 2.0.0-beta.46 errors carry no status, so the RPC
+  with the code). oRPC 2.0.0-beta.52 errors carry no status, so the RPC
   handler maps the code to 409 (`gameServicesRpcErrorStatusMap`). Analytics
   tracks it as `purchase_rejected` with `boundToAnotherAccount: <reason>`, so
   it never counts as pending; a failed analytics report never replaces the
