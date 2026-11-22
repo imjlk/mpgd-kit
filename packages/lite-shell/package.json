@@ -34,7 +34,7 @@
   "devDependencies": {
     "ttsc": "0.37.2",
     "typescript": "7.0.2",
-    "vitest": "^4.0.0"
+    "vitest": "^5.1.1"
   },
   "publishConfig": {
     "access": "public"
