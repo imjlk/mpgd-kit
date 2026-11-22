@@ -15,14 +15,14 @@
     "fix": "ttsc fix"
   },
   "dependencies": {
-    "@capacitor/android": "8.5.2",
-    "@capacitor/app": "8.1.1",
-    "@capacitor/core": "8.5.2",
-    "@capacitor/ios": "8.5.2",
+    "@capacitor/android": "8.6.2",
+    "@capacitor/app": "8.1.2",
+    "@capacitor/core": "8.6.2",
+    "@capacitor/ios": "8.6.2",
     "@mpgd/capacitor-game-services": "workspace:*"
   },
   "devDependencies": {
-    "@capacitor/cli": "8.5.2",
+    "@capacitor/cli": "8.6.2",
     "ttsc": "0.37.2",
     "typescript": "7.0.2"
   }

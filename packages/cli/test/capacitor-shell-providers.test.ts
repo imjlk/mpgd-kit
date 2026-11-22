@@ -58,7 +58,7 @@ function createGame(): string {
   writeJson('package.json', {
     name: '@game/store',
     private: true,
-    dependencies: { '@capacitor/core': '8.5.2', '@capacitor/app': '8.1.1' },
+    dependencies: { '@capacitor/core': '8.6.2', '@capacitor/app': '8.1.2' },
   });
   writeJson('node_modules/@mpgd/adapter-capacitor/package.json', {
     name: '@mpgd/adapter-capacitor',

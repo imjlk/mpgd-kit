@@ -57,8 +57,8 @@ try {
     private: true,
     version: '0.0.0',
     dependencies: {
-      '@capacitor/app': '8.1.1',
-      '@capacitor/core': '8.5.2',
+      '@capacitor/app': '8.1.2',
+      '@capacitor/core': '8.6.2',
       '@mpgd/adapter-capacitor': '0.4.12',
     },
   }, null, 2)}\n`);

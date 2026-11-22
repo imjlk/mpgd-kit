@@ -174,10 +174,10 @@ initializer refuses a game or shell that lists it; remove it first.
      [`@capacitor-firebase/messaging` iOS setup](https://github.com/capawesome-team/capacitor-firebase/tree/main/packages/messaging#ios)
      shows; the plugin hands the token to Firebase. Do not add
      `FirebaseApp.configure()`: the plugin configures Firebase itself when
-     `GoogleService-Info.plist` is in the bundle (plugin 8.5.2,
+     `GoogleService-Info.plist` is in the bundle (plugin 8.6.0,
      `ios/Plugin/FirebaseMessaging.swift`). The README's third method,
      `didReceiveRemoteNotification`, is left out: the kit sends no silent
-     pushes, and plugin 8.5.2 never calls the completion handler it is
+     pushes, and plugin 8.6.0 never calls the completion handler it is
      given. A game that sends silent pushes adds that method, calls the
      handler itself, and adds *Background Modes → Remote notifications*.
    - **Cold-start tap.** `SceneDelegate` forwards
@@ -271,7 +271,7 @@ half (`pnpm notifications:live`).
   topic arrives with the app in the background, and a tap opens the topic's
   route (cold and warm starts). Verify cold starts on iOS in particular:
   a killed-app tap is only in `connectionOptions.notificationResponse`, which
-  Capacitor 8.5's scene proxy does not read. The reference shell's
+  Capacitor 8.6's scene proxy does not read. The reference shell's
   `SceneDelegate` forwards it once the bridge has loaded plugins, and
   `mpgd target init capacitor --providers notifications` adds the same
   forwarder to an iOS project it generates. An older shell gets the step

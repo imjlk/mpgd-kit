@@ -91,7 +91,7 @@ function createGame(gateways: { readonly android?: string; readonly ios?: string
     name: '@game/notifications',
     private: true,
     scripts: { check: 'ttsc --noEmit' },
-    dependencies: { '@capacitor/core': '8.5.2', '@capacitor/app': '8.1.1' },
+    dependencies: { '@capacitor/core': '8.6.2', '@capacitor/app': '8.1.2' },
   });
   writeJson('node_modules/@mpgd/adapter-capacitor/package.json', {
     name: '@mpgd/adapter-capacitor',
@@ -213,7 +213,7 @@ try {
     const shell = readJson(root, 'apps/mobile-capacitor/package.json') as {
       readonly dependencies: Record<string, string>;
     };
-    assert.equal(shell.dependencies['@capacitor-firebase/messaging'], '8.5.2');
+    assert.equal(shell.dependencies['@capacitor-firebase/messaging'], '8.6.0');
     assert.equal(shell.dependencies['@capacitor/local-notifications'], '8.3.1');
     assert.equal(shell.dependencies.firebase, undefined, 'the web SDK stays in the game');
     const targets = readJson(root, 'mpgd.targets.json') as {
@@ -226,7 +226,7 @@ try {
     assert.deepEqual(manifest.providers, {
       notifications: {
         packages: {
-          '@capacitor-firebase/messaging': '8.5.2',
+          '@capacitor-firebase/messaging': '8.6.0',
           '@capacitor/local-notifications': '8.3.1',
         },
         platforms: ['android', 'ios'],
@@ -774,16 +774,16 @@ try {
       plugin,
       JSON.stringify({
         name: '@capacitor-firebase/messaging',
-        version: '8.5.2',
+        version: '8.6.0',
         peerDependencies: { '@capacitor/core': '>=9.0.0' },
       }),
     );
     const core = path.join(root, 'node_modules/@capacitor/core/package.json');
     mkdirSync(path.dirname(core), { recursive: true });
-    writeFileSync(core, JSON.stringify({ name: '@capacitor/core', version: '8.5.2' }));
+    writeFileSync(core, JSON.stringify({ name: '@capacitor/core', version: '8.6.2' }));
     assert.throws(
       () => planCapacitorShellStarter(input(root, ['notifications'])),
-      /@capacitor-firebase\/messaging@8\.5\.2 needs @capacitor\/core >=9\.0\.0, but the game has 8\.5\.2/u,
+      /@capacitor-firebase\/messaging@8\.6\.0 needs @capacitor\/core >=9\.0\.0, but the game has 8\.6\.2/u,
     );
   }
 
@@ -797,7 +797,7 @@ try {
     writeFileSync(firebase, JSON.stringify({ name: 'firebase', version: '11.10.0' }));
     assert.throws(
       () => planCapacitorShellStarter(input(root, ['notifications'])),
-      /@capacitor-firebase\/messaging 8\.5\.2 needs firebase \^12\.6\.0, but the game has 11\.10\.0/u,
+      /@capacitor-firebase\/messaging 8\.6\.0 needs firebase \^12\.6\.0, but the game has 11\.10\.0/u,
     );
     writeFileSync(firebase, JSON.stringify({ name: 'firebase', version: '12.7.0' }));
     // In range: the plan goes ahead with the game's copy.
@@ -811,21 +811,21 @@ try {
       plugin,
       JSON.stringify({
         name: '@capacitor-firebase/messaging',
-        version: '8.5.2',
+        version: '8.6.0',
         peerDependencies: { firebase: '^13.0.0' },
       }),
     );
     // With the game's firebase installed, the plugin's own peer check reports it.
     assert.throws(
       () => planCapacitorShellStarter(input(root, ['notifications'])),
-      /@capacitor-firebase\/messaging@8\.5\.2 needs firebase \^13\.0\.0, but the game has 12\.7\.0/u,
+      /@capacitor-firebase\/messaging@8\.6\.0 needs firebase \^13\.0\.0, but the game has 12\.7\.0/u,
     );
     // Without it, the firebase the CLI would add is checked against the
     // installed plugin's range.
     rmSync(path.dirname(firebase), { recursive: true });
     assert.throws(
       () => planCapacitorShellStarter(input(root, ['notifications'])),
-      /@capacitor-firebase\/messaging 8\.5\.2 needs firebase \^13\.0\.0, but this CLI would add 12\.19\.0/u,
+      /@capacitor-firebase\/messaging 8\.6\.0 needs firebase \^13\.0\.0, but this CLI would add 12\.19\.0/u,
     );
   }
 

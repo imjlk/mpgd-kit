@@ -58,7 +58,7 @@
     "test": "vitest run && node test/package-import.mjs && node test/native-http-runtime.mjs"
   },
   "dependencies": {
-    "@capacitor/app": "8.1.1",
+    "@capacitor/app": "8.1.2",
     "@mpgd/bridge": "workspace:*",
     "@mpgd/capacitor-game-services": "workspace:*",
     "@mpgd/game-services": "workspace:*",
@@ -92,9 +92,9 @@
   },
   "devDependencies": {
     "@capacitor-community/admob": "8.1.0",
-    "@capacitor-firebase/crashlytics": "8.5.2",
-    "@capacitor-firebase/messaging": "8.5.2",
-    "@capacitor/core": "8.5.2",
+    "@capacitor-firebase/crashlytics": "8.6.0",
+    "@capacitor-firebase/messaging": "8.6.0",
+    "@capacitor/core": "8.6.2",
     "@capacitor/local-notifications": "8.3.1",
     "@capawesome/capacitor-app-review": "8.1.0",
     "@mpgd/game-runtime": "workspace:*",
