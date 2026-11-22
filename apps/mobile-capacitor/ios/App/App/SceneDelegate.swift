@@ -14,8 +14,8 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
         SceneDelegateProxy.shared.scene(scene, willConnectTo: session, options: connectionOptions)
         // A killed-app tap is only in connectionOptions.notificationResponse.
-        // Capacitor 8.5's scene proxy replays URL contexts on capacitorViewDidAppear
-        // and does not read this, and @capacitor/ios 8.5.2 never does either.
+        // Capacitor 8.6's scene proxy replays URL contexts on capacitorViewDidAppear
+        // and does not read this, and @capacitor/ios 8.6.2 never does either.
         forwardColdStartNotification(connectionOptions.notificationResponse)
     }
 

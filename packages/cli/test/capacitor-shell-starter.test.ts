@@ -149,7 +149,7 @@ try {
   writeJson('package.json', {
     name: '@game/puzzle',
     private: true,
-    dependencies: { '@capacitor/core': '8.5.2', '@capacitor/app': '8.1.1' },
+    dependencies: { '@capacitor/core': '8.6.2', '@capacitor/app': '8.1.2' },
   });
   writeJson('node_modules/@mpgd/adapter-capacitor/package.json', {
     name: '@mpgd/adapter-capacitor',
@@ -223,11 +223,11 @@ try {
   gameDependencies['@capacitor/core'] = '7.0.0';
   writeJson('package.json', gamePackage);
   assert.throws(() => planCapacitorShellStarter(options), /Capacitor 8.x/u);
-  gameDependencies['@capacitor/core'] = '8.5.2';
+  gameDependencies['@capacitor/core'] = '8.6.2';
   gameDependencies['@capacitor/app'] = '7.0.0';
   writeJson('package.json', gamePackage);
   assert.throws(() => planCapacitorShellStarter(options), /Capacitor 8.x/u);
-  gameDependencies['@capacitor/app'] = '8.1.1';
+  gameDependencies['@capacitor/app'] = '8.1.2';
   writeJson('package.json', gamePackage);
 
   const dryRun = planCapacitorShellStarter(options);

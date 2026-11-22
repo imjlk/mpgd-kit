@@ -39,13 +39,13 @@
     "@mpgd/platform": "^0.37.0"
   },
   "devDependencies": {
-    "@capacitor/core": "8.5.2",
+    "@capacitor/core": "8.6.2",
     "@mpgd/adapter-capacitor": "workspace:*",
     "@mpgd/bridge": "workspace:*",
     "@mpgd/game-services": "workspace:*",
     "@mpgd/platform": "workspace:*",
     "@types/node": "^24.0.0",
-    "ttsc": "0.37.1",
+    "ttsc": "0.37.2",
     "typescript": "7.0.2",
     "vitest": "^4.0.0"
   },

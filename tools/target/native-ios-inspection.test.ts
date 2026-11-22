@@ -215,12 +215,12 @@ try {
   assert.equal(shellInstallsFirebaseMessaging(shell), false, 'no package.json');
   writeFileSync(
     path.join(shell, 'package.json'),
-    JSON.stringify({ dependencies: { '@capacitor/core': '8.5.2' } }),
+    JSON.stringify({ dependencies: { '@capacitor/core': '8.6.2' } }),
   );
   assert.equal(shellInstallsFirebaseMessaging(shell), false);
   writeFileSync(
     path.join(shell, 'package.json'),
-    JSON.stringify({ dependencies: { '@capacitor-firebase/messaging': '8.5.2' } }),
+    JSON.stringify({ dependencies: { '@capacitor-firebase/messaging': '8.6.0' } }),
   );
   assert.equal(shellInstallsFirebaseMessaging(shell), true);
   console.info('Signed iOS app inspection passed.');

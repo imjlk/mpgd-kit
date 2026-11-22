@@ -18,8 +18,8 @@ import {
 /**
  * Every package with a `preinstall`, `install`, or `postinstall` script (or a
  * `binding.gyp`) that the notifications and crash-reporting starters' packages
- * bring in. Recorded 2026-10-26 from a pnpm 11.7.0 install of the `scanned`
- * packages below with @capacitor/core 8.5.2 and no allowBuilds, which stopped
+ * bring in. Recorded 2026-11-22 from a pnpm 11.7.0 install of the `scanned`
+ * packages below with @capacitor/core 8.6.2 and no allowBuilds, which stopped
  * with
  * `ERR_PNPM_IGNORED_BUILDS Ignored build scripts: @firebase/util@1.15.3, protobufjs@7.6.6`
  * and matched a scan of every installed package.json. Both come from firebase:
@@ -29,9 +29,9 @@ import {
 const firebaseTree = {
   scanned: {
     firebase: '12.19.0',
-    '@capacitor-firebase/messaging': '8.5.2',
+    '@capacitor-firebase/messaging': '8.6.0',
     '@capacitor/local-notifications': '8.3.1',
-    '@capacitor-firebase/crashlytics': '8.5.2',
+    '@capacitor-firebase/crashlytics': '8.6.0',
   },
   buildScripts: {
     '@firebase/util': '1.15.3 postinstall: node ./postinstall.js',

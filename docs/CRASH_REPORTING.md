@@ -51,7 +51,7 @@ mpgd target init capacitor --app-id <id> --display-name <name> --providers crash
 Combine it with other providers (`--providers notifications,crash-reporting`).
 The initializer:
 
-- adds `@capacitor-firebase/crashlytics` 8.5.2 to the shell package
+- adds `@capacitor-firebase/crashlytics` 8.6.0 to the shell package
   (`apps/mobile-capacitor/package.json`) and records the provider in
   `mpgd.native-shell.json`. The game package does not change: the adapter
   reaches the native plugin by its registered name.
