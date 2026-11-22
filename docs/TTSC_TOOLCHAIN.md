@@ -20,7 +20,7 @@ Generated Phaser and Lite games have a `tsconfig.tools.json` selecting
 `tools/**/*.ts`. Their `check`, `lint`, `format`, and `fix` commands include both
 the game and tools projects. `pnpm accept` executes the typed acceptance entry
 through that project with no authored JavaScript bootstrap. ttsx 0.32.1 and
-later (the pin is 0.37.1) forward terminal flags such as `--help` after the
+later (the pin is 0.37.2) forward terminal flags such as `--help` after the
 entry; the old 0.30.4 runner intercepted them even after `--`. Keep the argument-forwarding regression
 check when changing the runner.
 `pnpm test:template-tools` creates both templates in
@@ -44,7 +44,7 @@ boundaries, not a precedent for unrelated scripts:
   JavaScript sources.
 - `strip.config.js` remains a small, type-checked loader boundary: the 0.32.1
   native strip loader resolved the config under the wrong root when macOS
-  `TMPDIR` is a symlink. Re-measured on 0.37.1 with a root `strip.config.ts`:
+  `TMPDIR` is a symlink. Re-measured on 0.37.1 and again on 0.37.2 with a root `strip.config.ts`:
   under the default macOS `TMPDIR` (`/var/folders/...`, a symlink into
   `/private`), `pnpm check`, `pnpm test:ttsx-assertions`,
   `pnpm test:template-tools`, and `pnpm test:cli-output` all stop with

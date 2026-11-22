@@ -1027,7 +1027,7 @@ export function createGameServicesRouter(
       }
       if (error instanceof GameServicesPurchaseBoundToAnotherAccountError) {
         // A retryable answer, not an internal error: the code and reason reach the client.
-        // oRPC beta.46 errors carry no status: `gameServicesRpcErrorStatusMap`
+        // oRPC beta.52 errors carry no status: `gameServicesRpcErrorStatusMap`
         // (used by `createGameServicesRpcFetchHandler`) maps the code to 409.
         throw new ORPCError(purchaseBoundToAnotherAccountCode, {
           message: error.message,
@@ -1078,7 +1078,7 @@ export function createGameServicesRouter(
 
 /**
  * The RPC handler's error status map: oRPC's common codes and
- * `PURCHASE_BOUND_TO_ANOTHER_ACCOUNT` at 409. oRPC 2.0.0-beta.46 derives the
+ * `PURCHASE_BOUND_TO_ANOTHER_ACCOUNT` at 409. oRPC 2.0.0-beta.52 derives the
  * HTTP status of an error from its code through this map (an `ORPCError`
  * carries no status of its own), so a host that mounts
  * `createGameServicesRouter` in its own `RPCHandler` passes it as

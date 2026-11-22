@@ -21,7 +21,7 @@ verifies every receipt and owns every grant.
 | OpenIAP Apple | `4.0.7` (git tag `4.0.7`, `99c97d70`) | SwiftPM `.package(url: "https://github.com/hyodotdev/openiap.git", exact: "4.0.7")` |
 | OpenIAP Google | `4.0.8` (git tag `google-4.0.8`, `0f7dbf68`) | Maven Central `io.github.hyochan.openiap:openiap-google:4.0.8` (Play flavor) |
 | OpenIAP Client Protocol | `1.3.1` | carried by both cores (`openiap-versions.json`) |
-| Capacitor | 8.5.2 | unchanged |
+| Capacitor | 8.6.2 | the reference shell; the engine swap ran on 8.5.2 and did not change it. The StoreKit plugin's Swift package accepts `capacitor-swift-pm` from 8.5.1, matching its npm peer |
 | iOS | deployment target 15, swift-tools 5.9, Swift 5 language mode | unchanged; OpenIAP Apple declares the same |
 | Xcode / Swift used here | Xcode 26.6, Swift 6.3.3 | local verification; CI runs `macos-26` |
 | Android | minSdk 24, compile/target 36 | unchanged; OpenIAP Google needs minSdk 23 |

@@ -2286,9 +2286,9 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
     refuses a v1 push provider next to it.
 - **Cold starts.** A killed-app notification tap is delivered only in
   `connectionOptions.notificationResponse` of
-  `scene(_:willConnectTo:options:)`. Capacitor 8.5's scene proxy replays URL
+  `scene(_:willConnectTo:options:)`. Capacitor 8.6's scene proxy replays URL
   contexts on `capacitorViewDidAppear` and does not read that response, and
-  `@capacitor/ios` 8.5.2 does not either. The reference shell's
+  `@capacitor/ios` 8.6.2 does not either. The reference shell's
   `SceneDelegate` forwards it to the notification-center delegate (or the
   bridge's notification router) on the first `capacitorViewDidAppear`, once
   plugins have registered. The provider registers its native listeners when

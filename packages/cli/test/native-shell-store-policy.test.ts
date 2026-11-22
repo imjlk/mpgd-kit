@@ -556,7 +556,7 @@ try {
 // Advertising declarations.
 {
   assert.equal(shellUsesAdMob({ dependencies: { '@capacitor-community/admob': '8.1.0' } }), true);
-  assert.equal(shellUsesAdMob({ dependencies: { '@capacitor/core': '8.5.2' } }), false);
+  assert.equal(shellUsesAdMob({ dependencies: { '@capacitor/core': '8.6.2' } }), false);
   assert.equal(shellUsesAdMob(undefined), false);
   const manifest = [
     '<?xml version="1.0" encoding="utf-8"?>',

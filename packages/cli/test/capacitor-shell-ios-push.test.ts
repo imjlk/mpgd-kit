@@ -62,8 +62,9 @@ const referenceProject = readFileSync(
   'utf8',
 );
 
-// The AppDelegate and SceneDelegate `cap add ios` copies from Capacitor 8.5.2's
-// ios-spm-template (@capacitor/cli assets/ios-spm-template.tar.gz).
+// The AppDelegate and SceneDelegate `cap add ios` copies from Capacitor 8.6.2's
+// ios-spm-template (@capacitor/cli assets/ios-spm-template.tar.gz, unchanged
+// since 8.5.2).
 const capacitorAppDelegate = [
   'import UIKit',
   'import Capacitor',
@@ -484,7 +485,7 @@ try {
   assert.deepEqual(levels({ swiftSources: [appDelegate] }), []);
   assert.deepEqual(levels({ swiftSources: [appDelegate, capacitorSceneDelegate] }), ['error']);
   assert.equal(
-    shellUsesFirebaseMessaging({ dependencies: { [notificationsMessagingPlugin]: '8.5.2' } }),
+    shellUsesFirebaseMessaging({ dependencies: { [notificationsMessagingPlugin]: '8.6.0' } }),
     true,
   );
   assert.equal(shellUsesFirebaseMessaging({ dependencies: {} }), false);
@@ -584,7 +585,7 @@ try {
   );
   writeFileSync(
     path.join(shell, 'package.json'),
-    JSON.stringify({ dependencies: { [notificationsMessagingPlugin]: '8.5.2' } }),
+    JSON.stringify({ dependencies: { [notificationsMessagingPlugin]: '8.6.0' } }),
   );
   const unwired = inspectNativeStorePolicy({ platform: 'ios', shellApp: shell });
   assert.equal(pushMessages(unwired).length, 4);

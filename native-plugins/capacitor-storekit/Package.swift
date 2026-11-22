@@ -24,7 +24,10 @@ let package = Package(
         .library(name: "MpgdCapacitorStorekit", targets: ["MpgdCapacitorStoreKit"])
     ],
     dependencies: (bridgeTestsOnly ? [] : [
-        .package(url: "https://github.com/ionic-team/capacitor-swift-pm.git", exact: "8.5.2")
+        // The shell's generated CapApp-SPM pins Capacitor exactly. This range
+        // matches the npm peer (^8.5.1), so the plugin resolves in any
+        // Capacitor 8 shell from 8.5.1 on rather than in one patch release.
+        .package(url: "https://github.com/ionic-team/capacitor-swift-pm.git", from: "8.5.1")
     ]) + [
         // OpenIAP Apple core (StoreKit 2), pinned exactly. See
         // docs/specs/commerce/openiap-migration.md before changing it.

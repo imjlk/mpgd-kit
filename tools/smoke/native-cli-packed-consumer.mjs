@@ -74,12 +74,12 @@ try {
     packageManager: 'pnpm@11.7.0',
     type: 'module',
     dependencies: {
-      '@capacitor/app': '8.1.1',
-      '@capacitor/core': '8.5.2',
+      '@capacitor/app': '8.1.2',
+      '@capacitor/core': '8.6.2',
       '@mpgd/adapter-capacitor': adapterVersion,
     },
     devDependencies: {
-      '@capacitor/cli': '8.5.2',
+      '@capacitor/cli': '8.6.2',
       '@mpgd/cli': `file:${tarball}`,
       vite: '8.1.3',
     },

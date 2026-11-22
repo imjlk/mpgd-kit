@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 
 import { manifest, object, parseObject } from './validation/json.js';
 
-const shellVersion = '8.5.2';
+const shellVersion = '8.6.2';
 const pluginMinimum = '8.5.1';
 const read = (path: string): string => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 const readJson = (path: string) => manifest(read(path), path);

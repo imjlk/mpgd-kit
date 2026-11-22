@@ -32,7 +32,8 @@ the stores change their rules, so re-check the linked pages before you submit.
   `bundletool dump config --bundle=app-release.aab | grep alignment`
   (`PAGE_ALIGNMENT_16K` is what you want; `PAGE_ALIGNMENT_4K` means the
   native libraries are 4 KB aligned) and the libraries' ELF alignment with
-  the APK Analyzer. The kit does not check this.
+  the APK Analyzer. The kit does not check this. A `rehearsal-archive` build
+  names its unsigned bundle `app-rehearsal-unsigned.aab`.
 
 ## 1. Accounts and keys
 
