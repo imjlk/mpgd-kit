@@ -29,6 +29,7 @@ import {
 import {
   createInMemoryNotificationStore,
   type InMemoryNotificationStore,
+  type NotificationSendRow,
   type NotificationStore,
 } from './store.js';
 
@@ -527,6 +528,32 @@ const historyOf = (h: Harness) =>
     ...entry,
     sendKey: entry.sendKey.replace(/#attempt:[0-9a-z]+\.[0-9a-z]+$/u, '#attempt'),
   }));
+
+/**
+ * Rewrites the send's rows as a store that keeps no attempt time holds them:
+ * the gate then counts an attempted row from its send's `changedAt`.
+ */
+async function keepNoAttemptTime(store: InMemoryNotificationStore, key: string): Promise<void> {
+  const held = await store.getSend(key);
+  assert.ok(held !== undefined, `send ${key}`);
+  const rows = held.send.rows.map((row): NotificationSendRow => {
+    if (row.state.status !== 'in-flight') {
+      return row;
+    }
+    const { attemptedAt: _attemptedAt, ...state } = row.state;
+    return { ...row, state };
+  });
+  assert.ok(await store.updateSend({ key, version: held.version, send: { ...held.send, rows } }));
+}
+
+/** When the gate counts the send's first row from, if it is attempted and in flight (`loadHistory`). */
+function countedFrom(store: InMemoryNotificationStore, key: string): string | undefined {
+  const send = store.inspect().sends.find((candidate) => candidate.key === key);
+  const row = send?.rows[0];
+  return row?.state.status === 'in-flight' && row.state.attempted
+    ? (row.state.attemptedAt ?? send?.changedAt)
+    : undefined;
+}
 
 // A cancel after an ambiguous attempt keeps it in the delivery history: the
 // provider may have sent it, so a new reminder the same day is frequency-capped.
@@ -1161,6 +1188,49 @@ for (const change of ['provider', 'copy'] as const) {
   assert.equal(h.fcm.calls.length, 1, `${change}: no call`);
   assert.deepEqual(h.store.inspect().sends, [], `${change}: the row is dropped`);
   assert.deepEqual(historyOf(h), [attemptOf(fireAt, fireAt)], `${change}: its attempt is kept`);
+}
+
+// A replay that fails before its call (here a store read) puts the row back
+// as it was, still counted from its attempt. A row stored without its
+// attempt time counts from its send's `changedAt`, which writing the row back
+// moves to the failed claim: the time is written out instead, so the attempt
+// stops counting a day after 03:00, not after the failed replay at 03:05.
+{
+  let failHistory = 0;
+  const h = harness({
+    topics: [capped],
+    answers: [{ status: 'ambiguous' }],
+    store: (inner) => ({
+      ...inner,
+      async listHistory(input) {
+        if (failHistory > 0) {
+          failHistory -= 1;
+          throw new Error('D1 is unavailable.');
+        }
+        return inner.listHistory(input);
+      },
+    }),
+  });
+  await register(h, 'p-1');
+  const fireAt = '2026-10-19T03:00:00Z';
+  await fire(h, fireAt);
+  const key = `reminder:p-1:k:${fireAt}`;
+  await keepNoAttemptTime(h.store, key);
+  assert.equal(countedFrom(h.store, key), fireAt, 'counted from its send, changed at the attempt');
+  h.time.set('2026-10-19T03:05:00Z');
+  failHistory = 1;
+  assert.equal((await h.service.runScheduler()).failed, 1, 'the replay failed before its call');
+  assert.equal(failHistory, 0);
+  assert.equal(h.fcm.calls.length, 1);
+  assert.equal(countedFrom(h.store, key), fireAt, 'still counted from the attempt');
+  // 24 hours and 2 minutes after the attempt, 23 hours and 57 minutes after the failed replay.
+  h.time.set('2026-10-20T03:02:00Z');
+  const next = await h.service.deliver({
+    idempotencyKey: 'next-day',
+    player: 'p-1',
+    topic: 'friend-challenge',
+  });
+  assert.equal(next.status, 'delivered', 'the attempt no longer counts');
 }
 
 // A replay the provider refuses (or whose endpoint it no longer knows)

@@ -23,6 +23,7 @@ import { createNotificationService } from './service.js';
 import {
   createInMemoryNotificationStore,
   type InMemoryNotificationStore,
+  type NotificationSendRow,
   type NotificationStore,
 } from './store.js';
 
@@ -722,6 +723,59 @@ const statuses = (result: NotificationBulkDeliveryResult) =>
   const row = (await store.getSend('event-21:p1'))?.send.rows[0];
   assert.equal(row?.rateLimit, undefined, 'a not-sent answer is not a rate limit');
   assert.equal(row?.state.status, 'delivered');
+}
+
+// A replay the batch leaves out (`not-sent`) goes back as it was, still
+// counted from its attempt. A row stored without its attempt time counts from
+// its send's `changedAt`, which writing the row back moves to the replay: the
+// time is written out instead.
+{
+  let calls = 0;
+  const fake = bulkProvider(
+    { maxRecipients: 10, minRecipients: 2, perRecipientOutcomes: true },
+    (requests) => {
+      calls += 1;
+      return requests.map((): NotificationRemoteDeliveryAnswer =>
+        calls === 1 ? { status: 'ambiguous' } : { status: 'not-sent' },
+      );
+    },
+  );
+  const { service, store, time } = await setup({ provider: fake.provider, players: players(2) });
+  await service.deliverBulk(bulkInput('event-30', players(2)));
+  const attemptedAt = '2026-11-01T03:00:00Z';
+  const keys = players(2).map((player) => notificationBulkRecipientKey('event-30', player));
+  // A store that keeps no attempt time: the gate counts each row from its send's `changedAt`.
+  for (const key of keys) {
+    const held = await store.getSend(key);
+    assert.ok(held !== undefined, key);
+    const rows = held.send.rows.map((row): NotificationSendRow => {
+      if (row.state.status !== 'in-flight') {
+        return row;
+      }
+      const { attemptedAt: _attemptedAt, ...state } = row.state;
+      return { ...row, state };
+    });
+    assert.ok(await store.updateSend({ key, version: held.version, send: { ...held.send, rows } }));
+  }
+  assert.deepEqual(
+    keys.map((key) => store.inspect().sends.find((candidate) => candidate.key === key)?.changedAt),
+    [attemptedAt, attemptedAt],
+    'each row counts from its attempt',
+  );
+  time.advance(3_600);
+  await service.dispatchDue();
+  assert.equal(calls, 2, 'the replay was left out of its batch');
+  for (const key of keys) {
+    const send = store.inspect().sends.find((candidate) => candidate.key === key);
+    const row = send?.rows[0];
+    assert.equal(
+      row?.state.status === 'in-flight' && row.state.attempted
+        ? (row.state.attemptedAt ?? send?.changedAt)
+        : undefined,
+      attemptedAt,
+      `${key}: still counted from its attempt`,
+    );
+  }
 }
 
 // The scheduler replays due rows of a bulk provider through sendBatch, one call per call group.

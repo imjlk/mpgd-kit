@@ -1728,6 +1728,15 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     /** Whether the provider answered this claim's call; `endClaim` reads it. */
     let answered = false;
     /**
+     * The row as it was before this claim, due no sooner than a short
+     * backoff from `at` (`backedOff`), for an exit that proves nothing was
+     * sent. The time the gate counted its attempt from is written out
+     * (`withAttemptTime`): a row stored without one counts from its send's
+     * `changedAt`, which writing the row back moves to this claim's time.
+     */
+    const restored = (at: number): NotificationSendRow =>
+      backedOff(withAttemptTime(before, claimed.changedBefore), at);
+    /**
      * Ends this claim: writes `change` to its row while the claim still holds
      * it, through `settle` (`complete`; `settleQuietly` on a failure path;
      * `settleAfterCall` once the provider may have taken the send). Every
@@ -1769,10 +1778,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
               sendKey,
               row,
               token,
-              {
-                kind: 'set',
-                row: backedOff(withAttemptTime(before, claimed.changedBefore), nowMs()),
-              },
+              { kind: 'set', row: restored(nowMs()) },
               claimed.at,
             );
             throw error;
@@ -1858,7 +1864,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       // Nothing was sent (a host read or the store failed): the row goes back
       // as it was, due again after a short backoff so a failing host does not
       // fill every scheduler batch.
-      await endClaim({ kind: 'set', row: backedOff(before, nowMs()) }, claimed.at, settleQuietly);
+      await endClaim({ kind: 'set', row: restored(nowMs()) }, claimed.at, settleQuietly);
       throw error;
     }
     const { decision, topic } = evaluated;
@@ -2032,7 +2038,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         // No call was made for it (a bulk batch left it out): the row goes
         // back as it was before this claim, due again shortly. It is not a
         // rate limit, so it neither backs off nor nears the 24-hour give-up.
-        await endClaim({ kind: 'set', row: backedOff(before, answeredAt) }, answeredAt);
+        await endClaim({ kind: 'set', row: restored(answeredAt) }, answeredAt);
         return {};
       case 'rate-limited': {
         // Nothing was sent: the claim is released and the row waits. The
