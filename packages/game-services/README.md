@@ -186,7 +186,7 @@ consumption checks alongside the client and target conformance suites.
 ## oRPC version and error compatibility
 
 The oRPC transport (`createGameServicesOrpcClient`, `createGameServicesRouter`,
-`createGameServicesRpcFetchHandler`) is built on oRPC `2.0.0-beta.46`, pinned
+`createGameServicesRpcFetchHandler`) is built on oRPC `2.0.0-beta.52`, pinned
 exactly. Pin the same exact version if a game or Worker also uses oRPC directly.
 
 oRPC 2.0.0-beta.34 removed the `inferable` flag from RPC error bodies, and each
@@ -213,6 +213,23 @@ from `@mpgd/game-services` 0.31.0 or later (oRPC 2.0.0-beta.46). Other oRPC chan
 only POST, PUT, PATCH, and DELETE (a GET answers 404, and the kit clients always
 POST), and `Infinity` inputs are encoded with their own meta marker, which a Worker
 on 0.30.5 or older (oRPC 2.0.0-beta.14) cannot decode.
+
+oRPC 2.0.0-beta.52 keeps the RPC wire format of 2.0.0-beta.46: requests, success
+bodies, and error bodies are byte-for-byte the same, so games and Workers from
+0.31.0 or later still work together in either direction. It is stricter about
+bodies that no oRPC peer sends, and it follows redirects:
+
+- the RPC handler answers 400 `BAD_REQUEST` to a request body that is not a
+  `{ json, meta }` object (an extra top-level key, an array, a URL-encoded
+  form), where 2.0.0-beta.46 dropped the extra key or called the procedure with
+  no input. It ignores `meta` entries of an unknown type instead of answering
+  400;
+- the client rejects a success body with any top-level key besides `json` and
+  `meta` as a `MalformedResponseError`, and it also ignores unknown `meta` types;
+- the client follows HTTP redirects. Before, a redirect failed the call in a
+  browser and resolved it with `undefined` under Node. Point the client at the
+  final `/rpc` URL, with no HTTP-to-HTTPS or trailing-slash redirect in front of
+  the Worker.
 
 ## Runtime backend transport
 

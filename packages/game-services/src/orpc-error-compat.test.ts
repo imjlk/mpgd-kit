@@ -379,7 +379,7 @@ assertEqual(
   'only the flag is removed',
 );
 
-console.log('oRPC error-body compatibility (beta.14 <-> beta.46) passed.');
+console.log('oRPC error-body compatibility (beta.14 <-> beta.52) passed.');
 
 function assertEqual<T>(actual: T, expected: T, message: string): void {
   if (actual !== expected) {
