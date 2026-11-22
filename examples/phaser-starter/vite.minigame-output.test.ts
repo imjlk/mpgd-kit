@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { createContext, runInContext } from 'node:vm';
 
 import {
@@ -9,7 +10,7 @@ import {
   createRuntimeAssetOriginsBootstrap,
   resolveMiniGameBundleOutput,
 } from './vite.minigame-output';
-import { rewritePhaserMiniGameDynamicCode } from './vite.minigame-phaser';
+import { pinnedPhaserVersion, rewritePhaserMiniGameDynamicCode } from './vite.minigame-phaser';
 
 const fixtureRoot = mkdtempSync(join(tmpdir(), 'mpgd-minigame-vite-output-'));
 const gameRoot = join(fixtureRoot, 'game');
@@ -361,25 +362,49 @@ try {
       ).join('\n')
       + ' after',
   );
-  assert.throws(
-    () => rewritePhaserMiniGameDynamicCode(`${sceneEvaluation}\n${scriptInjections}`),
-    /Expected exactly one Phaser 4\.2\.0 dynamic global fallback, found 0/u,
-  );
+  assert.throws(() => rewritePhaserMiniGameDynamicCode(`${sceneEvaluation}\n${scriptInjections}`), {
+    message: `Expected exactly one Phaser ${pinnedPhaserVersion} dynamic global fallback, found 0.`,
+  });
   assert.throws(
     () =>
       rewritePhaserMiniGameDynamicCode(
         `${phaserFallback}\n${phaserFallback}\n${sceneEvaluation}\n${scriptInjections}`,
       ),
-    /Expected exactly one Phaser 4\.2\.0 dynamic global fallback, found 2/u,
+    {
+      message: `Expected exactly one Phaser ${pinnedPhaserVersion} dynamic global fallback, found 2.`,
+    },
   );
   assert.throws(
     () => rewritePhaserMiniGameDynamicCode(`${phaserFallback}\n${scriptInjections}`),
-    /Expected exactly one Phaser 4\.2\.0 dynamic SceneFile evaluation, found 0/u,
+    {
+      message:
+        `Expected exactly one Phaser ${pinnedPhaserVersion} dynamic SceneFile evaluation, found 0.`,
+    },
   );
-  assert.throws(
-    () => rewritePhaserMiniGameDynamicCode(`${phaserFallback}\n${sceneEvaluation}`),
-    /Expected exactly four Phaser 4\.2\.0 script injection paths, found 0/u,
+  assert.throws(() => rewritePhaserMiniGameDynamicCode(`${phaserFallback}\n${sceneEvaluation}`), {
+    message: `Expected exactly four Phaser ${pinnedPhaserVersion} script injection paths, found 0.`,
+  });
+
+  // The fixtures above cover the error contract; the installed pinned bundle proves the counts.
+  const starterManifest = JSON.parse(
+    readFileSync(new URL('./package.json', import.meta.url), 'utf8'),
+  ) as { readonly dependencies: Readonly<Record<string, string>> };
+  assert.equal(starterManifest.dependencies.phaser, pinnedPhaserVersion);
+  const phaserManifestPath = createRequire(import.meta.url).resolve('phaser/package.json');
+  const phaserManifest = JSON.parse(readFileSync(phaserManifestPath, 'utf8')) as {
+    readonly version: string;
+  };
+  assert.equal(phaserManifest.version, pinnedPhaserVersion);
+  const rewrittenPhaser = rewritePhaserMiniGameDynamicCode(
+    readFileSync(join(dirname(phaserManifestPath), 'dist', 'phaser.esm.js'), 'utf8'),
   );
+  for (const dynamicCode of [
+    "new Function('return this')",
+    'eval2(code)',
+    ".data = document.createElement('script')",
+  ]) {
+    assert.equal(rewrittenPhaser.includes(dynamicCode), false, dynamicCode);
+  }
 } finally {
   rmSync(fixtureRoot, { force: true, recursive: true });
 }

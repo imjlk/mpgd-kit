@@ -28,7 +28,7 @@ temporary-directory loader issue; see `TTSC_TOOLCHAIN.md`.
 ## Phase 1 - Phaser 4 App
 
 - [x] examples/phaser-starter created
-- [x] Phaser 4.2.0 exact pinned
+- [x] Phaser 4.2.1 exact pinned
 - [x] Vite configured
 - [x] @ttsc/unplugin/vite connected
 - [x] BootScene created

@@ -1,5 +1,12 @@
 import type { Plugin } from 'vite';
 
+/**
+ * The Phaser release whose ESM bundle the patterns and counts below were checked against.
+ * It must equal this starter's exact `phaser` pin; the mini-game output test enforces that and
+ * rewrites the installed bundle.
+ */
+export const pinnedPhaserVersion = '4.2.1';
+
 const phaserEsmModuleSuffix = '/phaser/dist/phaser.esm.js';
 const dynamicGlobalFallback = "return this || new Function('return this')();";
 const staticGlobalFallback = 'return globalThis;';
@@ -10,7 +17,7 @@ const dynamicScriptInjection = /(file|this)\.data = document\.createElement\('sc
 const disabledScriptInjection =
   "throw new Error('Phaser executable script loaders are disabled in mini-game artifacts.');";
 
-/** Removes known dynamic-code paths from the pinned Phaser 4.2.0 ESM bundle. */
+/** Removes known dynamic-code paths from the pinned Phaser ESM bundle (`pinnedPhaserVersion`). */
 export function createPhaserMiniGameDynamicCodePlugin(): Plugin {
   return {
     name: 'mpgd-phaser-minigame-static-global',
@@ -35,21 +42,21 @@ export function rewritePhaserMiniGameDynamicCode(source: string): string {
 
   if (globalFallbackCount !== 1) {
     throw new Error(
-      `Expected exactly one Phaser 4.2.0 dynamic global fallback, found ${String(globalFallbackCount)}.`,
+      `Expected exactly one Phaser ${pinnedPhaserVersion} dynamic global fallback, found ${String(globalFallbackCount)}.`,
     );
   }
   const sceneEvaluationCount = source.match(dynamicSceneEvaluation)?.length ?? 0;
 
   if (sceneEvaluationCount !== 1) {
     throw new Error(
-      `Expected exactly one Phaser 4.2.0 dynamic SceneFile evaluation, found ${String(sceneEvaluationCount)}.`,
+      `Expected exactly one Phaser ${pinnedPhaserVersion} dynamic SceneFile evaluation, found ${String(sceneEvaluationCount)}.`,
     );
   }
   const scriptInjectionCount = source.match(dynamicScriptInjection)?.length ?? 0;
 
   if (scriptInjectionCount !== 4) {
     throw new Error(
-      `Expected exactly four Phaser 4.2.0 script injection paths, found ${String(scriptInjectionCount)}.`,
+      `Expected exactly four Phaser ${pinnedPhaserVersion} script injection paths, found ${String(scriptInjectionCount)}.`,
     );
   }
 

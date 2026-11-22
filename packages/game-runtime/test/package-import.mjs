@@ -83,7 +83,7 @@ try {
   install();
   copyFileSync(join(repoRoot, 'packages/game-runtime/test/phaser-types.ts'), join(consumer, 'phaser-types.ts'));
   config.compilerOptions.lib.push('DOM');
-  // Phaser 4.2.0's own declarations require the starter's skipLibCheck setting.
+  // Phaser 4.2.1's own declarations require the starter's skipLibCheck setting.
   // Keep the headless pass above strict so DOM/schema leaks cannot hide behind it.
   config.compilerOptions.skipLibCheck = true;
   config.include.push('phaser-types.ts');
