@@ -1,0 +1,6 @@
+---
+npm/@mpgd/game-services: patch (Changed)
+npm/@mpgd/platform: patch (Changed)
+---
+
+A conformance vector, `notice-given-keeps-attempt`, joins the notifications contract that backends run with `@mpgd/platform/notifications-conformance`. A consent notice's push is answered `ambiguous`, and the game then gives the notice in the game: the replay is dropped without a provider call, but the attempt stays counted toward the provider limits until a day after it. The vector checks a rule the RFC already states for kept attempts under the reserved `notice:` prefix, which `@mpgd/game-services/notifications` and the reference backend already follow, so a backend that follows the RFC needs no change. It does not assert how a backend reports the dropped replay. The suite now has 60 vectors. In `@mpgd/game-services/notifications`, every way the scheduler's replay ends its claim on a row now goes through one helper, which keeps the earlier attempt whenever the change stops the gate counting it (the row is dropped or waits deferred), with the same failure handling as before: before the provider call, a record that cannot be written fails the run and puts the row back; after it, the failure is reported and the row settles. The one drop before a claim (a notice the game has given) goes through a helper that keeps the attempt the same way. Behaviour is unchanged.

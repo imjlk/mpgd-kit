@@ -1118,6 +1118,51 @@ const historyOf = (h: Harness) =>
   assert.deepEqual(historyOf(h), []);
 }
 
+// A replay can also end before the call because the deployment changed: it
+// no longer serves the row's provider, or the send can no longer be made as
+// asked (the topic's text now needs data the reminder does not carry). The
+// row is dropped either way, and the attempt it replays is kept.
+for (const change of ['provider', 'copy'] as const) {
+  const h = harness({ topics: [capped], answers: [{ status: 'ambiguous' }] });
+  await register(h, 'p-1');
+  const fireAt = '2026-10-19T03:00:00Z';
+  await fire(h, fireAt);
+  h.time.set('2026-10-19T03:05:00Z');
+  const errors: string[] = [];
+  const redeployed = createNotificationService({
+    store: h.store,
+    registry: createNotificationProviderRegistry(
+      change === 'provider' ? [] : [{ entry: fcmEntry, delivery: h.fcm, targets: ['vector'] }],
+    ),
+    catalog: {
+      defaultLocale: 'ko',
+      topicsFor: () => [
+        change === 'copy' ? { ...capped, copy: { ko: { title: 'T', body: '{{friend}}' } } } : capped,
+      ],
+    },
+    resolvePlatformRecipient: ({ player }) => `user-${player}`,
+    now: h.time.now,
+    random: () => 0,
+    onError: (_error, context) => errors.push(context.operation),
+  });
+  const run = await redeployed.runScheduler();
+  if (change === 'provider') {
+    assert.deepEqual(
+      run.results.map((result) => result.outcome),
+      [{ status: 'unavailable', reason: 'no-endpoint' }],
+    );
+  } else {
+    assert.deepEqual(
+      [run.failed, errors],
+      [1, ['dispatchDue']],
+      'a send that cannot be made fails once',
+    );
+  }
+  assert.equal(h.fcm.calls.length, 1, `${change}: no call`);
+  assert.deepEqual(h.store.inspect().sends, [], `${change}: the row is dropped`);
+  assert.deepEqual(historyOf(h), [attemptOf(fireAt, fireAt)], `${change}: its attempt is kept`);
+}
+
 // A replay the provider refuses (or whose endpoint it no longer knows)
 // answers for that call only: the earlier attempt is kept too.
 for (
