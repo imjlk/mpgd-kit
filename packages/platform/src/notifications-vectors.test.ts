@@ -35,7 +35,7 @@ function readVector(file: string): unknown {
 }
 
 describe('notifications conformance vectors', () => {
-  it('ships the fifty-four RFC vectors', () => {
+  it('ships the sixty RFC vectors', () => {
     expect(vectorFiles).toEqual([
       'action-required-login.json',
       'advertising-needs-consent.json',
@@ -70,6 +70,7 @@ describe('notifications conformance vectors', () => {
       'local-only-topic.json',
       'local-reminder-cancelled-on-withdrawal.json',
       'local-schedule-never-prompts.json',
+      'notice-given-keeps-attempt.json',
       'open-before-listener.json',
       'os-permission-denied-once.json',
       'os-permission-denied-twice.json',

@@ -1,0 +1,280 @@
+{
+  "vector": "notice-given-keeps-attempt",
+  "protocol": "2.0.0-draft.1",
+  "summary": "A consent notice's push that got an ambiguous answer is replayed once the claim lease ends. When the game has given the notice in the game meanwhile, the replay is dropped without a call, but not what the limits count: the earlier attempt may have reached the player, so on a provider that takes one push per player a day, a send of another topic the same day is suppressed by the provider limit and the provider is called once. A day after the attempt it no longer counts, and the next send is delivered. How a backend reports the dropped replay is not asserted.",
+  "appliesTo": [
+    {
+      "path": "remote.purposes",
+      "includes": "advertising"
+    },
+    {
+      "path": "remote.addressing",
+      "equals": "device"
+    }
+  ],
+  "profile": {
+    "provider": "fixture.os-fcm",
+    "capabilities": {
+      "availability": "available",
+      "permission": {
+        "scope": "app",
+        "prompt": "os",
+        "readable": true,
+        "serverReadable": false,
+        "allowance": "persistent",
+        "userGesture": false,
+        "promptLimit": 2,
+        "settings": true
+      },
+      "remote": {
+        "supported": true,
+        "purposes": [
+          "service",
+          "requested",
+          "advertising"
+        ],
+        "addressing": "device",
+        "content": "free-form"
+      },
+      "local": {
+        "supported": true,
+        "maxPending": 64
+      },
+      "open": "payload"
+    },
+    "limits": {
+      "perUserPerDay": 1
+    }
+  },
+  "catalog": [
+    {
+      "id": "weekend-event",
+      "purpose": "advertising",
+      "channels": [
+        "remote"
+      ],
+      "route": "/events/weekend",
+      "optOutRoute": "/settings/notifications",
+      "copy": {
+        "ko": {
+          "title": "주말 이벤트",
+          "body": "주말 이벤트가 시작됐어요."
+        }
+      },
+      "mapping": {
+        "channelId": "advertising"
+      }
+    },
+    {
+      "id": "consent-notice",
+      "purpose": "service",
+      "channels": [
+        "remote"
+      ],
+      "route": "/settings/notifications",
+      "mapping": {
+        "channelId": "reminders"
+      }
+    },
+    {
+      "id": "match-ready",
+      "purpose": "service",
+      "channels": [
+        "remote"
+      ],
+      "route": "/?entry=match",
+      "copy": {
+        "ko": {
+          "title": "대전 준비 완료",
+          "body": "대전 상대를 찾았어요."
+        }
+      },
+      "mapping": {
+        "channelId": "social"
+      }
+    }
+  ],
+  "notices": {
+    "topic": "consent-notice",
+    "copy": {
+      "ko": {
+        "consent-result.advertising.granted": {
+          "title": "[Fixture Games] 광고성 알림 수신 동의 결과",
+          "body": "{{consentDate}}에 하신 광고성 알림 수신 동의가 처리됐어요. 알림 설정에서 언제든 철회할 수 있어요."
+        },
+        "consent-result.advertising.withdrawn": {
+          "title": "[Fixture Games] 광고성 알림 수신 거부 결과",
+          "body": "{{consentDate}}에 하신 광고성 알림 수신 거부가 처리됐어요."
+        },
+        "consent-result.night.granted": {
+          "title": "[Fixture Games] 야간 광고성 알림 수신 동의 결과",
+          "body": "{{consentDate}}에 하신 야간(21시~8시) 광고성 알림 수신 동의가 처리됐어요. 알림 설정에서 언제든 철회할 수 있어요."
+        },
+        "consent-result.night.withdrawn": {
+          "title": "[Fixture Games] 야간 광고성 알림 수신 동의 철회 결과",
+          "body": "{{consentDate}}에 하신 야간(21시~8시) 광고성 알림 수신 동의 철회가 처리됐어요."
+        },
+        "reconfirmation.advertising": {
+          "title": "[Fixture Games] 광고성 알림 수신 동의 확인",
+          "body": "{{consentDate}}에 광고성 알림 수신에 동의하셨어요. 동의를 유지하려면 따로 하실 일은 없고, 철회하려면 알림 설정에서 광고성 알림을 끄면 돼요."
+        },
+        "reconfirmation.night": {
+          "title": "[Fixture Games] 야간 광고성 알림 수신 동의 확인",
+          "body": "{{consentDate}}에 야간(21시~8시) 광고성 알림 수신에 동의하셨어요. 동의를 유지하려면 따로 하실 일은 없고, 철회하려면 알림 설정에서 야간 수신을 끄면 돼요."
+        }
+      }
+    }
+  },
+  "context": {
+    "player": "p-1",
+    "now": "2026-10-12T03:00:00Z",
+    "timeZone": "Asia/Seoul"
+  },
+  "deployment": {
+    "advertisingRules": "kr",
+    "advertisingSender": {
+      "contact": "080-1234-5678"
+    }
+  },
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "backend",
+      "action": "authenticate",
+      "player": "p-1"
+    },
+    {
+      "actor": "host",
+      "action": "issueEndpoint",
+      "endpoint": {
+        "kind": "fcm-token",
+        "value": "tok-1"
+      }
+    },
+    {
+      "actor": "host",
+      "action": "queuePrompt",
+      "result": "granted"
+    },
+    {
+      "actor": "game",
+      "action": "requestPermission",
+      "input": {
+        "topics": [
+          "match-ready",
+          "consent-notice"
+        ],
+        "gesture": true
+      }
+    },
+    {
+      "actor": "game",
+      "action": "setAdvertisingConsent",
+      "input": {
+        "advertising": "granted",
+        "textVersion": "ad-consent-v1"
+      }
+    },
+    {
+      "actor": "clock",
+      "action": "set",
+      "at": "2026-10-19T03:00:00Z"
+    },
+    {
+      "actor": "backend",
+      "action": "queueProviderResult",
+      "result": "ambiguous"
+    },
+    {
+      "actor": "backend",
+      "action": "runScheduler"
+    },
+    {
+      "actor": "game",
+      "action": "listNotices",
+      "returns": [
+        {
+          "kind": "consent-result",
+          "record": {
+            "kind": "advertising",
+            "state": "granted",
+            "at": "2026-10-12T03:00:00Z"
+          },
+          "dueBy": "2026-10-26"
+        }
+      ]
+    },
+    {
+      "actor": "game",
+      "action": "recordNotice",
+      "input": {
+        "kind": "consent-result",
+        "record": {
+          "kind": "advertising",
+          "at": "2026-10-12T03:00:00Z"
+        },
+        "dueBy": "2026-10-26"
+      }
+    },
+    {
+      "actor": "clock",
+      "action": "set",
+      "at": "2026-10-19T03:05:00Z"
+    },
+    {
+      "actor": "backend",
+      "action": "runScheduler"
+    },
+    {
+      "actor": "clock",
+      "action": "set",
+      "at": "2026-10-19T09:00:00Z"
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "match-ready",
+        "idempotencyKey": "match-1"
+      },
+      "returns": {
+        "status": "suppressed",
+        "reason": "provider-limit"
+      }
+    },
+    {
+      "actor": "clock",
+      "action": "set",
+      "at": "2026-10-20T03:00:01Z"
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "match-ready",
+        "idempotencyKey": "match-2"
+      },
+      "returns": {
+        "status": "delivered"
+      }
+    }
+  ],
+  "expect": {
+    "providerCalls": [
+      {
+        "topic": "consent-notice",
+        "content": {
+          "title": "[Fixture Games] 광고성 알림 수신 동의 결과",
+          "body": "2026-10-12에 하신 광고성 알림 수신 동의가 처리됐어요. 알림 설정에서 언제든 철회할 수 있어요."
+        }
+      },
+      {
+        "topic": "match-ready"
+      }
+    ],
+    "notices": []
+  }
+}

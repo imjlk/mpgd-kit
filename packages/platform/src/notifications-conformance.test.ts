@@ -268,7 +268,7 @@ async function devicePlayer(
 describe('notifications conformance runner', () => {
   it('passes every RFC vector with the reference runtime and fakes', async () => {
     const results = await runNotificationConformanceVectors(vectors);
-    expect(results).toHaveLength(59);
+    expect(results).toHaveLength(60);
     expect(results.filter((result) => !result.passed).map((result) => ({
       vector: result.vector,
       status: result.status,
@@ -374,7 +374,7 @@ describe('notifications conformance runner', () => {
     expect(results.filter((result) => result.status === 'passed').map((result) => result.vector))
       .toEqual(['unsupported-target']);
     const skipped = results.filter((result) => result.status === 'skipped');
-    expect(skipped).toHaveLength(58);
+    expect(skipped).toHaveLength(59);
     expect(skipped.every((result) => !result.passed && result.reason !== undefined)).toBe(true);
     const reasonOf = (name: string) => results.find((result) => result.vector === name)?.reason;
     // The unsupported block declares an app-scope OS prompt but no prompt limit.
@@ -2904,48 +2904,5 @@ describe('notifications fake backend: what a notice says, and who sends it', () 
     await expect(backend.runScheduler()).resolves.toBeUndefined();
     expect(backend.providerCalls).toEqual([]);
     expect((await runtime.notices.list()).map((notice) => notice.kind)).toEqual(['consent-result']);
-  });
-
-  it("keeps counting a given notice's ambiguous push toward the provider's limit", async () => {
-    // No vector checks this drop: a backend may report the replay it dropped.
-    const match: NotificationTopicDeclaration = {
-      id: 'match-ready',
-      purpose: 'service',
-      channels: ['remote'],
-      route: '/?entry=match',
-      copy: { ko: { title: '대전 준비 완료', body: '대전 상대를 찾았어요.' } },
-      mapping: { channelId: 'social' },
-    };
-    const { clock, host, backend, runtime } = setup(
-      { ...osProfile, limits: { perUserPerDay: 1 } },
-      [weekend, noticeTopic, match],
-      { deployment: kr, notices },
-    );
-    await runtime.start();
-    backend.authenticate('p-1');
-    host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
-    host.queuePrompt('granted');
-    await runtime.requestPermission({ topics: ['consent-notice', 'match-ready'], gesture: true });
-    await runtime.setAdvertisingConsent({ advertising: 'granted', textVersion: 'ad-v1' });
-    clock.set('2026-10-19T03:00:00Z');
-    backend.queueProviderResult({ status: 'ambiguous' });
-    await backend.runScheduler();
-    expect(backend.deliveries.map((delivery) => delivery.status)).toEqual(['in-flight']);
-    await runtime.notices.recordShown({
-      kind: 'consent-result',
-      record: { kind: 'advertising', at: now },
-      dueBy: '2026-10-26',
-    });
-    // The lease ended: the replay is dropped, not sent, and its attempt still counts.
-    clock.set('2026-10-19T03:05:00Z');
-    await backend.runScheduler();
-    clock.set('2026-10-19T09:00:00Z');
-    expect(await backend.deliver({ idempotencyKey: 'match-1', topic: 'match-ready' }))
-      .toEqual({ status: 'suppressed', reason: 'provider-limit' });
-    expect(backend.providerCalls.map((call) => call.topic)).toEqual(['consent-notice']);
-    // A day after the attempt, it no longer counts.
-    clock.set('2026-10-20T03:00:01Z');
-    expect((await backend.deliver({ idempotencyKey: 'match-2', topic: 'match-ready' })).status)
-      .toBe('delivered');
   });
 });

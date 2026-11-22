@@ -178,6 +178,7 @@ describe('Capacitor notifications provider conformance', () => {
         'advertising-reconfirmation-overdue',
         'advertising-rules-none',
         'advertising-sender-required',
+        'notice-given-keeps-attempt',
       ] : []),
       'endpoint-fan-out',
       'endpoint-lifecycle',
