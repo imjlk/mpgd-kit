@@ -286,6 +286,12 @@ with OS, architecture, and lockfile keys. Go objects and runtime output are not
 part of that persisted cache. Native plugin content keys independently reject
 incompatible restored binaries.
 
+Vitest 5 keeps its own transform cache in `node_modules/.vitest-cache`, keyed by
+each file's source and the Vite config but not by other files a plugin reads. A
+typia call expands types declared in other files, so a cached test keeps its old
+validator after such a type changes. A vitest config that runs `@ttsc/unplugin`
+sets `fsModuleCache: false`, as `packages/platform/vitest.config.ts` does.
+
 `TTSC_CACHE_DIR` and `TTSC_GO_CACHE_DIR` select caller-owned paths and disable the
 corresponding automatic cleanup. Sharing a path across worktrees therefore needs
 an explicit retention/size policy and coordination with active builds. Keep that
