@@ -96,6 +96,7 @@ import {
   type NotificationStoredSend,
   type NotificationStoredSendRequest,
   type NotificationVersionedScheduleEntry,
+  type NotificationVersionedSend,
 } from './store.js';
 import { describeError as describe } from './text.js';
 
@@ -1554,7 +1555,8 @@ export function createNotificationService(input: CreateNotificationServiceInput)
    * Applies a row change while this claim still holds the row; a stale claim
    * changes nothing. Conditional writes that lose to another row of the same
    * send are retried with a jittered backoff, so a fan-out's workers settle
-   * one after the other.
+   * one after the other. `runRow` ends its claim through `endClaim`, which
+   * keeps what the gate counted before it calls this.
    */
   const complete = async (
     sendKey: string,
@@ -1608,6 +1610,30 @@ export function createNotificationService(input: CreateNotificationServiceInput)
   };
 
   /**
+   * Removes a row no claim holds, while the send is still at `held`'s
+   * version: whether it did. An attempt of the row, which may have reached
+   * the provider (its answer was ambiguous or never came), still counts
+   * (`keepAttempts`), written before the row goes: a failure leaves the
+   * row, which the gate still counts.
+   */
+  const dropUnclaimedRow = async (
+    sendKey: string,
+    held: NotificationVersionedSend,
+    row: NotificationSendRow,
+    at: number,
+  ): Promise<boolean> => {
+    await keepAttempts(held.send, [row]);
+    const rows = rowsWith(held.send, row, { kind: 'remove' });
+    return store.updateSend({
+      key: sendKey,
+      version: held.version,
+      send: rows.length === 0
+        ? undefined
+        : { ...held.send, rows, changedAt: formatNotificationInstant(at) },
+    });
+  };
+
+  /**
    * True when a reminder send must not reach the provider: its schedule entry
    * is gone, or names another time or content. Assigned once the reminder
    * helpers below exist; `runRow` only calls it after this factory returns.
@@ -1620,7 +1646,10 @@ export function createNotificationService(input: CreateNotificationServiceInput)
    * Claims one row, runs the gate for it immediately before the provider
    * call, and stores the answer. Answers the row's refusal, if any.
    * A notice the game recorded since the claim, or a reminder cancelled or
-   * replaced since the claim, is dropped instead of sent.
+   * replaced since the claim, is dropped instead of sent. Every way out
+   * that changes the row goes through one helper (`dropUnclaimedRow`
+   * before a claim, `endClaim` after it), which keeps the attempt the
+   * change would stop the gate counting.
    */
   const runRow = async (
     sendKey: string,
@@ -1655,18 +1684,8 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         // The game gave the notice while the push waited: it is not sent again.
         // A lost compare-and-set is retried; a row another holder claimed is
         // left for that holder, which checks again immediately before the call.
-        // An earlier attempt of the push, which may have reached the provider,
-        // still counts (`keepAttempts`), written before the row goes.
-        await keepAttempts(held.send, [row]);
-        const rows = rowsWith(held.send, row, { kind: 'remove' });
-        const dropped = await store.updateSend({
-          key: sendKey,
-          version: held.version,
-          send: rows.length === 0
-            ? undefined
-            : { ...held.send, rows, changedAt: formatNotificationInstant(at) },
-        });
-        if (dropped) {
+        // An earlier attempt of the push still counts (`dropUnclaimedRow`).
+        if (await dropUnclaimedRow(sendKey, held, row, at)) {
           return {};
         }
         continue;
@@ -1706,56 +1725,72 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       throw busy(sendKey);
     }
     const { send, before, row, token } = claimed;
+    /** Whether the provider answered this claim's call; `endClaim` reads it. */
+    let answered = false;
     /**
-     * Keeps the attempt this claim replays (`before`, when it was attempted:
-     * its answer was ambiguous or never came, so it may have reached the
-     * provider) before a change that stops the gate counting it: the row is
-     * dropped, or waits deferred, without this claim's call being accepted
-     * (which records the send) or ambiguous (which keeps it in flight). As a
-     * stop does (`keepAttempts`), at the time the gate counted it from. A
-     * row never attempted leaves nothing.
+     * The row as it was before this claim, due no sooner than a short
+     * backoff from `at` (`backedOff`), for an exit that proves nothing was
+     * sent. The time the gate counted its attempt from is written out
+     * (`withAttemptTime`): a row stored without one counts from its send's
+     * `changedAt`, which writing the row back moves to this claim's time.
      */
-    const keepEarlierAttempt = (): Promise<void> => keepAttempts(
-      send,
-      [before],
-      claimed.changedBefore,
-    );
+    const restored = (at: number): NotificationSendRow =>
+      backedOff(withAttemptTime(before, claimed.changedBefore), at);
     /**
-     * `keepEarlierAttempt` before the provider is called. A record that
-     * cannot be written fails the run: nothing was sent, so the row goes
-     * back as it was, with the time the gate counted its attempt from, and
-     * the retry keeps that attempt rather than this claim.
+     * Ends this claim: writes `change` to its row while the claim still holds
+     * it, through `settle` (`complete`; `settleQuietly` on a failure path;
+     * `settleAfterCall` once the provider may have taken the send). Every
+     * exit after the claim ends here, so none can skip the step before it.
+     * The row this claim replays (`before`) may hold an attempt the gate
+     * counts (`isCountedRow`: its answer was ambiguous or never came, so it
+     * may have reached the provider). When the gate would not count the row
+     * `change` leaves (it is dropped, or waits deferred: this claim's call was
+     * neither accepted, which records the send, nor ambiguous, which keeps
+     * the row in flight), that attempt is kept first, as a stop keeps it
+     * (`keepAttempts`), at the time the gate counted it from. A row never
+     * attempted leaves nothing.
+     * - Before the provider is called, a record that cannot be written fails
+     *   the run: nothing was sent, so the row goes back as it was, with the
+     *   time the gate counted its attempt from, and the retry keeps that
+     *   attempt rather than this claim.
+     * - After the provider answered this claim's call (refused, or asked to
+     *   wait), the row settles either way, as after an acceptance: a record
+     *   that keeps failing is reported, since an undercounted limit is better
+     *   than a call made again for an answer already given.
+     * An `at` given as a function is read once the record is written.
      */
-    const keepEarlierAttemptOrRelease = async (): Promise<void> => {
-      try {
-        await keepEarlierAttempt();
-      } catch (error) {
-        await settleQuietly(
-          sendKey,
-          row,
-          token,
-          { kind: 'set', row: backedOff(withAttemptTime(before, claimed.changedBefore), nowMs()) },
-          claimed.at,
-        );
-        throw error;
+    const endClaim = async (
+      change: RowChange,
+      at: number | (() => number),
+      settle: typeof complete = complete,
+    ): Promise<void> => {
+      if (isCountedRow(before) && (change.kind === 'remove' || !isCountedRow(change.row))) {
+        const keep = (): Promise<void> => keepAttempts(send, [before], claimed.changedBefore);
+        if (answered) {
+          await withRetries(keep, (error) =>
+            report(error, 'history.add', { sendKey, provider: row.provider, rowKey: row.key }),
+          );
+        } else {
+          try {
+            await keep();
+          } catch (error) {
+            await settleQuietly(
+              sendKey,
+              row,
+              token,
+              { kind: 'set', row: restored(nowMs()) },
+              claimed.at,
+            );
+            throw error;
+          }
+        }
       }
+      await settle(sendKey, row, token, change, typeof at === 'number' ? at : at());
     };
-    /**
-     * `keepEarlierAttempt` after the provider answered this claim's call
-     * (refused, or asked to wait). The row settles either way, as after an
-     * acceptance: a record that keeps failing is reported, since an
-     * undercounted limit is better than a call made again for an answer
-     * already given.
-     */
-    const keepEarlierAttemptAfterCall = (): Promise<void> =>
-      withRetries(keepEarlierAttempt, (error) =>
-        report(error, 'history.add', { sendKey, provider: row.provider, rowKey: row.key }),
-      );
     const registered = registry.provider(row.provider);
     if (registered === undefined) {
       // The deployment no longer serves this provider.
-      await keepEarlierAttemptOrRelease();
-      await complete(sendKey, row, token, { kind: 'remove' }, claimed.at);
+      await endClaim({ kind: 'remove' }, claimed.at);
       return { refusal: noEndpoint() };
     }
     let evaluated: ReturnType<typeof decide>;
@@ -1823,20 +1858,13 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     } catch (error) {
       if (error instanceof NotificationSendInputError) {
         // A send that cannot be made as asked fails once, not on every replay.
-        await keepEarlierAttemptOrRelease();
-        await settleQuietly(sendKey, row, token, { kind: 'remove' }, claimed.at);
+        await endClaim({ kind: 'remove' }, claimed.at, settleQuietly);
         throw invalidInput(error.message, error);
       }
       // Nothing was sent (a host read or the store failed): the row goes back
       // as it was, due again after a short backoff so a failing host does not
       // fill every scheduler batch.
-      await settleQuietly(
-        sendKey,
-        row,
-        token,
-        { kind: 'set', row: backedOff(before, nowMs()) },
-        claimed.at,
-      );
+      await endClaim({ kind: 'set', row: restored(nowMs()) }, claimed.at, settleQuietly);
       throw error;
     }
     const { decision, topic } = evaluated;
@@ -1851,11 +1879,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     if (decision.status === 'deferred') {
       // A deferred row is not counted while it waits, and a stop leaves
       // nothing of it: the attempt it replays is kept first.
-      await keepEarlierAttemptOrRelease();
-      await complete(
-        sendKey,
-        row,
-        token,
+      await endClaim(
         {
           kind: 'set',
           row: {
@@ -1870,8 +1894,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
     }
     if (decision.status !== 'allowed' || topic === undefined) {
       // The gate refuses the replay now; the attempt it replays still counts.
-      await keepEarlierAttemptOrRelease();
-      await complete(sendKey, row, token, { kind: 'remove' }, at);
+      await endClaim({ kind: 'remove' }, at);
       return { refusal: decision.status === 'allowed' ? noEndpoint() : decision };
     }
     const stoppedReminder = send.origin.kind === 'reminder' && await sendWasStopped(send);
@@ -1887,8 +1910,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       // is gone. The earlier attempt of a stopped reminder, or of a notice
       // the game has given, may have reached the provider and still counts,
       // as `stopReminderSend` keeps it.
-      await keepEarlierAttemptOrRelease();
-      await complete(sendKey, row, token, { kind: 'remove' }, nowMs());
+      await endClaim({ kind: 'remove' }, nowMs);
       return {};
     }
     const answer = await call(
@@ -1900,6 +1922,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       row.state.status === 'in-flight' ? Date.parse(row.state.leaseUntil) : undefined,
       regate,
     );
+    answered = true;
     const answeredAt = nowMs();
     switch (answer.status) {
       case 'accepted':
@@ -1919,12 +1942,10 @@ export function createNotificationService(input: CreateNotificationServiceInput)
           (error) =>
             report(error, 'history.add', { sendKey, provider: row.provider, rowKey: row.key }),
         );
-        await settleAfterCall(
-          sendKey,
-          row,
-          token,
+        await endClaim(
           { kind: 'set', row: { ...base, state: { status: 'delivered' } } },
           answeredAt,
+          settleAfterCall,
         );
         return {};
       case 'ambiguous': {
@@ -1958,10 +1979,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
             { sendKey, provider: row.provider, rowKey: row.key },
           );
         }
-        await settleAfterCall(
-          sendKey,
-          row,
-          token,
+        await endClaim(
           {
             kind: 'set',
             row: {
@@ -1980,6 +1998,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
             },
           },
           answeredAt,
+          settleAfterCall,
         );
         return {};
       }
@@ -1993,8 +2012,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
           });
         }
         // This call was refused; the attempt it replays may still have arrived.
-        await keepEarlierAttemptAfterCall();
-        await complete(sendKey, row, token, { kind: 'remove' }, answeredAt);
+        await endClaim({ kind: 'remove' }, answeredAt);
         return { refusal: { status: 'unavailable', reason: 'endpoint-invalid' } };
       case 'rejected':
         // A configuration rejection fails every send the same way: tell the
@@ -2014,35 +2032,24 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         if (answer.reason === 'agreement') {
           await recordProviderDenial(send.request.player, send.request.topic, answeredAt);
         }
-        await keepEarlierAttemptAfterCall();
-        await complete(sendKey, row, token, { kind: 'remove' }, answeredAt);
+        await endClaim({ kind: 'remove' }, answeredAt);
         return { refusal: { status: 'unavailable', reason: 'provider-rejected' } };
       case 'not-sent':
         // No call was made for it (a bulk batch left it out): the row goes
         // back as it was before this claim, due again shortly. It is not a
         // rate limit, so it neither backs off nor nears the 24-hour give-up.
-        await complete(
-          sendKey,
-          row,
-          token,
-          { kind: 'set', row: backedOff(before, answeredAt) },
-          answeredAt,
-        );
+        await endClaim({ kind: 'set', row: restored(answeredAt) }, answeredAt);
         return {};
       case 'rate-limited': {
-        // Nothing was sent: the claim is released and the row waits.
+        // Nothing was sent: the claim is released and the row waits. The
+        // attempt it replays stops being counted once the row waits deferred
+        // or is given up.
         const next = nextRateLimit(row.rateLimit, answer.retryAfterSeconds, answeredAt);
-        // This call sent nothing; the attempt it replays stops being counted
-        // once the row waits deferred or is given up.
-        await keepEarlierAttemptAfterCall();
         if (next === undefined) {
-          await complete(sendKey, row, token, { kind: 'remove' }, answeredAt);
+          await endClaim({ kind: 'remove' }, answeredAt);
           return { refusal: { status: 'unavailable', reason: 'provider-rate-limited' } };
         }
-        await complete(
-          sendKey,
-          row,
-          token,
+        await endClaim(
           {
             kind: 'set',
             row: {
@@ -4969,6 +4976,17 @@ function historyOn(history: SendHistory, provider: string): NotificationDelivery
       ?? [...entries].sort((left, right) => Date.parse(left.at) - Date.parse(right.at))[0])
     .filter((entry): entry is NotificationDeliveryHistoryEntry => entry !== undefined)
     .sort((left, right) => Date.parse(left.at) - Date.parse(right.at));
+}
+
+/**
+ * Whether the gate counts a row toward the frequency caps and provider
+ * limits: delivered (its acceptance is in the delivery history), or
+ * attempted and still in flight (`loadHistory` counts it while it exists).
+ * A row that waits deferred, or was never attempted, is not counted.
+ */
+function isCountedRow(row: NotificationSendRow): boolean {
+  return row.state.status === 'delivered'
+    || (row.state.status === 'in-flight' && row.state.attempted);
 }
 
 /**

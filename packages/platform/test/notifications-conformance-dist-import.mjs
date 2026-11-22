@@ -29,7 +29,7 @@ const vectors = readdirSync(vectorsDir)
   .map((file) => assertNotificationConformanceVector(
     JSON.parse(readFileSync(new URL(file, vectorsDir), 'utf8')),
   ));
-assert.equal(vectors.length, 59);
+assert.equal(vectors.length, 60);
 const advertisingVector = vectors.find((vector) => vector.vector === 'advertising-needs-consent');
 assert.ok(advertisingVector !== undefined);
 
@@ -61,7 +61,7 @@ assert.deepEqual(
   unsupported.filter((result) => result.status === 'passed').map((result) => result.vector),
   ['unsupported-target'],
 );
-assert.equal(unsupported.filter((result) => result.status === 'skipped').length, 58);
+assert.equal(unsupported.filter((result) => result.status === 'skipped').length, 59);
 assert.equal(
   notificationConformanceSkipReason(advertisingVector, createUnsupportedNotificationCapabilities()),
   'appliesTo remote.purposes includes "advertising"; the provider declares []',
