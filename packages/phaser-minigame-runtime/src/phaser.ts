@@ -2,7 +2,7 @@ import { MiniGameEvent } from './events.js';
 import { getInstalledMiniGameGlobals, type MiniGameGlobalInstallation } from './globals.js';
 import { MiniGameRuntimeError, type MiniGameHost } from './host.js';
 
-/** Phaser 4.2.0's public `Phaser.CANVAS` renderer constant. */
+/** Phaser 4.2.1's public `Phaser.CANVAS` renderer constant. */
 export const miniGamePhaserCanvasRenderer = 1 as const;
 
 interface PhaserAnimationFrameController {

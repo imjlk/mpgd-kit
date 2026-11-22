@@ -992,7 +992,7 @@ export const iosPushEntitlementsXml = [
  * the plugin observes `.capacitorDidRegisterForRemoteNotifications` and hands
  * the APNs token to Firebase, so without them it never gets an FCM token.
  * The plugin README's third method (`didReceiveRemoteNotification`) is left
- * out: the kit sends no silent pushes, and plugin 8.5.2 never calls the
+ * out: the kit sends no silent pushes, and plugin 8.6.0 never calls the
  * completion handler it is given.
  */
 export const iosAppDelegatePushForwardingSwift: readonly string[] = [
@@ -1010,8 +1010,8 @@ export const iosAppDelegatePushForwardingSwift: readonly string[] = [
 /** The call the scene delegate makes right after Capacitor's scene proxy (reference shell, #407). */
 const iosSceneDelegateColdStartCall: readonly string[] = [
   '// A killed-app tap is only in connectionOptions.notificationResponse.',
-  "// Capacitor 8.5's scene proxy replays URL contexts on capacitorViewDidAppear",
-  '// and does not read this, and @capacitor/ios 8.5.2 never does either.',
+  "// Capacitor 8.6's scene proxy replays URL contexts on capacitorViewDidAppear",
+  '// and does not read this, and @capacitor/ios 8.6.2 never does either.',
   'forwardColdStartNotification(connectionOptions.notificationResponse)',
 ];
 

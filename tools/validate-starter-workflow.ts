@@ -62,8 +62,8 @@ interface AitNavigationTargetsConfig {
   };
 }
 
-const aitWebFrameworkVersion = '3.9.0';
-const aitCliVersion = '3.9.0';
+const aitWebFrameworkVersion = '3.10.0';
+const aitCliVersion = '3.10.0';
 const aitWebFrameworkPeerRange = '>=3.0.0 <4';
 const peerDependencyRuleTestSelector = '@example/devtools>@example/web-framework';
 const peerDependencyRuleTestVersion = '1.2.3';
@@ -123,7 +123,7 @@ const requiredDevvitQueries = [
   'playtest',
   'payments',
 ] as const;
-const expectedDevvitVersion = '0.15.3';
+const expectedDevvitVersion = '0.15.4';
 // @devvit/mcp 0.0.27 depends on better-sqlite3 11.9.1, which ships prebuilt
 // binaries for Node 22 but not 24 and does not build on 26. `--no-config` keeps
 // mise from loading project or global config, so the server gets no

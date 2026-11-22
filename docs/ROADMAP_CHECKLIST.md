@@ -21,14 +21,14 @@ This checklist tracks the Codex roadmap from the initial project brief.
 - [x] AGENTS.md written
 - [x] README.md draft written
 
-Note: `lint.config.ts` uses published config types under ttsc 0.37.1.
+Note: `lint.config.ts` uses published config types under ttsc 0.37.2.
 `strip.config.js` remains a checked-JSDoc exception for the symlinked macOS
 temporary-directory loader issue; see `TTSC_TOOLCHAIN.md`.
 
 ## Phase 1 - Phaser 4 App
 
 - [x] examples/phaser-starter created
-- [x] Phaser 4.2.0 exact pinned
+- [x] Phaser 4.2.1 exact pinned
 - [x] Vite configured
 - [x] @ttsc/unplugin/vite connected
 - [x] BootScene created

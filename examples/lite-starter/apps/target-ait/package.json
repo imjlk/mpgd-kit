@@ -16,14 +16,14 @@
     "fix": "ttsc fix"
   },
   "dependencies": {
-    "@apps-in-toss/web-framework": "3.9.0",
+    "@apps-in-toss/web-framework": "3.10.0",
     "@mpgd/adapter-ait": "workspace:*"
   },
   "devDependencies": {
-    "@apps-in-toss/cli": "3.9.0",
-    "@ttsc/unplugin": "0.37.1",
+    "@apps-in-toss/cli": "3.10.0",
+    "@ttsc/unplugin": "0.37.2",
     "@types/node": "^24.0.0",
-    "ttsc": "0.37.1",
+    "ttsc": "0.37.2",
     "typescript": "7.0.2",
     "vite": "8.1.3"
   }

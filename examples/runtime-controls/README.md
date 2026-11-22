@@ -20,7 +20,7 @@ tap the square to exercise input; the reset callback clears held input on pause.
 
 Use `?inactive=1` to start with an inactive lifecycle source. Lifecycle events and
 the audio sink are injected fakes. Actual rendering, scene lifecycle, pointer and
-keyboard input run in Phaser 4.2.0. No platform SDK, real advertisement, purchase,
+keyboard input run in Phaser 4.2.1. No platform SDK, real advertisement, purchase,
 or production endpoint is called.
 
 `test:browser` starts an ephemeral local Vite server and Chromium, drives real

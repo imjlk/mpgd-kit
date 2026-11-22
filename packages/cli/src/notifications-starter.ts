@@ -23,7 +23,7 @@ export const notificationsMessagingPlugin = '@capacitor-firebase/messaging';
  * must resolve even though a native shell never loads it.
  */
 export const notificationsGameDependencies: Readonly<Record<string, string>> = Object.freeze({
-  [notificationsMessagingPlugin]: '8.5.2',
+  [notificationsMessagingPlugin]: '8.6.0',
   '@capacitor/local-notifications': '8.3.1',
   firebase: '12.19.0',
 });

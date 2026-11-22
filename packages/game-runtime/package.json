@@ -81,10 +81,10 @@
     "fix": "ttsc fix"
   },
   "devDependencies": {
-    "ttsc": "0.37.1",
+    "ttsc": "0.37.2",
     "typescript": "7.0.2",
     "vitest": "^4.0.0",
-    "phaser": "^4.2.0",
+    "phaser": "^4.2.1",
     "@types/node": "^24.0.0"
   },
   "dependencies": {

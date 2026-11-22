@@ -54,7 +54,7 @@ import {
 import { beginNativeBuildAttempt } from './native-build-attempt';
 import { executeNativeTargetBuild } from './native-build-execution';
 import { resolveNativeCommandLaunch } from './native-command-launcher';
-import { resolveNativeBuildPlan } from './native-build-mode';
+import { nativeReleaseDelivery, resolveNativeBuildPlan } from './native-build-mode';
 import { nativeInspectionEnvironment } from './native-inspection-environment';
 import {
   appTargetForPlatformTarget,
@@ -785,15 +785,7 @@ function writeManifest(
       profile: releaseProfile,
       artifact,
       iconManifestArtifactPath: findEmbeddedIconManifestArtifactPath(artifact),
-      ...(nativePlan === undefined ? {} : {
-        nativeDelivery: {
-          platform: nativePlan.platform,
-          mode: nativePlan.mode,
-          signed: nativePlan.mode === 'signed-archive' || nativePlan.mode === 'store-export',
-          submissionCandidate: nativePlan.submissionCandidate,
-          ...(nativePlan.rehearsal ? { rehearsal: true } : {}),
-        },
-      }),
+      ...(nativePlan === undefined ? {} : { nativeDelivery: nativeReleaseDelivery(nativePlan) }),
       outputPath: releaseManifestPath(configBaseDir),
     }),
   );

@@ -56,9 +56,9 @@
   },
   "dependencies": {
     "@ait-co/polyfill": "^0.1.19",
-    "@apps-in-toss/web-framework": "3.9.0",
-    "@capacitor/app": "8.1.1",
-    "@capacitor/core": "8.5.2",
+    "@apps-in-toss/web-framework": "3.10.0",
+    "@capacitor/app": "8.1.2",
+    "@capacitor/core": "8.6.2",
     "@mpgd/adapter-ait": "__MPGD_DEPENDENCY_VERSION_ADAPTER_AIT__",
     "@mpgd/adapter-browser": "__MPGD_DEPENDENCY_VERSION_ADAPTER_BROWSER__",
     "@mpgd/adapter-capacitor": "__MPGD_DEPENDENCY_VERSION_ADAPTER_CAPACITOR__",
@@ -74,16 +74,16 @@
     "@mpgd/platform": "__MPGD_DEPENDENCY_VERSION_PLATFORM__",
     "@mpgd/phaser-assets": "__MPGD_DEPENDENCY_VERSION_PHASER_ASSETS__",
     "@mpgd/target-config": "__MPGD_DEPENDENCY_VERSION_TARGET_CONFIG__",
-    "phaser": "4.2.0",
+    "phaser": "4.2.1",
     "@mpgd/game-runtime": "__MPGD_DEPENDENCY_VERSION_GAME_RUNTIME__"
   },
   "devDependencies": {
     "@ait-co/console-cli": "^0.1.49",
     "@cloudflare/workers-types": "^5.20260707.1",
     "@mpgd/cli": "__MPGD_DEPENDENCY_VERSION_CLI__",
-    "@ttsc/unplugin": "0.37.1",
+    "@ttsc/unplugin": "0.37.2",
     "@types/node": "^24.0.0",
-    "ttsc": "0.37.1",
+    "ttsc": "0.37.2",
     "typescript": "7.0.2",
     "vite": "8.1.3",
     "wrangler": "^4.107.0"

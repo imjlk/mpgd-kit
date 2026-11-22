@@ -147,8 +147,8 @@ function writeConsumer(packed) {
     type: 'module',
     dependencies: {
       ...dependencies,
-      '@capacitor/core': '8.5.2',
-      '@capacitor/app': '8.1.1',
+      '@capacitor/core': '8.6.2',
+      '@capacitor/app': '8.1.2',
     },
     devDependencies: {
       ttsc: rootToolchainPins.ttsc,
