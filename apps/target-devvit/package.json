@@ -19,17 +19,17 @@
     "check:sdk": "pnpm --dir ../.. mpgd kit devvit-check --project apps/target-devvit"
   },
   "dependencies": {
-    "@devvit/web": "0.15.3",
+    "@devvit/web": "0.15.4",
     "@mpgd/adapter-devvit": "workspace:*",
     "@mpgd/bridge": "workspace:*",
     "@mpgd/catalog": "workspace:*",
     "@mpgd/game-services": "workspace:*"
   },
   "devDependencies": {
-    "@devvit/start": "0.15.3",
+    "@devvit/start": "0.15.4",
     "@ttsc/unplugin": "0.37.1",
     "@types/node": "^24.0.0",
-    "devvit": "0.15.3",
+    "devvit": "0.15.4",
     "ttsc": "0.37.1",
     "typescript": "7.0.2",
     "vite": "7.3.6"
