@@ -14,7 +14,7 @@
 # AdvertisingPushRenderer.pluginEntryPoints() looks these up by name and
 # forwards every token and every message the kit does not render to them.
 # Renamed or removed, a minified release build would lose them silently.
-# (@capacitor-firebase/messaging 8.5.2 ships no consumer rules of its own;
+# (@capacitor-firebase/messaging 8.6.0 ships no consumer rules of its own;
 # Capacitor's `-keep public class * extends com.getcapacitor.Plugin { *; }`
 # covers the plugin class too, but these do not rely on it.)
 -keep class io.capawesome.capacitorjs.plugins.firebase.messaging.FirebaseMessagingPlugin {

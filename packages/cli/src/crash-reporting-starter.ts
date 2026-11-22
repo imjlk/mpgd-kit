@@ -16,7 +16,7 @@ export const crashReportingProviderId = 'crash-reporting';
 /** The native plugin installed into the shell. */
 export const crashReportingPlugin = '@capacitor-firebase/crashlytics';
 /** The plugin version this CLI installs when the shell does not list one yet. */
-export const crashReportingPluginVersion = '8.5.2';
+export const crashReportingPluginVersion = '8.6.0';
 /**
  * The Crashlytics Gradle plugin, which writes the build ID the Crashlytics
  * Android SDK requires at startup and uploads R8 mapping files. 3.0.8 needs

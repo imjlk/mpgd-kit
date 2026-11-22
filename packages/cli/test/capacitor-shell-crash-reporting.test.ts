@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { satisfies } from 'semver';
+
 import {
   inspectNativeStorePolicy,
   reportNativeStorePolicy,
@@ -59,12 +61,18 @@ const kitAdapter = JSON.parse(
   readonly version: string;
   readonly exports: Record<string, unknown>;
   readonly peerDependencies: Record<string, string>;
+  readonly devDependencies: Record<string, string>;
 };
 const classpath = `classpath 'com.google.firebase:firebase-crashlytics-gradle:${crashlyticsGradlePluginVersion}'`;
 
-// The adapter accepts the plugin version the CLI installs.
+// The adapter accepts the plugin version the CLI installs, and is tested with it.
+// The peer floor moves only when the adapter needs a newer plugin.
 assert.ok(kitAdapter.exports['./crash-reporting'] !== undefined);
-assert.equal(kitAdapter.peerDependencies[crashReportingPlugin], `^${crashReportingPluginVersion}`);
+assert.ok(
+  satisfies(crashReportingPluginVersion, kitAdapter.peerDependencies[crashReportingPlugin] ?? ''),
+  `the adapter's ${crashReportingPlugin} peer must accept ${crashReportingPluginVersion}`,
+);
+assert.equal(kitAdapter.devDependencies[crashReportingPlugin], crashReportingPluginVersion);
 
 // Gradle wiring on the Capacitor template files the reference shell keeps.
 {
@@ -143,7 +151,7 @@ function createGame(): string {
   writeJson('package.json', {
     name: '@game/crash',
     private: true,
-    dependencies: { '@capacitor/core': '8.5.2', '@capacitor/app': '8.1.1' },
+    dependencies: { '@capacitor/core': '8.6.2', '@capacitor/app': '8.1.2' },
   });
   writeJson('node_modules/@mpgd/adapter-capacitor/package.json', {
     name: '@mpgd/adapter-capacitor',
@@ -296,7 +304,7 @@ try {
     const shellPackage = {
       name: 'shell',
       private: true,
-      dependencies: { '@capacitor/core': '8.5.2' },
+      dependencies: { '@capacitor/core': '8.6.2' },
     };
     writeFileSync(path.join(shell, 'package.json'), JSON.stringify(shellPackage));
     assert.equal(shellUsesCrashlytics(shellPackage), false);
@@ -387,10 +395,10 @@ try {
         name: '@game/crash-native-shell',
         private: true,
         dependencies: {
-          '@capacitor/android': '8.5.2',
-          '@capacitor/app': '8.1.1',
-          '@capacitor/core': '8.5.2',
-          '@capacitor/ios': '8.5.2',
+          '@capacitor/android': '8.6.2',
+          '@capacitor/app': '8.1.2',
+          '@capacitor/core': '8.6.2',
+          '@capacitor/ios': '8.6.2',
           '@mpgd/capacitor-game-services': '0.7.1',
           [crashReportingPlugin]: '7.0.0',
         },
