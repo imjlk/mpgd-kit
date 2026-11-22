@@ -16,11 +16,11 @@
     "fix": "ttsc fix"
   },
   "dependencies": {
-    "@apps-in-toss/web-framework": "3.9.0",
+    "@apps-in-toss/web-framework": "3.10.0",
     "@mpgd/adapter-ait": "__MPGD_DEPENDENCY_VERSION_ADAPTER_AIT__"
   },
   "devDependencies": {
-    "@apps-in-toss/cli": "3.9.0",
+    "@apps-in-toss/cli": "3.10.0",
     "@ttsc/unplugin": "0.37.2",
     "@types/node": "^24.0.0",
     "ttsc": "0.37.2",
