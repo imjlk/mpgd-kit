@@ -27,9 +27,11 @@ import {
 } from './native-build-mode';
 import type { CapacitorTargetConfig } from './schemas';
 
-// build-target.ts runs on import, so this drives the two steps it composes for
-// an Android target: the Gradle step names the bundle it copies out of the
-// stage, and the release manifest writer records the plan's delivery.
+// build-target.ts runs on import, so this test cannot execute it. It drives the
+// two steps that script composes for an Android target instead: the Gradle step
+// that names the bundle it copies out of the stage, and the release manifest
+// writer, given the delivery record nativeReleaseDelivery(plan) builds. The
+// script's own one-line hand-off of its plan and artifact is not executed here.
 const root = mkdtempSync(path.join(tmpdir(), 'mpgd-native-build-output-'));
 const gameRoot = path.join(root, 'game');
 const stagedShell = path.join(root, 'stage');
@@ -78,7 +80,10 @@ try {
   // the copy, so the name it wrote is still visible here.
   const signedRoot = 'release-output/native/android/production/signed-run';
   const signedArtifact = `${signedRoot}/${androidReleaseBundleFileName}`;
-  assert.throws(() => buildAndroid(signedPlan, signedRoot), /MPGD_TARGET_VERSION_CODE/u);
+  assert.throws(
+    () => buildAndroid(signedPlan, signedRoot),
+    /Missing target config value: MPGD_TARGET_VERSION_CODE/u,
+  );
   assert.equal(
     readFileSync(path.join(gameRoot, signedArtifact), 'utf8'),
     `bundle for ${signedRoot}`,
