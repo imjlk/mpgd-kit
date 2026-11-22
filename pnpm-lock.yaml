@@ -56,7 +56,7 @@ importers:
         version: 0.37.1(@ttsc/lint@0.37.1(ttsc@0.37.1(typescript@7.0.2)))
       '@ttsc/graph':
         specifier: 0.37.1
-        version: 0.37.1(ttsc@0.37.1(typescript@7.0.2))(zod@4.4.3)
+        version: 0.37.1(supports-color@8.1.1)(ttsc@0.37.1(typescript@7.0.2))(zod@4.4.3)
       '@ttsc/lint':
         specifier: 0.37.1
         version: 0.37.1(ttsc@0.37.1(typescript@7.0.2))
@@ -122,7 +122,7 @@ importers:
     dependencies:
       '@ait-kit/sdk':
         specifier: 0.7.0
-        version: 0.7.0(@apps-in-toss/web-framework@3.9.0(typescript@7.0.2))
+        version: 0.7.0(@apps-in-toss/web-framework@3.10.0(typescript@7.0.2))
       '@mpgd/bridge':
         specifier: workspace:*
         version: link:../../packages/bridge
@@ -134,8 +134,8 @@ importers:
         version: link:../../packages/platform
     devDependencies:
       '@apps-in-toss/web-framework':
-        specifier: 3.9.0
-        version: 3.9.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2)
+        specifier: 3.10.0
+        version: 3.10.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2)
       '@mpgd/game-runtime':
         specifier: workspace:*
         version: link:../../packages/game-runtime
@@ -406,15 +406,15 @@ importers:
   apps/target-ait:
     dependencies:
       '@apps-in-toss/web-framework':
-        specifier: 3.9.0
-        version: 3.9.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2)
+        specifier: 3.10.0
+        version: 3.10.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2)
       '@mpgd/adapter-ait':
         specifier: workspace:*
         version: link:../../adapters/ait
     devDependencies:
       '@apps-in-toss/cli':
-        specifier: 3.9.0
-        version: 3.9.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)
+        specifier: 3.10.0
+        version: 3.10.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)
       '@ttsc/unplugin':
         specifier: 0.37.1
         version: 0.37.1(ttsc@0.37.1(typescript@7.0.2))
@@ -528,10 +528,10 @@ importers:
     dependencies:
       '@ait-co/polyfill':
         specifier: ^0.1.19
-        version: 0.1.19(@apps-in-toss/web-framework@3.9.0(typescript@7.0.2))
+        version: 0.1.19(@apps-in-toss/web-framework@3.10.0(typescript@7.0.2))
       '@apps-in-toss/web-framework':
-        specifier: 3.9.0
-        version: 3.9.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2)
+        specifier: 3.10.0
+        version: 3.10.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2)
       '@capacitor/app':
         specifier: 8.1.1
         version: 8.1.1(@capacitor/core@8.5.2)
@@ -624,15 +624,15 @@ importers:
   examples/lite-starter/apps/target-ait:
     dependencies:
       '@apps-in-toss/web-framework':
-        specifier: 3.9.0
-        version: 3.9.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2)
+        specifier: 3.10.0
+        version: 3.10.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2)
       '@mpgd/adapter-ait':
         specifier: workspace:*
         version: link:../../../../adapters/ait
     devDependencies:
       '@apps-in-toss/cli':
-        specifier: 3.9.0
-        version: 3.9.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)
+        specifier: 3.10.0
+        version: 3.10.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)
       '@ttsc/unplugin':
         specifier: 0.37.1
         version: 0.37.1(ttsc@0.37.1(typescript@7.0.2))
@@ -1456,12 +1456,12 @@ packages:
     resolution: {integrity: sha512-1no0CXOhPEeSCrGduT37KMmCqA6irhowXa0S7AaPHb4RQSHGioR3wvvD7HHBCaUriMYs0EvtqRJfOgYd0ycKlQ==}
     engines: {node: '>=24'}
 
-  '@apps-in-toss/cli@3.9.0':
-    resolution: {integrity: sha512-snCigprheJojoZRqYtkHoZEYJDg5x5P4Th1MmJnHsUqhGKowr55urJ5ahDmgwFj1HQzTH4Co/df+vcLPlXciIQ==}
+  '@apps-in-toss/cli@3.10.0':
+    resolution: {integrity: sha512-rqtMfOat591nAmSFb2G/tVuuh3bLIRud0hewjR1G+g7W+IhCus86V5nAaoVvuG2MTmOx0d6qcDaJP3JgK1nwgg==}
     hasBin: true
 
-  '@apps-in-toss/web-framework@3.9.0':
-    resolution: {integrity: sha512-hGg1ri7KYbNZeeEiPFWy0efqv38sDuU8h4Ub/LldBZL/ZJy4D+1Ce3JNSX2qWDeLl+wfbb6hWdK3X9reJjEmPg==}
+  '@apps-in-toss/web-framework@3.10.0':
+    resolution: {integrity: sha512-ikqqAJ4C0MFxdPuBiIDEr3JA64ZHwsbD+tXBGvzR6cgwGipwAC8yS2bKTzsYgiD1Bwz+cpXBqt31284c8cgyKQ==}
     hasBin: true
 
   '@asamuzakjp/css-color@3.2.0':
@@ -7663,15 +7663,15 @@ snapshots:
     transitivePeerDependencies:
       - '@types/node'
 
-  '@ait-co/polyfill@0.1.19(@apps-in-toss/web-framework@3.9.0(typescript@7.0.2))':
+  '@ait-co/polyfill@0.1.19(@apps-in-toss/web-framework@3.10.0(typescript@7.0.2))':
     optionalDependencies:
-      '@apps-in-toss/web-framework': 3.9.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2)
+      '@apps-in-toss/web-framework': 3.10.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2)
 
   '@ait-kit/api-core@0.6.0': {}
 
-  '@ait-kit/sdk@0.7.0(@apps-in-toss/web-framework@3.9.0(typescript@7.0.2))':
+  '@ait-kit/sdk@0.7.0(@apps-in-toss/web-framework@3.10.0(typescript@7.0.2))':
     optionalDependencies:
-      '@apps-in-toss/web-framework': 3.9.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2)
+      '@apps-in-toss/web-framework': 3.10.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2)
 
   '@apple/app-store-server-library@3.1.0':
     dependencies:
@@ -7696,7 +7696,7 @@ snapshots:
       '@apps-in-toss/ait-format-proto': 1.0.0
       fflate: 0.8.3
 
-  '@apps-in-toss/cli@3.9.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)':
+  '@apps-in-toss/cli@3.10.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)':
     dependencies:
       '@apps-in-toss/ait-format': 1.0.0
       '@clack/prompts': 1.7.0
@@ -7711,9 +7711,9 @@ snapshots:
       - supports-color
       - typanion
 
-  '@apps-in-toss/web-framework@3.9.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2)':
+  '@apps-in-toss/web-framework@3.10.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2)':
     dependencies:
-      '@apps-in-toss/cli': 3.9.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)
+      '@apps-in-toss/cli': 3.10.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)
       '@webview-bridge/web': 1.7.10
       semver: 7.8.5
       valibot: 1.4.2(typescript@7.0.2)
@@ -9828,7 +9828,7 @@ snapshots:
       '@types/react': 19.3.0
       react: 19.3.0
 
-  '@modelcontextprotocol/sdk@1.29.0(zod@4.4.3)':
+  '@modelcontextprotocol/sdk@1.29.0(supports-color@8.1.1)(zod@4.4.3)':
     dependencies:
       '@hono/node-server': 1.19.14(hono@4.12.27)
       ajv: 8.20.0
@@ -9838,8 +9838,8 @@ snapshots:
       cross-spawn: 7.0.6
       eventsource: 3.0.7
       eventsource-parser: 3.1.0
-      express: 5.2.1
-      express-rate-limit: 8.5.2(express@5.2.1)
+      express: 5.2.1(supports-color@8.1.1)
+      express-rate-limit: 8.5.2(express@5.2.1(supports-color@8.1.1))
       hono: 4.12.27
       jose: 6.2.3
       json-schema-typed: 8.0.2
@@ -10566,10 +10566,10 @@ snapshots:
   '@ttsc/graph-win32-x64@0.37.1':
     optional: true
 
-  '@ttsc/graph@0.37.1(ttsc@0.37.1(typescript@7.0.2))(zod@4.4.3)':
+  '@ttsc/graph@0.37.1(supports-color@8.1.1)(ttsc@0.37.1(typescript@7.0.2))(zod@4.4.3)':
     dependencies:
-      '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
-      '@typia/mcp': 15.1.0(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))
+      '@modelcontextprotocol/sdk': 1.29.0(supports-color@8.1.1)(zod@4.4.3)
+      '@typia/mcp': 15.1.0(@modelcontextprotocol/sdk@1.29.0(supports-color@8.1.1)(zod@4.4.3))
       ttsc: 0.37.1(typescript@7.0.2)
       typia: 15.2.1(ttsc@0.37.1(typescript@7.0.2))
     optionalDependencies:
@@ -10769,9 +10769,9 @@ snapshots:
 
   '@typia/interface@15.4.1': {}
 
-  '@typia/mcp@15.1.0(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))':
+  '@typia/mcp@15.1.0(@modelcontextprotocol/sdk@1.29.0(supports-color@8.1.1)(zod@4.4.3))':
     dependencies:
-      '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
+      '@modelcontextprotocol/sdk': 1.29.0(supports-color@8.1.1)(zod@4.4.3)
       '@typia/interface': 15.2.1
       '@typia/utils': 15.2.1
 
@@ -11010,7 +11010,7 @@ snapshots:
 
   blake3-wasm@2.1.5: {}
 
-  body-parser@2.3.0:
+  body-parser@2.3.0(supports-color@8.1.1):
     dependencies:
       bytes: 3.1.2
       content-type: 2.0.0
@@ -11604,15 +11604,15 @@ snapshots:
 
   expect-type@1.4.0: {}
 
-  express-rate-limit@8.5.2(express@5.2.1):
+  express-rate-limit@8.5.2(express@5.2.1(supports-color@8.1.1)):
     dependencies:
-      express: 5.2.1
+      express: 5.2.1(supports-color@8.1.1)
       ip-address: 10.2.0
 
-  express@5.2.1:
+  express@5.2.1(supports-color@8.1.1):
     dependencies:
       accepts: 2.0.0
-      body-parser: 2.3.0
+      body-parser: 2.3.0(supports-color@8.1.1)
       content-disposition: 1.1.0
       content-type: 1.0.5
       cookie: 0.7.2
@@ -11622,7 +11622,7 @@ snapshots:
       encodeurl: 2.0.0
       escape-html: 1.0.3
       etag: 1.8.1
-      finalhandler: 2.1.1
+      finalhandler: 2.1.1(supports-color@8.1.1)
       fresh: 2.0.0
       http-errors: 2.0.1
       merge-descriptors: 2.0.0
@@ -11633,8 +11633,8 @@ snapshots:
       proxy-addr: 2.0.7
       qs: 6.16.0
       range-parser: 1.3.0
-      router: 2.2.0
-      send: 1.2.1
+      router: 2.2.0(supports-color@8.1.1)
+      send: 1.2.1(supports-color@8.1.1)
       serve-static: 2.2.1
       statuses: 2.0.2
       type-is: 2.1.0
@@ -11725,7 +11725,7 @@ snapshots:
     dependencies:
       to-regex-range: 5.0.1
 
-  finalhandler@2.1.1:
+  finalhandler@2.1.1(supports-color@8.1.1):
     dependencies:
       debug: 4.4.3(supports-color@8.1.1)
       encodeurl: 2.0.0
@@ -13710,7 +13710,7 @@ snapshots:
       '@rollup/rollup-win32-x64-msvc': 4.62.5
       fsevents: 2.3.3
 
-  router@2.2.0:
+  router@2.2.0(supports-color@8.1.1):
     dependencies:
       debug: 4.4.3(supports-color@8.1.1)
       depd: 2.0.0
@@ -13770,7 +13770,7 @@ snapshots:
 
   semver@7.8.5: {}
 
-  send@1.2.1:
+  send@1.2.1(supports-color@8.1.1):
     dependencies:
       debug: 4.4.3(supports-color@8.1.1)
       encodeurl: 2.0.0
@@ -13791,7 +13791,7 @@ snapshots:
       encodeurl: 2.0.0
       escape-html: 1.0.3
       parseurl: 1.3.3
-      send: 1.2.1
+      send: 1.2.1(supports-color@8.1.1)
     transitivePeerDependencies:
       - supports-color
 
