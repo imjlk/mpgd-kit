@@ -78,7 +78,7 @@ is driven by controller notifications; no paused-scene update polling is needed.
 
 The headless fake tests exercise ownership, input flags/reset, channel mapping,
 CREATE handling, shutdown/restart, external sleep/wake, and terminal cleanup.
-`examples/runtime-controls` separately runs real Phaser 4.2.0 in Chromium and
+`examples/runtime-controls` separately runs real Phaser 4.2.1 in Chromium and
 asserts actual update/render counters and input behavior. Its initial inactive
 scenario verifies the first update is blocked. The audio fixture is a fake sink,
 not a physical-device audio test. Native targets and every Phaser version are
@@ -86,6 +86,7 @@ not covered by that browser result.
 
 The implementation was checked against the installed Phaser 4.2.0 source and
 the official [Systems API](https://docs.phaser.io/api-documentation/4.0.0/class/scenes-systems).
+Phaser 4.2.1 changes no Scene Systems or input source, so that check still holds.
 The separate entrypoint keeps Phaser outside headless runtime imports and
 declarations; its optional peer range starts at the tested 4.2.0 version.
 
@@ -94,7 +95,7 @@ in the same npm tarball as the headless controller. It does not modify
 `phaser-minigame-runtime`'s native compatibility layer or automatically add a
 dependency to generated games.
 
-For TypeScript 7 with Phaser 4.2.0, use the starter's `skipLibCheck: true` setting
+For TypeScript 7 with Phaser 4.2.1, use the starter's `skipLibCheck: true` setting
 for Phaser's existing declaration errors. The headless entrypoints are separately
 tested with `skipLibCheck: false` and no DOM declarations.
 

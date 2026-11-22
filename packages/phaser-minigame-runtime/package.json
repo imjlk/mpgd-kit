@@ -29,11 +29,11 @@
     "fix": "ttsc fix"
   },
   "peerDependencies": {
-    "phaser": "4.2.0"
+    "phaser": "4.2.1"
   },
   "devDependencies": {
     "@mpgd/phaser-assets": "workspace:*",
-    "phaser": "4.2.0",
+    "phaser": "4.2.1",
     "ttsc": "0.37.2",
     "typescript": "7.0.2",
     "vitest": "^4.0.0"
