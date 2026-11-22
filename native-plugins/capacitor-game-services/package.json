@@ -58,7 +58,7 @@
   },
   "devDependencies": {
     "@capacitor/core": "8.6.2",
-    "ttsc": "0.37.1",
+    "ttsc": "0.37.2",
     "typescript": "7.0.2"
   },
   "main": "./dist/index.js",

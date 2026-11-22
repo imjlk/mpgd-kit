@@ -62,7 +62,7 @@
     "typia": "15.4.1"
   },
   "devDependencies": {
-    "ttsc": "0.37.1",
+    "ttsc": "0.37.2",
     "typescript": "7.0.2",
     "jsdom": "24.1.0",
     "vitest": "^4.0.0",

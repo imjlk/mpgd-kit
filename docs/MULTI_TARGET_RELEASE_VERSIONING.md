@@ -178,12 +178,14 @@ credentials. It applies the production target config and the same release
 version checks as a signed production build, so `MPGD_TARGET_VERSION_CODE`,
 `MPGD_TARGET_VERSION_NAME`, and a matching `APP_VERSION` are required (with
 `MPGD_NATIVE_VERSION_STAMP=1` when the committed shell does not hold those
-numbers). It then runs `bundleRelease` with no Kit signing inputs. The
-release manifest records it as `mode: "unsigned-archive"`, `signed: false`,
-`submissionCandidate: false`, and `rehearsal: true`, and `smoke:target`
-verifies it like any other AAB. The signer and bundle-manifest inspection of
-`signed-archive` is skipped, so check the rehearsal bundle's version numbers
-in the game's own audit.
+numbers). It then runs `bundleRelease` with no Kit signing inputs and copies
+the bundle out as `app-rehearsal-unsigned.aab`. Signed, staging, and
+development archives keep `app-release.aab`, so a rehearsal cannot be mistaken
+for, or copied over, a signed submission bundle. The release manifest records
+it as `mode: "unsigned-archive"`, `signed: false`, `submissionCandidate: false`,
+and `rehearsal: true`, and `smoke:target` verifies it like any other AAB. The
+signer and bundle-manifest inspection of `signed-archive` is skipped, so check
+the rehearsal bundle's version numbers in the game's own audit.
 
 A rehearsal is never submission evidence: the pinned deployment workspace
 builds only `signed-archive` (Android) or `store-export` (iOS), and recording
@@ -234,7 +236,9 @@ fail the build rather than producing submission evidence.
 
 Each native build stages the web bundle and native shell independently, then
 writes a unique artifact path under `release-output/native/<target>/<profile>/`
-and a `nativeDelivery` record in the release manifest. The record distinguishes
+and a `nativeDelivery` record in the release manifest. Read the artifact from
+the manifest's `targets.<target>.artifact` rather than assuming a run directory
+or file name, since the file name depends on the mode. The record distinguishes
 signed artifacts from store submission candidates; it does **not** mean a
 physical-device test or store acceptance. A new attempt marks the previous
 artifact stale for smoke verification, even if that attempt fails. Keep the
