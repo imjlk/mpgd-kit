@@ -21,8 +21,6 @@ minimumReleaseAgeExclude:
   # Reviewed first-party releases: imjlk/ait-kit PRs #52 and #53.
   - '@ait-kit/api-core@0.6.0'
   - '@ait-kit/sdk@0.7.0'
-  - '@apps-in-toss/cli@3.5.0'
-  - '@apps-in-toss/web-framework@3.5.0'
 overrides:
   '@xmldom/xmldom': '0.9.12'
   # Security patches for transitive advisories reported by `pnpm audit --prod`.

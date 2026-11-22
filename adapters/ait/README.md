@@ -200,10 +200,11 @@ A game-owned host wrapper may attach `authorityConfirmation` to a granted promot
 
 ## WebView SDK upgrades
 
-The tested starter baseline is WebView SDK/CLI **3.9.0**. The adapter's compatible
+The tested starter baseline is WebView SDK/CLI **3.10.0**. The adapter's compatible
 peer range remains `>=3.0.0 <4`; optional APIs still use native support checks.
-SDK 3.9.0 fixes completed/refunded order pagination and product-grant callback
-error handling ([official release notes](https://developers-apps-in-toss.toss.im/release-note/release-note)).
+SDK 3.10.0 deprecates the `brand` config (it may be omitted) and adds
+`NavigationBar` accessory-button APIs; the adapter uses neither, and existing
+configs keep working ([official release notes](https://developers-apps-in-toss.toss.im/release-note/release-note)).
 
 For an existing game, check both packages' npm `latest` tags and release notes,
 then pin the same reviewed version in the game SDK, AIT wrapper SDK and wrapper
