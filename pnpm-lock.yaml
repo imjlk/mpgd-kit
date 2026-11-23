@@ -14,6 +14,8 @@ overrides:
   qs@6: 6.16.0
   '@apps-in-toss/ait-format-proto>protobufjs': 7.6.6
 
+packageExtensionsChecksum: sha256-DpX72/LWDgDBdtVe7HtgHAHEfNcqBUgASra0qw4Fql4=
+
 importers:
 
   .:
@@ -9177,6 +9179,8 @@ snapshots:
     dependencies:
       '@devvit/payments': 0.15.4(twirp-ts@2.5.0)
       '@devvit/protos': 0.15.4(twirp-ts@2.5.0)
+      '@devvit/public-api': 0.15.4(twirp-ts@2.5.0)
+      '@devvit/scheduler': 0.15.4(@devvit/server@0.15.4(twirp-ts@2.5.0))(twirp-ts@2.5.0)
       '@devvit/server': 0.15.4(twirp-ts@2.5.0)
       '@devvit/shared': 0.15.4(twirp-ts@2.5.0)
       '@devvit/shared-types': 0.15.4(twirp-ts@2.5.0)
@@ -9287,6 +9291,7 @@ snapshots:
     dependencies:
       '@devvit/protos': 0.15.4(twirp-ts@2.5.0)
       '@devvit/server': 0.15.4(twirp-ts@2.5.0)
+      '@devvit/shared-types': 0.15.4(twirp-ts@2.5.0)
     transitivePeerDependencies:
       - twirp-ts
 
@@ -9308,6 +9313,7 @@ snapshots:
 
   '@devvit/protos@0.15.4(twirp-ts@2.5.0)':
     dependencies:
+      long: 5.3.2
       protobufjs: 7.6.5
       rxjs: 7.8.1
     optionalDependencies:
@@ -10169,7 +10175,7 @@ snapshots:
 
   '@jridgewell/gen-mapping@0.3.13':
     dependencies:
-      '@jridgewell/sourcemap-codec': 1.5.5
+      '@jridgewell/sourcemap-codec': 1.6.0
       '@jridgewell/trace-mapping': 0.3.31
 
   '@jridgewell/remapping@2.3.5':
@@ -10192,7 +10198,7 @@ snapshots:
   '@jridgewell/trace-mapping@0.3.31':
     dependencies:
       '@jridgewell/resolve-uri': 3.1.2
-      '@jridgewell/sourcemap-codec': 1.5.5
+      '@jridgewell/sourcemap-codec': 1.6.0
 
   '@jridgewell/trace-mapping@0.3.9':
     dependencies:
