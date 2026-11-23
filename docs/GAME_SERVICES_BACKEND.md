@@ -30,6 +30,8 @@ verifier follow-ups, see
   server paths to record purchase, rewarded ad, and leaderboard outcomes.
 - `@mpgd/catalog`: product catalog and ad placement schemas consumed by the
   game-services backend before any grant is accepted.
+- `@mpgd/platform/http-body`: [bounded readers](#bounded-http-bodies) for
+  request and response bodies, shared by Worker endpoints and game clients.
 - `apps/game-services-worker`: Cloudflare Worker starter. It exposes public
   `/game-services/*` JSON endpoints, `/rpc/*` oRPC procedures, `/health`, and
   `WorkerEntrypoint` methods for service binding RPC.
@@ -758,6 +760,84 @@ independently when constructing the backend. Timeouts preserve the durable
 grant, return `PURCHASE_FINALIZER_TIMEOUT`, abort the provider signal, and can be
 retried idempotently. Finalization status, action, completion state, and reason
 are included in purchase analytics for operational diagnosis.
+
+## Bounded HTTP bodies
+
+`@mpgd/platform/http-body` reads a fetch-API request or response body under a
+byte limit and a timeout. It uses only web-standard globals, so the same code
+runs in a Worker endpoint, in a game client reading its backend's answer, and
+in Node. It checks size and format only: the JSON readers return `unknown`, and
+each endpoint still authenticates the caller and validates the value with its
+own schema.
+
+```ts
+import { HttpBodyError, readBoundedJsonRequest } from '@mpgd/platform/http-body';
+
+/** The request's JSON, or the error response to send instead. */
+async function readJsonOrRefuse(
+  request: Request,
+): Promise<{ readonly value: unknown } | { readonly refusal: Response }> {
+  try {
+    return { value: await readBoundedJsonRequest(request, 16 * 1024, { timeoutMs: 5_000 }) };
+  } catch (error) {
+    if (error instanceof HttpBodyError) {
+      return { refusal: Response.json({ error: error.code }, { status: error.status }) };
+    }
+    throw error;
+  }
+}
+```
+
+`readBoundedJsonRequest` and `readBoundedRequestText` read a request on a
+server; the text reader suits a webhook whose signature covers the raw body.
+`readBoundedJsonResponse` and `readBoundedResponseText` read a response on a
+client, such as a game reading its backend's answer or a Worker reading a
+store provider's. Each takes `maximumBytes` and optional `timeoutMs` (10
+seconds by default) and `signal`:
+
+- The limit applies twice: a declared `Content-Length` over it is refused
+  before any byte is read, and the bytes the stream yields are counted as they
+  arrive, so a chunked or mislabelled body is refused before it is buffered.
+  A client counts the bytes after the runtime decodes a `Content-Encoding`
+  such as gzip, so the decoded size is what is bounded.
+- The timeout covers the whole read, so a body that trickles in a byte at a
+  time is refused as surely as one that stalls. An aborted `signal` stops the
+  read; a client passes the signal it gave `fetch`.
+- Text is strict UTF-8 whatever the `charset` says, and a leading byte order
+  mark is dropped, as `text()` does. The JSON readers also require a JSON media
+  type (`application/json`, `text/json` or any `+json` type) and refuse an
+  empty body.
+
+Every refusal is an `HttpBodyError` whose `code` is stable. `status` is the
+answer a server gives for a request body; a refused response body is an
+upstream failure, so a client or proxy answers with its own status instead.
+
+| Code | Status | Refused when |
+| --- | --- | --- |
+| `JSON_REQUIRED` | 415 | A JSON reader gets a missing or non-JSON `Content-Type`. |
+| `INVALID_CONTENT_LENGTH` | 400 | `Content-Length` is not one decimal length. |
+| `BODY_TOO_LARGE` | 413 | The declared or counted size passes `maximumBytes`. |
+| `BODY_READ_TIMEOUT` | 408 | The read outlasts `timeoutMs`. |
+| `BODY_READ_ABORTED` | 400 | `signal` aborted; `cause` is its reason. |
+| `BODY_READ_FAILED` | 400 | The stream failed (`cause`) or yielded a chunk that is not bytes. |
+| `INVALID_UTF8` | 400 | The body is not valid UTF-8. |
+| `EMPTY_BODY` | 400 | A JSON reader gets no bytes. |
+| `INVALID_JSON` | 400 | The text does not parse as JSON (`cause`). |
+
+A reader that gives up part way cancels the body. A request it refuses before
+reading stays unread, and the server runtime discards it after the error
+response. A response it refuses before reading is cancelled as well, because
+nothing else releases the connection behind it. A body that was already read,
+even partly, or is locked rejects with a `TypeError`, as does a request in
+Firefox, which does not implement `Request.body`; an invalid limit rejects with
+a `RangeError`. Neither touches the body.
+
+Under Miniflare, workerd closes the connection once a Worker answers before
+reading all of a large chunked upload, so a client still sending it can see a
+connection error instead of the 413, whether or not the reader cancels the
+body. `pnpm --filter @mpgd/platform test` runs these contracts in Node, against
+Node's fetch implementation and the built package; it does not run them in
+workerd or a browser.
 
 ## Cloudflare Worker Starter
 
