@@ -86,8 +86,8 @@ separate client/server watcher or staging prebuild is not required.
 
 ## Updating the Devvit SDK
 
-The upload scripts run `mpgd kit devvit-check` first and stop when a newer
-stable Devvit release exists. To update, change the exact `@devvit/web`,
+The playtest and upload scripts run `mpgd kit devvit-check` first and stop
+when a newer stable Devvit release exists. To update, change the exact `@devvit/web`,
 `@devvit/start`, and `devvit` pins in this directory's `package.json`, then
 update the `packageExtensions` block in the game root's `pnpm-workspace.yaml`
 to the same release before `pnpm install`, a rebuild, and your target checks.
