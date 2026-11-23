@@ -1,0 +1,5 @@
+---
+npm/@mpgd/adapter-ait: patch (Fixed)
+---
+
+An Apps in Toss checkout whose native error carries the documented `errorCode: 'USER_CANCELED'` and no `code` now ends as a cancellation: `requestPurchase` answers `cancelled` (`USER_CANCELLED`) and the attempt marker is removed, so the same purchase key can open the order sheet again. Such an error used to answer `launched` with `AIT_IAP_NATIVE_PURCHASE_FAILED`, which left the attempt open, and the same key could not open the order sheet again for 30 minutes. The SDK reference reports checkout codes as `error.code`, and the in-app purchase guide also documents an `errorCode` property. Only that exact code counts, a `code` on the error still decides alone, and an error that arrives after the checkout reported an order still keeps it pending, so message text, other codes and a paid or pending order are never read as a cancellation. A game that rewrote this error into `{ code: 'USER_CANCELED' }` before the adapter saw it can drop that workaround.

@@ -1070,6 +1070,153 @@ describe('AIT production host bridge', () => {
     expect(values.has(storageKey)).toBe(false);
   });
 
+  it.each([
+    // The in-app purchase guide documents `errorCode`; a host may send it without `code`.
+    ['errorCode USER_CANCELED without a code', { errorCode: 'USER_CANCELED', message: 'Closed.' }],
+    [
+      'errorCode USER_CANCELED on a restored SDK error',
+      Object.assign(new Error('Closed.'), { errorCode: 'USER_CANCELED' }),
+    ],
+    [
+      'errorCode USER_CANCELED beside an undefined code',
+      { code: undefined, errorCode: 'USER_CANCELED' },
+    ],
+    // A code still decides alone, as before.
+    ['code USER_CANCELED', { code: 'USER_CANCELED' }],
+    [
+      'code USER_CANCELED beside another errorCode',
+      { code: 'USER_CANCELED', errorCode: 'NETWORK_ERROR' },
+    ],
+  ])('cancels a checkout before any order on %s and frees its key', async (_shape, error) => {
+    const checkout = await startHintPackCheckout('error-shape-cancel');
+
+    await checkout.callbacks.onError(error);
+
+    await expect(checkout.purchase).resolves.toEqual({ status: 'cancelled', entitlementIds: [] });
+    expect(checkout.values.has(checkout.markerKey)).toBe(false);
+    // Without the marker, the same client key opens a new order sheet.
+    const retry = checkout.iap.purchase('HINT_PACK_5', 'error-shape-cancel');
+    await vi.waitFor(() => expect(checkout.checkouts).toHaveLength(2));
+    await checkout.checkouts[1]?.onError({ name: 'AbortError' });
+    await expect(retry).resolves.toEqual({ status: 'cancelled', entitlementIds: [] });
+  });
+
+  it.each([
+    // An explicit code decides alone, even beside the documented cancel errorCode.
+    [
+      'code NETWORK_ERROR beside errorCode USER_CANCELED',
+      { code: 'NETWORK_ERROR', errorCode: 'USER_CANCELED' },
+      'NETWORK_ERROR',
+    ],
+    [
+      'an empty code beside errorCode USER_CANCELED',
+      { code: '', errorCode: 'USER_CANCELED' },
+      'USER_CANCELED',
+    ],
+    [
+      'a null code beside errorCode USER_CANCELED',
+      { code: null, errorCode: 'USER_CANCELED' },
+      'USER_CANCELED',
+    ],
+    // Only the exact documented errorCode is a cancellation.
+    ['errorCode PAYMENT_PENDING', { errorCode: 'PAYMENT_PENDING' }, 'PAYMENT_PENDING'],
+    ['errorCode NETWORK_ERROR', { errorCode: 'NETWORK_ERROR' }, 'NETWORK_ERROR'],
+    ['errorCode USER_CANCELLED', { errorCode: 'USER_CANCELLED' }, 'USER_CANCELLED'],
+    ['errorCode ABORTED', { errorCode: 'ABORTED' }, 'ABORTED'],
+    ['a lowercase errorCode', { errorCode: 'user_canceled' }, undefined],
+    ['a padded errorCode', { errorCode: ' USER_CANCELED' }, undefined],
+    ['a non-string errorCode', { errorCode: ['USER_CANCELED'] }, undefined],
+    // Message text is never read as a cancellation.
+    ['an error message', new Error('USER_CANCELED'), undefined],
+    ['a message field', { message: 'USER_CANCELED' }, undefined],
+    // Values that are not error objects are not cancellations.
+    ['a string', 'USER_CANCELED', undefined],
+    ['an array', [{ errorCode: 'USER_CANCELED' }], undefined],
+    ['a number', 42, undefined],
+    ['null', null, undefined],
+    ['undefined', undefined, undefined],
+  ])('keeps the retry barrier before any order on %s', async (_shape, error, providerCode) => {
+    const checkout = await startHintPackCheckout('error-shape-failure');
+
+    await checkout.callbacks.onError(error);
+
+    await expect(checkout.purchase).resolves.toEqual({
+      status: 'pending',
+      entitlementIds: [],
+      diagnostic: {
+        code: 'AIT_IAP_NATIVE_PURCHASE_FAILED',
+        retryable: true,
+        ...(providerCode === undefined ? {} : { providerCode }),
+      },
+    });
+    expect(JSON.parse(checkout.values.get(checkout.markerKey) ?? '{}')).toMatchObject({
+      status: 'pending',
+      idempotencyKey: 'error-shape-failure',
+    });
+    // The marker keeps the same client key from opening a second order sheet.
+    await expect(checkout.iap.purchase('HINT_PACK_5', 'error-shape-failure')).resolves.toEqual({
+      status: 'pending',
+      entitlementIds: [],
+      diagnostic: { code: 'AIT_IAP_ATTEMPT_PENDING', retryable: true },
+    });
+    expect(checkout.checkouts).toHaveLength(1);
+  });
+
+  it('keeps an order pending when errorCode USER_CANCELED races its grant', async () => {
+    let resolveVerification: ((granted: boolean) => void) | undefined;
+    const checkout = await startHintPackCheckout(
+      'error-code-cancel-race',
+      async () => await new Promise<boolean>((resolve) => {
+        resolveVerification = resolve;
+      }),
+    );
+    const grant = checkout.callbacks.options.processProductGrant({ orderId: 'racing-order' });
+    await vi.waitFor(() => expect(resolveVerification).toBeDefined());
+
+    await checkout.callbacks.onError({ errorCode: 'USER_CANCELED' });
+
+    expect(checkout.values.has(checkout.markerKey)).toBe(true);
+    resolveVerification?.(true);
+    await expect(grant).resolves.toBe(true);
+    await expect(checkout.purchase).resolves.toEqual({
+      status: 'pending',
+      transactionId: 'racing-order',
+      entitlementIds: [],
+      diagnostic: { code: 'AIT_IAP_GRANT_PENDING', retryable: true, providerCode: 'USER_CANCELED' },
+    });
+    expect(JSON.parse(checkout.values.get(checkout.markerKey) ?? '{}')).toMatchObject({
+      status: 'server-granted',
+      orderId: 'racing-order',
+    });
+    expect(checkout.checkouts).toHaveLength(1);
+  });
+
+  it('keeps a refused order pending on a later errorCode USER_CANCELED', async () => {
+    const checkout = await startHintPackCheckout('error-code-cancel-refused', async () => false);
+    await expect(checkout.callbacks.options.processProductGrant({ orderId: 'refused-order' }))
+      .resolves.toBe(false);
+
+    await checkout.callbacks.onError({ errorCode: 'USER_CANCELED' });
+
+    const pending = {
+      status: 'pending',
+      transactionId: 'refused-order',
+      entitlementIds: [],
+      diagnostic: { code: 'AIT_IAP_GRANT_PENDING', retryable: true },
+    };
+    await expect(checkout.purchase).resolves.toEqual({
+      ...pending,
+      diagnostic: { ...pending.diagnostic, providerCode: 'USER_CANCELED' },
+    });
+    expect(JSON.parse(checkout.values.get(checkout.markerKey) ?? '{}')).toMatchObject({
+      status: 'pending',
+      orderId: 'refused-order',
+    });
+    await expect(checkout.iap.purchase('HINT_PACK_5', 'error-code-cancel-refused'))
+      .resolves.toEqual(pending);
+    expect(checkout.checkouts).toHaveLength(1);
+  });
+
   it('keeps a stale pre-checkout marker pending while the provider still has its SKU', async () => {
     const values = new Map<string, string>();
     values.set('mpgd:ait:iap-purchase-attempt:v1:HINT_PACK_5:stale-pending-order', JSON.stringify({
@@ -7150,6 +7297,48 @@ function createMemoryStorage(values: Map<string, string>): AitHostDependencies['
     setItem: async (key, value) => {
       values.set(key, value);
     },
+  };
+}
+
+/**
+ * Starts a `HINT_PACK_5` purchase over in-memory storage and waits for its
+ * native checkout. `checkouts` collects the callbacks of every checkout the
+ * controller opens, so a test can replay the same client key.
+ */
+async function startHintPackCheckout(
+  idempotencyKey: string,
+  verifyIapProductGrant: (input: AitIapProductGrantVerificationInput) => Promise<boolean> =
+    async () => true,
+) {
+  const values = new Map<string, string>();
+  const checkouts: IapPurchaseCallbacks[] = [];
+  const iap = createAitIapController({
+    iapProducts: [{ productId: 'HINT_PACK_5', sku: 'ait.ttokdoku.hints.5' }],
+    prepareIap: async () => true,
+    verifyIapProductGrant,
+    dependencies: createDependencies({
+      storage: createMemoryStorage(values),
+      iap: createSupportedIap({
+        products: [createIapProduct()],
+        onPurchase: (input) => {
+          checkouts.push(input);
+        },
+      }),
+    }),
+  });
+  const purchase = iap.purchase('HINT_PACK_5', idempotencyKey);
+  await vi.waitFor(() => expect(checkouts).toHaveLength(1));
+  const [callbacks] = checkouts;
+  if (callbacks === undefined) {
+    throw new Error('Expected Apps in Toss purchase callbacks to be registered.');
+  }
+  return {
+    iap,
+    purchase,
+    callbacks,
+    checkouts,
+    values,
+    markerKey: `mpgd:ait:iap-purchase-attempt:v1:HINT_PACK_5:${idempotencyKey}`,
   };
 }
 
