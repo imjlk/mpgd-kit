@@ -22,7 +22,9 @@ import { isDeepStrictEqual } from 'node:util';
 
 /**
  * The `long` release that protobufjs, which `@devvit/protos` declares, resolves
- * in the kit lockfile. Extending protos with the same release keeps one copy.
+ * in the kit lockfile, so the kit installs one copy. A game's lockfile can give
+ * protobufjs a newer 5.x; that works, because the generated protos modules
+ * point protobufjs at their own `long`.
  */
 export const devvitProtosLongVersion = '5.3.2';
 
