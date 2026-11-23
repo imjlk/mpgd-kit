@@ -325,6 +325,32 @@ describe('review moments', () => {
     expect(forwarded?.()).toBe(false);
   });
 
+  it('checks a screen that settled while the session was still checking an older one', async () => {
+    const session = fakeSession();
+    let answer = () => {};
+    // Like the controller, the session checks the screen again only after its own queue.
+    session.consider.mockImplementationOnce(async (isSafe) => {
+      await new Promise<void>((resolve) => {
+        answer = resolve;
+      });
+      isSafe();
+    });
+    const moments = createReviewMoments(session);
+    moments.record('m');
+    let olderShowing = true;
+    const older = moments.settled(() => olderShowing);
+    await vi.waitFor(() => expect(session.consider).toHaveBeenCalledOnce());
+    // The older screen goes away and a new one settles before the session has answered.
+    olderShowing = false;
+    const newer = moments.settled(() => true);
+    answer();
+    await Promise.all([older, newer]);
+    expect(session.consider).toHaveBeenCalledTimes(2);
+    // A settled screen after that has no new moment, so it does nothing.
+    await moments.settled(() => true);
+    expect(session.consider).toHaveBeenCalledTimes(2);
+  });
+
   it('drops only the failed opportunity and survives a failing dispose', async () => {
     const session = fakeSession();
     session.completedPlay.mockRejectedValueOnce(new Error('storage'));

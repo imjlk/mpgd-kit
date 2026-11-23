@@ -298,12 +298,15 @@ export function createReviewMoments(session: ReviewSession | undefined): ReviewM
           considered = candidate;
         }
       }
-      // A settled screen whose moments were all considered is not kept for a later moment.
-      latest = undefined;
     })().finally(() => {
       checking = undefined;
-      // A screen that settled while the loop was finishing is checked now, not at the next one.
-      return !disposed && latest && recorded !== considered ? check(review) : undefined;
+      if (!disposed && latest && recorded !== considered) {
+        // A screen that settled while the loop was finishing is checked now, not at the next one.
+        return check(review);
+      }
+      // A settled screen whose moments were all considered is not kept for a later moment.
+      latest = undefined;
+      return undefined;
     });
     checking = run;
     return run;
@@ -323,7 +326,9 @@ export function createReviewMoments(session: ReviewSession | undefined): ReviewM
       void persistence.catch(() => {});
     },
     settled(isSafe) {
-      if (disposed || !session || recorded === considered) {
+      // While a check runs, its moments count as considered only until the session answers: keep
+      // the newest screen in case the session finds the older one covered.
+      if (disposed || !session || (!checking && recorded === considered)) {
         return Promise.resolve();
       }
       latest = isSafe;
