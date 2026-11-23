@@ -1118,6 +1118,11 @@ describe('AIT production host bridge', () => {
       { code: null, errorCode: 'USER_CANCELED' },
       'USER_CANCELED',
     ],
+    [
+      'a numeric code beside errorCode USER_CANCELED',
+      { code: 0, errorCode: 'USER_CANCELED' },
+      'USER_CANCELED',
+    ],
     // Only the exact documented errorCode is a cancellation.
     ['errorCode PAYMENT_PENDING', { errorCode: 'PAYMENT_PENDING' }, 'PAYMENT_PENDING'],
     ['errorCode NETWORK_ERROR', { errorCode: 'NETWORK_ERROR' }, 'NETWORK_ERROR'],
