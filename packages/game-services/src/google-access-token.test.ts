@@ -170,6 +170,34 @@ function assertionOf(exchange: Exchange | undefined): string {
   assert.equal(new Headers(publisher.at(-1)?.init.headers).get('authorization'), 'Bearer token-3');
 }
 
+// The Play source's minute starts only when it drops the cached token.
+{
+  let now = start;
+  const google = fakeGoogle();
+  const tokens = createGooglePlayPublisherAccessTokenSource({
+    serviceAccount,
+    fetch: google.fetch,
+    now: () => now,
+  });
+  assert.equal(await tokens.get(), 'token-1');
+  // Inside the refresh margin a new token replaces the first.
+  now += 3_300_000;
+  assert.equal(await tokens.get(), 'token-2');
+  // A 401 for the older token, still in flight, drops nothing and starts no minute...
+  tokens.invalidate('token-1');
+  assert.equal(await tokens.get(), 'token-2');
+  // ...so the cached token, refused next (revoked), is dropped at once.
+  tokens.invalidate('token-2');
+  assert.equal(await tokens.get(), 'token-3');
+  // That drop holds the next one back for a minute.
+  tokens.invalidate('token-3');
+  assert.equal(await tokens.get(), 'token-3');
+  now += 60_000;
+  tokens.invalidate('token-3');
+  assert.equal(await tokens.get(), 'token-4');
+  assert.equal(google.exchanges.length, 4);
+}
+
 // A cached token answers until five minutes before it expires; then a new one is minted.
 {
   let now = start;

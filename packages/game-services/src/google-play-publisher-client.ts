@@ -1,8 +1,9 @@
 import {
-  createGoogleAccessTokenSource,
+  GoogleAccessTokenError,
   type CreateGoogleAccessTokenSourceInput,
   type GoogleAccessTokenSource,
 } from './google-access-token.js';
+import { createAccessTokenSource, errorOptionsOf } from './google-oauth.js';
 import type { GooglePlayProductPurchaseClient } from './google-play-purchase.js';
 import type {
   GooglePlayVoidedPurchase,
@@ -62,18 +63,34 @@ export type CreateGooglePlayPublisherAccessTokenSourceInput = Omit<
 export function createGooglePlayPublisherAccessTokenSource(
   input: CreateGooglePlayPublisherAccessTokenSourceInput,
 ): GoogleAccessTokenSource {
-  const tokens = createGoogleAccessTokenSource({ ...input, scope: googlePlayPublisherScope });
+  // `createGoogleAccessTokenSource`, with the package's own view of `invalidate`.
+  const tokens = createAccessTokenSource(
+    { ...input, scope: googlePlayPublisherScope },
+    {
+      label: 'Google',
+      errorOf: (failure) =>
+        new GoogleAccessTokenError(
+          failure.code,
+          failure.retryable,
+          failure.retryAfterSeconds,
+          errorOptionsOf(failure),
+        ),
+    },
+  );
   const now = input.now ?? Date.now;
-  let invalidatedAt: number | undefined;
+  let droppedAt: number | undefined;
   return {
     get: tokens.get,
     invalidate(token) {
       const at = now();
-      if (invalidatedAt !== undefined && at - invalidatedAt < tokenInvalidationIntervalMs) {
+      if (droppedAt !== undefined && at - droppedAt < tokenInvalidationIntervalMs) {
         return;
       }
-      invalidatedAt = at;
-      tokens.invalidate(token);
+      // Only a drop of the cached token starts the minute: a 401 for an
+      // older token still in flight leaves the next real drop free.
+      if (tokens.invalidate(token)) {
+        droppedAt = at;
+      }
     },
   };
 }

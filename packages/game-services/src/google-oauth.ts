@@ -68,6 +68,11 @@ export interface GoogleAccessTokenSource {
   readonly invalidate: (token: string) => void;
 }
 
+/** The source inside the package: `invalidate` says whether it dropped the cached token. */
+export interface AccessTokenSourceCore extends GoogleAccessTokenSource {
+  readonly invalidate: (token: string) => boolean;
+}
+
 export interface CreateGoogleAccessTokenSourceInput {
   readonly serviceAccount: GoogleServiceAccount;
   /** The OAuth scope the tokens are for: a scope URL, or several separated by spaces. */
@@ -161,7 +166,7 @@ export function createAccessTokenSource(
     readonly label: string;
     readonly errorOf: (failure: AccessTokenFailure) => Error;
   },
-): GoogleAccessTokenSource {
+): AccessTokenSourceCore {
   const { serviceAccount, scope } = input;
   if (typeof scope !== 'string' || scope.trim() === '' || /[\x00-\x1f\x7f]/u.test(scope)) {
     throw new TypeError('The OAuth scope must be scope URLs separated by spaces.');
@@ -413,9 +418,12 @@ export function createAccessTokenSource(
       }
     },
     invalidate(token) {
-      if (cached?.token === token) {
-        cached = undefined;
+      if (cached?.token !== token) {
+        // An older token, or one already dropped: the cached token stays.
+        return false;
       }
+      cached = undefined;
+      return true;
     },
   };
 }
