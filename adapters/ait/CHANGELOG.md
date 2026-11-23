@@ -1,5 +1,16 @@
 # @mpgd/adapter-ait
 
+## 0.23.3 — 2026-11-23
+
+### Patch changes
+
+- [959bddcc](https://github.com/imjlk/mpgd-kit/commit/959bddcc99710edd71d84b50d18446646346b74b) Align the tested Apps in Toss WebView SDK and CLI baseline on 3.10.0 in the adapter, generated AIT hosts and lite/Phaser starters. This release deprecates the optional `brand` config and adds `NavigationBar` accessory-button APIs; existing configs keep working. Existing games upgrade their game and wrapper pins together; Kit upgrades do not silently replace an uploaded game bundle. — Thanks @imjlk!
+- Updated dependencies: @mpgd/bridge@0.20.3, @mpgd/catalog@0.15.6, @mpgd/game-runtime@0.10.7, @mpgd/platform@0.38.0
+
+### Fixed
+
+- [169d43f9](https://github.com/imjlk/mpgd-kit/commit/169d43f95bab92881d976df909142fa88b57778f) An Apps in Toss checkout whose native error carries the documented `errorCode: 'USER_CANCELED'` and no usable `code` (none, an empty string, or a value that is not a string) now ends as a cancellation: `requestPurchase` answers `cancelled` (`USER_CANCELLED`) and the attempt marker is removed, so the same purchase key can open the order sheet again. Such an error used to answer `launched` with `AIT_IAP_NATIVE_PURCHASE_FAILED`, which left the attempt open, and the same key could not open the order sheet again for at least 30 minutes. The SDK reference reports checkout codes as `error.code`, and the in-app purchase guide also documents an `errorCode` property. Only that exact code counts, a non-empty string `code` on the error still decides alone, and an error that arrives after the checkout reported an order still keeps it pending, so message text, other codes and a paid or pending order are never read as a cancellation. A game that rewrote this error into `{ code: 'USER_CANCELED' }` before the adapter saw it can drop that workaround. — Thanks @imjlk!
+
 ## 0.23.2 — 2026-11-16
 
 ### Patch changes
