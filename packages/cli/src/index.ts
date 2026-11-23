@@ -2125,15 +2125,19 @@ const gameCommand = defineI18n({
             run: (ctx) => {
               const positionals = readLocalPositionals(ctx.positionals, ['game', 'icons', action]);
               const gameRoot = path.resolve(readRequiredPositional(positionals, 0, 'game'));
+              const targetsFile = path.join(gameRoot, 'mpgd.targets.json');
               const env = createTargetCommandEnv({
-                'targets-file': path.join(gameRoot, 'mpgd.targets.json'),
+                'targets-file': targetsFile,
                 'kit-path': ctx.values['kit-path'],
               });
-              const targets = readOptionalString(ctx.values.targets) ?? '';
+              const targets = readOptionalString(ctx.values.targets)
+                ?? listConfiguredIconTargets(env, targetsFile, action);
               const profile = readOptionalString(ctx.values.profile)
                 ?? (action === 'verify' ? 'production' : 'development');
 
-              runPnpm([`game:icons:${action}`, '--', targets, profile], env);
+              // No `--`: pnpm 11 and 12 hand it to the script, and kit icon
+              // runners before this fix read it as the target list.
+              runPnpm([`game:icons:${action}`, targets, profile], env);
             },
           }),
         ]),
@@ -5892,6 +5896,27 @@ function readConfiguredTargetMap(env: NodeJS.ProcessEnv): ConfiguredBuildTargets
   assertJsonObject(parsed.targets, `targets in ${file}`);
 
   return parsed.targets;
+}
+
+/**
+ * Lists every configured target for the kit icon runner. The runner also reads
+ * an empty list as every target, but only if that empty argument survives pnpm
+ * and the script shell. Kits from before the `--` fix accept this list too.
+ */
+function listConfiguredIconTargets(
+  env: NodeJS.ProcessEnv,
+  targetsFile: string,
+  action: string,
+): string {
+  const targets = Object.keys(readConfiguredTargetMap(env));
+
+  if (targets.length === 0) {
+    throw new Error(
+      `No targets are configured in ${targetsFile}; there are no icons to ${action}.`,
+    );
+  }
+
+  return targets.join(',');
 }
 
 function assertJsonObject(input: unknown, label: string): asserts input is Record<string, unknown> {

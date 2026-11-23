@@ -106,6 +106,22 @@ mpgd game icons verify . --targets reddit --profile production
 mpgd game icons inspect .
 ```
 
+Without `--targets`, a command covers every target in `mpgd.targets.json`. A
+game with no targets, or a `--targets` value that names none (such as `,`),
+gets an error rather than a run that checks nothing. `--profile` defaults to
+`production` for `verify` and to `development` otherwise. `generate` and
+`verify` print one line per target, and `inspect` prints each target's profile,
+canonical source digest, and outputs.
+
+The CLI runs the `--kit-path` checkout's `game:icons:<action>` script, which
+calls `tools/icons/run.ts <action> [targets] [profile]`. It passes the target
+list and the profile as plain arguments and names every configured target
+instead of passing an empty list, so an older kit checkout reads them the same
+way. Older CLIs passed `-- <targets> <profile>`, and pnpm 11 and 12 hand that
+`--` to the script; the runner skips one `--` directly after the action, so
+those CLIs work with a current kit checkout. The runner refuses any argument
+after the profile.
+
 Target builds generate and verify their selected profile automatically.
 
 Apps in Toss always generates and verifies the 600x600 console asset. With

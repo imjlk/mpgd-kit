@@ -25,6 +25,7 @@ import {
   verifyGeneratedTargetIcons,
 } from './generator';
 import { pixelSha256, sha256 } from './image';
+import { parseIconRunArguments } from './run-arguments';
 import {
   assertStagedWebIconEvidence,
   stageNativeIconResources,
@@ -34,6 +35,7 @@ import {
 const root = mkdtempSync(join(tmpdir(), 'mpgd-icons-'));
 
 try {
+  testRunArguments();
   await testSvgAndTargetMatrix(root);
   await testPngAndOverrides(root);
   await testAitConsoleBranding(root);
@@ -43,6 +45,66 @@ try {
   console.log('Icon pipeline tests passed.');
 } finally {
   rmSync(root, { recursive: true, force: true });
+}
+
+function testRunArguments(): void {
+  assert.deepEqual(parseIconRunArguments([]), {
+    action: 'generate',
+    targets: undefined,
+    profile: 'development',
+  });
+  assert.deepEqual(parseIconRunArguments(['verify']), {
+    action: 'verify',
+    targets: undefined,
+    profile: 'production',
+  });
+  // `mpgd game icons` passes every target and the profile without a separator.
+  assert.deepEqual(parseIconRunArguments(['inspect', 'reddit,web-preview', 'development']), {
+    action: 'inspect',
+    targets: ['reddit', 'web-preview'],
+    profile: 'development',
+  });
+  assert.deepEqual(parseIconRunArguments(['generate', ' reddit , ,ait ', 'production']), {
+    action: 'generate',
+    targets: ['reddit', 'ait'],
+    profile: 'production',
+  });
+  // Earlier CLIs ran `pnpm game:icons:<action> -- <targets> <profile>`, and
+  // pnpm 11 and 12 hand the `--` to the script.
+  assert.deepEqual(parseIconRunArguments(['verify', '--', '', 'development']), {
+    action: 'verify',
+    targets: undefined,
+    profile: 'development',
+  });
+  assert.deepEqual(parseIconRunArguments(['generate', '--', 'reddit', 'production']), {
+    action: 'generate',
+    targets: ['reddit'],
+    profile: 'production',
+  });
+  // An empty profile takes the action's default, as it does in the CLI.
+  assert.deepEqual(parseIconRunArguments(['verify', 'reddit', '']), {
+    action: 'verify',
+    targets: ['reddit'],
+    profile: 'production',
+  });
+  // Only one separator, directly after the action, is skipped.
+  assert.deepEqual(parseIconRunArguments(['generate', '--', '--']).targets, ['--']);
+  // A list that names no target must not pass as a run that checks nothing.
+  for (const blank of [',', ' ', ' , ']) {
+    assert.throws(
+      () => parseIconRunArguments(['verify', blank, 'production']),
+      /The icon target list names no target/u,
+    );
+  }
+  assert.throws(() => parseIconRunArguments(['publish']), /Unknown icon action: publish/u);
+  assert.throws(
+    () => parseIconRunArguments(['generate', 'reddit', 'production', '--force']),
+    /Unexpected icon arguments: --force/u,
+  );
+  assert.throws(
+    () => parseIconRunArguments(['generate', 'reddit', '--', 'production']),
+    /Unexpected icon arguments: production/u,
+  );
 }
 
 async function testAitConsoleBranding(parent: string): Promise<void> {
