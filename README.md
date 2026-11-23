@@ -193,14 +193,15 @@ starter manifests, and Apps in Toss MCP guidance.
 
 ## Package Map
 
-- `@mpgd/platform`: shared platform gateway surface.
+- `@mpgd/platform`: shared platform gateway surface, plus runtime-neutral
+  helpers such as the [bounded HTTP body readers](docs/GAME_SERVICES_BACKEND.md#bounded-http-bodies).
 - `@mpgd/bridge`: typed native bridge request/response protocol.
 - `@mpgd/adapter-browser`, `@mpgd/adapter-capacitor`, `@mpgd/adapter-ait`,
   `@mpgd/adapter-devvit`, `@mpgd/adapter-verse8`: target adapters.
 - `@mpgd/target-config`: target runtime, capability, release profile, and platform policy availability.
 - `@mpgd/catalog`: product catalog and ad placement config schemas plus sample JSON.
 - `@mpgd/i18n`: Paraglide-backed localized messages.
-- `@mpgd/analytics`: typed analytics events and sink helpers for platform integrations; optional [monetization observation](docs/MONETIZATION_OBSERVABILITY.md) across IAP, attendance and promotions.
+- `@mpgd/analytics`: typed analytics events and sink helpers for platform integrations; optional [monetization observation](docs/MONETIZATION_OBSERVABILITY.md) across IAP, attendance and promotions. The in-memory `createBufferedAnalyticsSink` keeps the latest 1,000 events by default (`capacity` sets the limit) and counts every event in `trackedCount`.
 - `@mpgd/tutorial`: headless tutorial director,
   platform-backed progress, optional Driver.js presentation, and debug helpers.
 - `@mpgd/game-runtime`: execution controls, scoped UI, lifecycle and action
@@ -632,4 +633,4 @@ Official references:
 
 ONE play uses the browser adapter's `/oneplay` entry point and a hosted, non-installable web artifact. It supports asynchronous host startup, synchronous exit checkpoints and server-gated monetization. See [ONE play integration](docs/ONEPLAY.md).
 
-Review requests: [cross-platform adapters, courtesy policy and support matrix](docs/REVIEWS.md).
+Review requests: [cross-platform adapters, courtesy policy, when to ask and support matrix](docs/REVIEWS.md).

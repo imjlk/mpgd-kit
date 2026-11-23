@@ -453,3 +453,87 @@ a client-supplied key as the account authority. `verifyAnonymousKey()` remains
 available for existence checks, but does not authenticate the caller. Codes are
 not retried automatically: an indeterminate request needs a fresh SDK code.
 Purchase account binding and ledger idempotency remain the application's job.
+
+## Apps in Toss promotions (Toss points)
+
+The same client makes the three partner API calls a game server uses to pay
+Toss points from a console promotion's budget:
+
+| Method | Route (`POST`) | Answer |
+| --- | --- | --- |
+| `issuePromotionKey({ recipient })` | `/api-partner/v1/apps-in-toss/promotion/execute-promotion/get-key` | `{ key }`, a new key on every call |
+| `executePromotion({ recipient, promotionCode, key, amount })` | `/api-partner/v1/apps-in-toss/promotion/execute-promotion` | `{ key }` once Toss accepted the payment |
+| `getPromotionExecutionResult({ recipient, promotionCode, key })` | `/api-partner/v1/apps-in-toss/promotion/execution-result` | `{ status }`: `SUCCESS`, `PENDING`, `FAILED`, or `NOT_FOUND` |
+
+`recipient` is the one identity header the API takes: `{ type: 'toss-user', key }`
+sends a Toss Login `userKey` as `x-toss-user-key`, and
+`{ type: 'anonymous', key }` sends a `User.getAnonymousKey` hash as
+`x-anon-key`. Resolve it on the server from the player's authenticated
+identity. `amount` is a positive safe integer. An invalid amount, key,
+promotion code, or recipient throws a `TypeError` before anything is sent.
+Every other failure is an `AppsInTossPartnerApiError` with the HTTP `status`
+and the partner API's `errorCode` as `code` (`TIMEOUT`, `ABORTED`, or
+`TRANSPORT_ERROR` when no answer arrived). Business errors such as `4109`
+(promotion not running), `4112` (promotion money too low), `4114` (amount over
+the promotion's per-payment limit), and `4095` (rate limit) arrive as HTTP 200
+with `resultType: 'FAIL'`. Besides the per-app limit, `executePromotion` is
+limited per user: 20 calls a minute in the API reference, 10 in the
+development guide. The calls never retry and never follow a redirect.
+They only move Toss points: deciding who may receive them and recording the
+grant stay in the game's ledger.
+
+### One key per grant
+
+The key, not the request, makes a payment idempotent. A key is valid for one
+hour after it was issued and pays at most once: executing a used key answers
+business error `4113` instead of paying again. A retry therefore cannot pay
+twice as long as it reuses the key:
+
+1. Record the grant (owner, recipient, promotion code, amount) in the ledger,
+   then issue a key and store it with the grant **before** the first
+   `executePromotion`. If storing the key fails, drop it: it was never
+   executed, and it expires unused.
+2. Execute with the stored key, one call per grant at a time. The
+   documentation does not say that concurrent calls with one key are
+   deduplicated.
+3. Settle the grant only from `getPromotionExecutionResult` with the same key:
+   - `SUCCESS`: paid.
+   - `PENDING`: accepted and still being processed. Ask again later; Apps in
+     Toss asks games to show the player the pending state meanwhile.
+   - `FAILED`: the payment failed and Toss rolled back the budget it used, so
+     the key paid nothing. Only this answer lets the grant start over with a
+     new key.
+   - `NOT_FOUND` (business error `4111`): Toss has no payment recorded for the
+     key yet. Execute again with the same key while it is valid, but not while
+     an earlier execute call could still be in progress: one that ended
+     without an answer (a timeout, an abort, a transport failure, an HTTP 5xx)
+     may still be processing at Toss. Back off well past the client timeout
+     first; the documentation gives no bound on that processing time.
+4. Whatever an `executePromotion` rejection says, the key's outcome is
+   unknown: a timeout, an abort, a transport failure, an HTTP 5xx, a
+   `resultType` other than `SUCCESS`, an answer that does not echo the key,
+   or any business error. That includes `4110` (Toss could not pay because of
+   an internal error, which its error table says to retry), `4095` (rate
+   limit), and `4113`, which also covers a retracted payment. A business error
+   answered to a retry describes the retry, not the earlier call. Do not issue
+   a new key: read the result (step 3), and execute again only with the same
+   key.
+
+The Apps in Toss error table says to issue a new key after `4113`. That is for
+a deliberate second payment to the same user. After an execute call whose
+answer was lost, `4113` means that call reached Toss, and a new key would pay
+again.
+
+The documentation does not say what execute or the result answers once a
+key's hour has passed. A grant whose key reached neither `SUCCESS` nor `FAILED`
+within that hour needs reconciling outside this client before it gets a new
+key.
+
+Test with the console's test promotion: its code carries a `TEST_` prefix and
+moves no real points, and Apps in Toss requires at least one successful test
+call before the promotion can start. The documentation places these server
+calls under non-game mini apps; a game can also pay through the SDK's
+`grantPromotionRewardForGame`, which this client does not cover. Sources: the
+[promotion API reference](https://developers-apps-in-toss.toss.im/api/promotion.md)
+and the server section of the
+[promotion development guide](https://developers-apps-in-toss.toss.im/documentation/common/growth/promotion.md).

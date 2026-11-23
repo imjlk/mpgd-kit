@@ -157,7 +157,8 @@ export class PlayScene extends Phaser.Scene {
       this.scoreText.setText(t(this.context.locale, 'score', { score: this.state.score }));
     }
 
-    const analyticsCount = this.context.analyticsSink.events.length;
+    // Every tracked event, including those the sink's capacity has dropped.
+    const analyticsCount = this.context.analyticsSink.trackedCount;
 
     if (analyticsCount !== this.lastAnalyticsCount) {
       this.lastAnalyticsCount = analyticsCount;

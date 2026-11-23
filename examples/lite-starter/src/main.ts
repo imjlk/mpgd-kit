@@ -66,7 +66,10 @@ async function bootstrap(options: { readonly monetization?: StarterMonetizationP
         runtime.effectiveConfig?.localization.fallbackLocale
         ?? runtime.config.localization.fallbackLocale,
     });
-    const analyticsSink = createBufferedAnalyticsSink();
+    // Nothing sends these events yet. The sink keeps only the latest 100 in memory for debug
+    // views, so a long session never holds every event; `trackedCount` still counts them all.
+    // To deliver events, give the reporter and the game services a sink of your own.
+    const analyticsSink = createBufferedAnalyticsSink({ capacity: 100 });
     const analyticsSessionId = createClientId('session');
     const analytics = createAnalyticsReporter({
       target: platform.target,

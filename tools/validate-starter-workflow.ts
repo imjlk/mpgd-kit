@@ -1,11 +1,14 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 
+import { parse as parseYaml } from 'yaml';
+
 import {
   microsoftStoreBlockEnd,
   microsoftStoreBlockStart,
   microsoftStoreDocumentationAnchors,
 } from '../packages/cli/src/microsoft-store-starter';
+import { checkDevvitPackageExtensions } from './workspace/devvit-package-extensions';
 
 interface StarterAgentManifest {
   readonly id?: unknown;
@@ -336,6 +339,7 @@ validatePhaserTemplateDevvitPostOperations();
 validatePhaserTemplateDevvitBridge();
 validatePhaserTemplateDevvitViewModes();
 validatePhaserTemplateDevvitVitePlugin();
+validateDevvitPackageExtensions();
 validatePhaserTemplateBuildGateways();
 validatePhaserTemplateCommerceWiring();
 validatePhaserTemplateRuntimeTargets();
@@ -2349,6 +2353,39 @@ function validatePhaserTemplateDevvitVitePlugin(): void {
     }
   }
 
+}
+
+/**
+ * The kit root and the game template declare the packageExtensions the pinned
+ * Devvit release needs, keyed on that release, so a Devvit bump cannot leave
+ * them on the previous version (tools/workspace/devvit-package-extensions.ts).
+ */
+function validateDevvitPackageExtensions(): void {
+  for (const path of [
+    'pnpm-workspace.yaml',
+    'packages/cli/templates/phaser-game/pnpm-workspace.yaml',
+  ]) {
+    const initialFailureCount = failures.length;
+    // The template renders this placeholder to extra workspace globs or nothing.
+    const content = readText(path).replaceAll('__PNPM_WORKSPACE_KIT_PACKAGES__', '');
+
+    if (failures.length > initialFailureCount) {
+      continue;
+    }
+
+    let workspace: unknown;
+    try {
+      workspace = parseYaml(content) as unknown;
+    } catch (error) {
+      failures.push(
+        `${path}: failed to parse YAML: ${error instanceof Error ? error.message : String(error)}.`,
+      );
+      continue;
+    }
+    failures.push(
+      ...checkDevvitPackageExtensions({ path, workspace, devvitVersion: expectedDevvitVersion }),
+    );
+  }
 }
 
 function assertTransparentAitNavigation(

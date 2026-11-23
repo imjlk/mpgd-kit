@@ -170,6 +170,23 @@ It keeps the server authoritative and adds these recovery rules:
   - the acknowledgement record holds at most 32 orders;
   - the completed index keeps the 64 most recent keys as bookkeeping only;
   - the restore cursor is a single key.
+- **Cancellation.** `requestPurchase` answers `cancelled` (`USER_CANCELLED`)
+  only when the checkout's `onError` arrives before the grant callback
+  reported an order, and its error is an `AbortError`, has a `code` that
+  contains `CANCEL` or `ABORT`, or has no `code` and an `errorCode` of exactly
+  `USER_CANCELED`. The SDK reference reports checkout codes as `error.code`,
+  and the in-app purchase guide also documents an `errorCode` property. A
+  non-empty string `code` decides alone; a `code` that is empty or not a
+  string counts as no `code`, as it does for the diagnostic's
+  `providerCode`. Message text,
+  any other `errorCode` and a value that is not an error object are never a
+  cancellation. A cancellation removes the attempt marker, so the same client
+  key can open a new order sheet. Every other `onError` before an order keeps
+  the marker and answers `launched` (`AIT_IAP_NATIVE_PURCHASE_FAILED`). Once
+  the callback reported an order, even a cancellation keeps the marker and
+  answers `launched` (`AIT_IAP_GRANT_PENDING`), so a paid or pending order is
+  never read as a cancellation; the partner grant failure below is the one
+  error that recovers such an order directly.
 - **Partner grant failure.** When the SDK reports
   `PRODUCT_NOT_GRANTED_BY_PARTNER` for an order the callback saw, the bridge
   verifies that exact order once more (`source: 'pending-order-restore'`),
@@ -413,6 +430,15 @@ Bind the certificate in deployment configuration with a Wrangler
 do not copy a PEM, private key, or certificate id into the browser bundle. Local
 Workers runtimes do not emulate the mTLS handshake, so inject a fake fetcher in
 unit tests and run a staging call with the real binding before release.
+
+The same client pays promotion (Toss points) rewards over the binding with
+`issuePromotionKey`, `executePromotion`, and `getPromotionExecutionResult`.
+The payment key, not the request, makes a payout idempotent: store one key per
+grant before executing it, settle the grant from the execution result, and
+retry only with the same key, as the game-services README's
+[One key per grant](https://github.com/imjlk/mpgd-kit/blob/main/packages/game-services/README.md#one-key-per-grant)
+describes, so a retry cannot pay twice. Test with the console's `TEST_`
+promotion code, which moves no real points.
 
 The order-status API documents offset-free `statusDeterminedAt` values as KST.
 The verifier parses that exact calendar form as UTC+09:00 and also accepts

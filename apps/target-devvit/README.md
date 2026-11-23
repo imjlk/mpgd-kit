@@ -8,6 +8,10 @@ Update the exact versions and lockfile, then rebuild and run target checks befor
 
 Devvit 0.15.4 is the tested baseline. Future SDK releases require their own compatibility and dependency-policy review. See the [official changelog](https://developers.reddit.com/docs/changelog).
 
+Some Devvit 0.15.4 packages import modules they do not declare: `@devvit/media` imports `@devvit/shared-types`, `@devvit/protos` imports `long`, and the devvit.json entry template that `@devvit/build-pack` bundles for `devvit upload` and `devvit playtest` imports `@devvit/public-api` and `@devvit/scheduler`. A hoisted `node_modules` resolves them by accident. pnpm's global virtual store and other isolated layouts do not, so `pnpm build:devvit` stops on an unresolved import and the upload bundle cannot be built.
+
+The root `pnpm-workspace.yaml` declares these as `packageExtensions` keyed on the pinned Devvit version, and the game template ships the same block to generated games. A Devvit bump moves the keys and their Devvit versions together with the `@devvit/web`, `@devvit/start`, and `devvit` pins: `pnpm validate:starter-workflow`, part of `pnpm check`, fails on a missing or stale key. `tools/workspace/devvit-package-extensions.ts` describes the import audit behind the list and the test-only imports it leaves out; repeat that audit for a new Devvit release.
+
 Reddit Devvit Web wrapper for the Phaser game target.
 
 Custom wrappers may enable `permissions.realtime` for multiplayer or live updates.

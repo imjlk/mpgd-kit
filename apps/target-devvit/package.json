@@ -4,8 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "prepare:icon": "pnpm --dir ../.. game:icons:generate -- reddit development",
-    "prepare:icon:production": "pnpm --dir ../.. game:icons:generate -- reddit production",
+    "prepare:icon": "pnpm --dir ../.. game:icons:generate reddit development",
+    "prepare:icon:production": "pnpm --dir ../.. game:icons:generate reddit production",
     "dev": "pnpm run check:sdk && pnpm run prepare:icon && devvit playtest",
     "build": "pnpm --dir ../.. build:target reddit production",
     "whoami": "devvit whoami",

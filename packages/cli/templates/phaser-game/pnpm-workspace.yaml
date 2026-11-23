@@ -13,5 +13,26 @@ allowBuilds:
   protobufjs: true
   sharp: true
   workerd: true
+# Devvit 0.15.4 packages import these at runtime without declaring them. A
+# hoisted node_modules resolves them by accident; pnpm's global virtual store
+# and other isolated layouts fail the Devvit build or upload instead. When you
+# change the Devvit pins in apps/target-devvit/package.json, move these keys and
+# versions to the same release (see apps/target-devvit/README.md).
+packageExtensions:
+  # `devvit upload` and `devvit playtest` bundle build-pack's devvit.json entry
+  # template, which imports these; build-pack lists them only as devDependencies.
+  '@devvit/build-pack@0.15.4':
+    dependencies:
+      '@devvit/public-api': 0.15.4
+      '@devvit/scheduler': 0.15.4
+  # MediaClient imports @devvit/shared-types, which media lists only as a devDependency.
+  '@devvit/media@0.15.4':
+    dependencies:
+      '@devvit/shared-types': 0.15.4
+  # Generated protobuf modules, the Redis client among them, import long
+  # directly; 5.3.2 is the long the kit resolves for protos' protobufjs.
+  '@devvit/protos@0.15.4':
+    dependencies:
+      long: 5.3.2
 overrides:
   '@xmldom/xmldom': '0.9.12'

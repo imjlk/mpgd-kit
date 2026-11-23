@@ -10,20 +10,13 @@ import {
   verifyExistingTargetIcons,
   verifyGeneratedTargetIcons,
 } from './generator';
+import { parseIconRunArguments } from './run-arguments';
 import { stageWrapperIcon } from './staging';
 
-const [action = 'generate', targetList = '', requestedProfile] = process.argv.slice(2);
-
-if (action !== 'generate' && action !== 'verify' && action !== 'inspect') {
-  throw new Error(`Unknown icon action: ${action}`);
-}
-
-const profile = requestedProfile ?? (action === 'verify' ? 'production' : 'development');
+const { action, targets, profile } = parseIconRunArguments(process.argv.slice(2));
 
 const loaded = loadPlatformTargetsConfig();
-const requestedTargets = targetList.length === 0
-  ? Object.keys(loaded.config.targets)
-  : targetList.split(',').map((target) => target.trim()).filter((target) => target.length > 0);
+const requestedTargets = targets ?? Object.keys(loaded.config.targets);
 
 for (const targetName of requestedTargets) {
   const target = loaded.config.targets[targetName];
@@ -55,10 +48,11 @@ for (const targetName of requestedTargets) {
       );
     }
 
-    console.log(`Generated ${targetName} icons at ${generated.outputDir}`);
+    // console.info: strip.config.js removes console.log when ttsx or ttsc compiles tools.
+    console.info(`Generated ${targetName} icons at ${generated.outputDir}`);
   } else if (action === 'verify') {
-    console.log(`Verified ${targetName} icons at ${generated.outputDir}`);
+    console.info(`Verified ${targetName} icons at ${generated.outputDir}`);
   } else {
-    console.log(inspectGeneratedTargetIcons(generated));
+    console.info(inspectGeneratedTargetIcons(generated));
   }
 }
