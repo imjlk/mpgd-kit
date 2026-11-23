@@ -189,7 +189,7 @@ export interface CreateFcmDeliveryProviderInput {
   readonly subtle?: SubtleCrypto;
   /** Per HTTP request; 10 seconds by default. */
   readonly timeoutMs?: number;
-  /** A shared token source, for example one per isolate. */
+  /** A shared token source for `fcmMessagingScope`, for example one per isolate. */
   readonly tokens?: FcmAccessTokenSource;
 }
 

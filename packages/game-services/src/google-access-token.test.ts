@@ -197,6 +197,12 @@ function assertionOf(exchange: Exchange | undefined): string {
     () => createGoogleAccessTokenSource({ serviceAccount, scope: `${otherScope}\n` }),
     /OAuth scope/u,
   );
+  for (const timeoutMs of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.throws(
+      () => createGoogleAccessTokenSource({ serviceAccount, scope: otherScope, timeoutMs }),
+      /timeout must be a positive number/u,
+    );
+  }
 }
 
 // Concurrent callers share one token request; a caller's signal ends only its own wait.
@@ -247,6 +253,38 @@ function assertionOf(exchange: Exchange | undefined): string {
   await assert.rejects(hung.get(), { code: 'TOKEN_NETWORK_ERROR', retryable: true });
   assert.ok(Date.now() - started < 5_000, 'a silent token endpoint answers at the timeout');
   assert.equal(silent.exchanges[0]?.init.signal?.aborted, true, 'the request is told to stop');
+  // An answer that comes after the deadline anyway is cancelled, not left open.
+  let answerLate: ((response: Response) => void) | undefined;
+  let lateCancelled = false;
+  const late = fakeGoogle(
+    () =>
+      new Promise<Response>((resolve) => {
+        answerLate = resolve;
+      }),
+  );
+  await assert.rejects(
+    createGoogleAccessTokenSource({
+      serviceAccount,
+      scope: otherScope,
+      fetch: late.fetch,
+      timeoutMs: 50,
+    }).get(),
+    { code: 'TOKEN_NETWORK_ERROR' },
+  );
+  while (answerLate === undefined) {
+    await tick();
+  }
+  answerLate(
+    new Response(
+      new ReadableStream<Uint8Array>({
+        cancel() {
+          lateCancelled = true;
+        },
+      }),
+    ),
+  );
+  await tick();
+  assert.equal(lateCancelled, true, 'a late answer is cancelled');
   // A body that stalls after its first bytes is bounded by the same timeout, and cancelled.
   let cancelled = false;
   const stalling = fakeGoogle(
@@ -305,6 +343,44 @@ function assertionOf(exchange: Exchange | undefined): string {
   // The abandoned request's failure does not displace the newer token.
   assert.equal(await tokens.get(), 'token-2');
   assert.equal(google.exchanges.length, 2);
+}
+
+// A caller already waiting on such a request stops at its deadline by its own
+// timer, and drops the request so the next caller starts a new one.
+{
+  let clock = start;
+  let answerFirst: ((response: Response) => void) | undefined;
+  const google = fakeGoogle((_exchange, count) =>
+    count === 1
+      ? new Promise<Response>((resolve) => {
+          answerFirst = resolve;
+        })
+      : Response.json({ access_token: `token-${count}`, expires_in: 3600 }),
+  );
+  const tokens = createGoogleAccessTokenSource({
+    serviceAccount,
+    scope: otherScope,
+    fetch: google.fetch,
+    now: () => clock,
+    // The request's own timer stays out of this test; the waiter's ends it.
+    timeoutMs: 60_000,
+  });
+  const first = tokens.get();
+  while (answerFirst === undefined) {
+    await tick();
+  }
+  // By the source's clock the request is 50 ms from being given up.
+  clock += 60_950;
+  const started = Date.now();
+  await assert.rejects(tokens.get(), { code: 'TOKEN_NETWORK_ERROR', retryable: true });
+  assert.ok(Date.now() - started < 5_000, 'a waiter is released at the deadline');
+  // No failure is remembered: the next caller starts a new request at once.
+  assert.equal(await tokens.get(), 'token-2');
+  assert.equal(google.exchanges.length, 2);
+  // The dropped request answers after all: its caller gets that token, the cache keeps the newer.
+  answerFirst(Response.json({ access_token: 'late-token', expires_in: 3600 }));
+  assert.equal(await first, 'late-token');
+  assert.equal(await tokens.get(), 'token-2');
 }
 
 // Answers are bounded in size, and an oversized body is cancelled.

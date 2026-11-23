@@ -28,9 +28,11 @@ const defaultTimeoutMs = 10_000;
 /**
  * A token request still unsettled this long after its timeout is given up:
  * its timer did not run (the request context that started it ended), and
- * later callers would otherwise wait on it for ever.
+ * its callers would otherwise wait on it for ever.
  */
 const abandonedMintGraceMs = 1_000;
+/** The longest delay a timer takes; a longer one fires at once. */
+const maxTimerDelayMs = 2_147_483_647;
 /** A token answer is about 1 KiB; a larger body is not one. */
 const maxTokenResponseBytes = 16_384;
 /** Google's access tokens are about 2 KiB; this bounds what goes in a header. */
@@ -52,10 +54,12 @@ export interface GoogleServiceAccount {
 export interface GoogleAccessTokenSource {
   /**
    * A valid access token, from the cache or minted. Concurrent callers share
-   * one token request. A token is refreshed five minutes before it expires;
-   * until then it still answers while a refresh is under way or failing.
-   * `signal` ends only this caller's wait, with the signal's reason: an
-   * aborted signal starts no request, and a shared request goes on for the
+   * one token request. A token is refreshed five minutes before it expires,
+   * and answers until it expires while that refresh is under way or failing.
+   * No caller waits longer than the timeout and a second, even on a request
+   * whose Worker request context ended before it answered. `signal` ends only
+   * this caller's wait, with the signal's reason: an already aborted signal
+   * rejects at once, without a request, and a shared request goes on for the
    * other callers. It does not use `this`, so it can be passed on its own
    * (`getAccessToken: tokens.get`).
    */
@@ -142,11 +146,13 @@ interface PendingMint {
  * The access token source for `input.scope`. The private key, the signed
  * assertion, and the token live only in this closure: they are never logged,
  * persisted, or put in an error. Each token request is bounded by
- * `timeoutMs` and its answer by 16 KiB; a redirect is refused, never
- * followed. A failure becomes `errorOf(failure)` and answers for a while (30
- * seconds for a refused grant or an unusable key, a few seconds, or what
- * `Retry-After` asked up to a minute, for an outage) without asking again, so
- * a fan-out does not ask Google once per caller.
+ * `timeoutMs` and its answer by 16 KiB, and each caller's wait by
+ * `timeoutMs` and a second; a redirect is refused, never followed, and an
+ * answer that comes too late is cancelled. A failure becomes
+ * `errorOf(failure)` and answers for a while (30 seconds for a refused grant
+ * or an unusable key, a few seconds, or what `Retry-After` asked up to a
+ * minute, for an outage) without asking again, so a fan-out does not ask
+ * Google once per caller.
  */
 export function createAccessTokenSource(
   input: CreateGoogleAccessTokenSourceInput,
@@ -160,10 +166,13 @@ export function createAccessTokenSource(
   if (typeof scope !== 'string' || scope.trim() === '' || /[\x00-\x1f\x7f]/u.test(scope)) {
     throw new TypeError('The OAuth scope must be scope URLs separated by spaces.');
   }
+  const timeoutMs = input.timeoutMs ?? defaultTimeoutMs;
+  if (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new TypeError('The token request timeout must be a positive number of milliseconds.');
+  }
   const fetcher: FetchLike = input.fetch ?? ((url, init) => globalThis.fetch(url, init));
   const now = input.now ?? Date.now;
   const subtle = input.subtle ?? globalThis.crypto.subtle;
-  const timeoutMs = input.timeoutMs ?? defaultTimeoutMs;
   let signingKey: Promise<CryptoKey> | undefined;
   let cached: MintedToken | undefined;
   let failed: { readonly error: Error; readonly until: number } | undefined;
@@ -184,21 +193,24 @@ export function createAccessTokenSource(
     issuedAt: number,
     signal: AbortSignal,
   ): Promise<MintResult> => {
+    let request: Promise<Response> | undefined;
     let response: Response;
     try {
-      // Raced as well as signalled: an injected fetch may ignore the signal.
-      response = await untilAborted(
-        fetcher(googleTokenEndpoint, {
-          method: 'POST',
-          headers: { 'content-type': 'application/x-www-form-urlencoded' },
-          body: new URLSearchParams({ grant_type: jwtBearerGrantType, assertion }).toString(),
-          // A followed redirect would send the assertion on; a 3xx fails below.
-          redirect: 'manual',
-          signal,
-        }),
+      request = fetcher(googleTokenEndpoint, {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ grant_type: jwtBearerGrantType, assertion }).toString(),
+        // A followed redirect would send the assertion on; a 3xx fails below.
+        redirect: 'manual',
         signal,
-      );
+      });
+      // Raced as well as signalled: an injected fetch may ignore the signal.
+      response = await untilAborted(request, signal);
     } catch {
+      // An answer that comes after the deadline is cancelled when it comes.
+      void request
+        ?.then((late) => late.body?.cancel(), () => undefined)
+        .catch(() => undefined);
       // A timeout or a dropped connection. The error is not kept: it can quote the request.
       return mintFailure('TOKEN_NETWORK_ERROR', true);
     }
@@ -242,35 +254,45 @@ export function createAccessTokenSource(
     return { ok: true, minted: { token, refreshAt: expiresAt - tokenRefreshMarginMs, expiresAt } };
   };
   const mint = async (): Promise<MintResult> => {
-    const issuedAt = Math.floor(now() / 1000);
-    let assertion: string;
-    try {
-      assertion = await signJwt(subtle, await key(), {
-        header: {
-          alg: 'RS256',
-          typ: 'JWT',
-          ...(serviceAccount.privateKeyId === undefined ? {} : { kid: serviceAccount.privateKeyId }),
-        },
-        claims: {
-          iss: serviceAccount.clientEmail,
-          scope,
-          aud: googleTokenEndpoint,
-          iat: issuedAt,
-          exp: issuedAt + tokenLifetimeSeconds,
-        },
-      });
-    } catch (error) {
-      // A key that cannot sign is a configuration error, never retried as an
-      // outage. The cause says which step failed; it never holds the key.
-      return { ok: false, failure: { code: 'TOKEN_KEY_UNUSABLE', retryable: false, cause: error } };
-    }
     // A timer, not AbortSignal.timeout: the deadline also bounds a fetch that
     // ignores its signal, and the timer is cleared once the request settles.
+    // It starts with the mint, so the request is given up when `start` says.
     const deadline = new AbortController();
     const timer = setTimeout(() => {
       deadline.abort();
-    }, timeoutMs);
+    }, timerDelayOf(timeoutMs));
     try {
+      const issuedAt = Math.floor(now() / 1000);
+      let assertion: string;
+      try {
+        assertion = await signJwt(subtle, await key(), {
+          header: {
+            alg: 'RS256',
+            typ: 'JWT',
+            ...(serviceAccount.privateKeyId === undefined
+              ? {}
+              : { kid: serviceAccount.privateKeyId }),
+          },
+          claims: {
+            iss: serviceAccount.clientEmail,
+            scope,
+            aud: googleTokenEndpoint,
+            iat: issuedAt,
+            exp: issuedAt + tokenLifetimeSeconds,
+          },
+        });
+      } catch (error) {
+        // A key that cannot sign is a configuration error, never retried as an
+        // outage. The cause says which step failed; it never holds the key.
+        return {
+          ok: false,
+          failure: { code: 'TOKEN_KEY_UNUSABLE', retryable: false, cause: error },
+        };
+      }
+      if (deadline.signal.aborted) {
+        // Signing took the whole timeout: no request is sent.
+        return mintFailure('TOKEN_NETWORK_ERROR', true);
+      }
       return await exchange(assertion, issuedAt, deadline.signal);
     } finally {
       clearTimeout(timer);
@@ -307,11 +329,50 @@ export function createAccessTokenSource(
     );
     return { token, abandonAt };
   };
+  /**
+   * The shared request's token for one caller, who stops waiting when its
+   * signal aborts or when the request is past `abandonAt`. On Workers a
+   * request whose context ended (its first caller gave up) never settles and
+   * its own timer never runs; this caller's timer runs in this caller's
+   * context, and drops the request so the next caller starts a new one.
+   */
+  const waitFor = (entry: PendingMint, signal: AbortSignal | undefined): Promise<string> =>
+    new Promise<string>((resolve, reject) => {
+      const stop = (): void => {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', abort);
+      };
+      const abort = (): void => {
+        stop();
+        reject(signal?.reason);
+      };
+      const timer = setTimeout(
+        () => {
+          stop();
+          if (pending === entry) {
+            pending = undefined;
+          }
+          reject(options.errorOf({ code: 'TOKEN_NETWORK_ERROR', retryable: true }));
+        },
+        timerDelayOf(entry.abandonAt - now()),
+      );
+      signal?.addEventListener('abort', abort, { once: true });
+      entry.token.then(
+        (token) => {
+          stop();
+          resolve(token);
+        },
+        (error: unknown) => {
+          stop();
+          reject(error);
+        },
+      );
+    });
 
   return {
     async get(signal) {
       if (signal !== undefined && isAborted(signal)) {
-        // A caller that already gave up starts no request.
+        // A caller that already gave up starts no request, even with a token cached.
         throw signal.reason;
       }
       const at = now();
@@ -338,7 +399,7 @@ export function createAccessTokenSource(
       }
       pending ??= start();
       // The caller's signal ends its own wait, never the shared request.
-      const minted = signal === undefined ? pending.token : untilAborted(pending.token, signal);
+      const minted = waitFor(pending, signal);
       if (usable === undefined) {
         return minted;
       }
@@ -452,6 +513,11 @@ async function readBoundedJson(response: Response, signal: AbortSignal): Promise
 /** Read through a call, so a check before an `await` does not narrow one after it. */
 function isAborted(signal: AbortSignal): boolean {
   return signal.aborted;
+}
+
+/** A timer delay: no less than zero, and no more than a timer takes. */
+function timerDelayOf(ms: number): number {
+  return Math.min(Math.max(ms, 0), maxTimerDelayMs);
 }
 
 /** `promise`, or the signal's reason as soon as it aborts, whichever comes first. */

@@ -31,8 +31,8 @@ request in time (`timeoutMs`, 10 seconds) and response size (16 KiB), refuses
 redirects, and fails with a `GoogleAccessTokenError` that holds a code, never
 the key, the signed assertion, or a token.
 `createGooglePlayPublisherAccessTokenSource` is it with
-`googlePlayPublisherScope`, for `createGooglePlayPublisherClient({ getAccessToken:
-tokens.get, invalidateAccessToken: tokens.invalidate })`, and FCM's
+`googlePlayPublisherScope`: pass its `get` as the publisher client's
+`getAccessToken` and its `invalidate` as `invalidateAccessToken`. FCM's
 `createFcmAccessTokenSource` is it with the FCM scope. Backend only. See
 [Google Play one-time products](../../docs/GAME_SERVICES_BACKEND.md#google-play-one-time-products).
 

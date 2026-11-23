@@ -956,14 +956,16 @@ The source caches a token in memory until five minutes before it expires and
 shares one token request between concurrent callers. A caller's signal ends
 only its own wait. Each token request is bounded by `timeoutMs` (10 seconds by
 default), response body included, and its answer by 16 KiB; a redirect is
-refused, never followed. A failure rejects with a `GoogleAccessTokenError`
-whose `code` says why (`TOKEN_KEY_UNUSABLE`, `TOKEN_INVALID_GRANT`,
-`TOKEN_NETWORK_ERROR`, ...) and whether a retry can help (`retryable`), and
-the source answers with it for a while (30 seconds for a refused grant, a few
-seconds for an outage) before asking Google again. The error carries that code
-and, for an unusable key, a `cause` naming the step that failed: never the
-key, the signed assertion, a token, or Google's error description.
-The source is `createGoogleAccessTokenSource` from
+refused, never followed. No caller waits longer than `timeoutMs` and a second,
+even on a request started by a Worker request that ended before Google
+answered; the next caller then starts a new request. A failure rejects with a
+`GoogleAccessTokenError` whose `code` says why (`TOKEN_KEY_UNUSABLE`,
+`TOKEN_INVALID_GRANT`, `TOKEN_NETWORK_ERROR`, ...) and whether a retry can
+help (`retryable`), and the source answers with it for a while (30 seconds for
+a refused grant, a few seconds for an outage) before asking Google again. The
+error carries that code and, for an unusable key, a `cause` naming the step
+that failed: never the key, the signed assertion, a token, or Google's error
+description. The source is `createGoogleAccessTokenSource` from
 `@mpgd/game-services/google-access-token` with the Play scope; the same
 function serves any other Google API scope, and the FCM provider's
 `createFcmAccessTokenSource` is it with the FCM scope. The service account

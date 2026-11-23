@@ -813,6 +813,11 @@ const request: NotificationRemoteDeliveryRequest = {
       assert.ok(error instanceof GoogleAccessTokenError);
       assert.equal(error.name, 'FcmAccessTokenError');
       assert.equal(error.message, 'FCM access token request failed: TOKEN_INVALID_GRANT.');
+      // The stack names FCM too: V8 writes its first line when it is first read.
+      assert.match(
+        String(error.stack),
+        /^FcmAccessTokenError: FCM access token request failed: TOKEN_INVALID_GRANT\.\n/u,
+      );
       assert.deepEqual(
         { code: error.code, retryable: error.retryable, retryAfter: error.retryAfterSeconds },
         { code: 'TOKEN_INVALID_GRANT', retryable: false, retryAfter: undefined },
@@ -830,6 +835,11 @@ const request: NotificationRemoteDeliveryRequest = {
     await createFcmDeliveryProvider({ serviceAccount, fetch: refusing.fetch, now, tokens: shared })
       .send(request),
     { status: 'rejected', reason: 'configuration', providerCode: 'TOKEN_INVALID_GRANT' },
+  );
+  // A timeout that cannot bound a token request is refused when the provider is made.
+  assert.throws(
+    () => createFcmDeliveryProvider({ serviceAccount, timeoutMs: 0 }),
+    /timeout must be a positive number/u,
   );
   // The key's own messages still name FCM.
   await assert.rejects(

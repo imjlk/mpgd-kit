@@ -74,9 +74,10 @@ export class GoogleAccessTokenError extends Error {
  * account's key. The key, the signed assertion, and the token live only in
  * this source's memory: they are never logged, persisted, or put in an
  * error. Concurrent callers share one token request, which `timeoutMs` (10
- * seconds by default) bounds with its response body; an answer over 16 KiB, a
- * redirect, or a token that is not a bearer token is refused. A token is
- * refreshed five minutes before it expires. A failure rejects with a
+ * seconds by default) bounds with its response body, and no caller waits
+ * longer than that and a second; an answer over 16 KiB, a redirect, or a
+ * token that is not a bearer token is refused. A token is refreshed five
+ * minutes before it expires. A failure rejects with a
  * `GoogleAccessTokenError` and answers for a while without asking Google
  * again (30 seconds for a refused grant or an unusable key, a few seconds for
  * an outage). Keep one source per isolate and account.
