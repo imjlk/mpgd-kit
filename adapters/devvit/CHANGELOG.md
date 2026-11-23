@@ -1,5 +1,15 @@
 # @mpgd/adapter-devvit
 
+## 0.15.6 — 2026-11-23
+
+### Changed
+
+- [2fc7dd8f](https://github.com/imjlk/mpgd-kit/commit/2fc7dd8fcc8cb2c528ed81f11cd05de7c18ffeaf) `@devvit/web` is now pinned to 0.15.4, the current stable Devvit SDK, so a game target that pins Devvit 0.15.4 resolves one SDK version and passes `mpgd kit devvit-check`. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/bridge@0.20.3, @mpgd/game-services@0.37.0, @mpgd/platform@0.38.0
+
 ## 0.15.5 — 2026-11-16
 
 ### Changed

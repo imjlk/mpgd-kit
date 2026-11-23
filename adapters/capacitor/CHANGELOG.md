@@ -1,5 +1,15 @@
 # @mpgd/adapter-capacitor
 
+## 0.19.8 — 2026-11-23
+
+### Changed
+
+- [f2e085b8](https://github.com/imjlk/mpgd-kit/commit/f2e085b8d1a252da51ee705e1e98d3eb78281ac8) The `@capacitor/app` dependency moves from 8.1.1 to 8.1.2, which silences an iOS compiler warning in `getAppLanguage`. The peer ranges are unchanged (`@capacitor/core` ^8.5.1, the optional Firebase Messaging and Crashlytics plugins ^8.5.2); the adapter is now tested with Capacitor 8.6.2 and the Firebase plugins 8.6.0. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/bridge@0.20.3, @mpgd/capacitor-game-services@0.9.12, @mpgd/game-runtime@0.10.7, @mpgd/game-services@0.37.0, @mpgd/platform@0.38.0, @mpgd/target-config@0.24.14
+
 ## 0.19.7 — 2026-11-16
 
 ### Patch changes

@@ -1,5 +1,15 @@
 # @mpgd/capacitor-storekit
 
+## 0.7.8 — 2026-11-23
+
+### Changed
+
+- [f2e085b8](https://github.com/imjlk/mpgd-kit/commit/f2e085b8d1a252da51ee705e1e98d3eb78281ac8) The Swift package now requires `capacitor-swift-pm` from 8.5.1 up to the next major release instead of exactly 8.5.2, matching the `@capacitor/core` ^8.5.1 peer. A shell on Capacitor 8.6.2, which new games get, resolves the plugin; before, Swift Package Manager refused every shell not on exactly 8.5.2. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: @mpgd/adapter-capacitor@0.19.8, @mpgd/bridge@0.20.3, @mpgd/game-services@0.37.0, @mpgd/platform@0.38.0
+
 ## 0.7.7 — 2026-11-16
 
 ### Patch changes
