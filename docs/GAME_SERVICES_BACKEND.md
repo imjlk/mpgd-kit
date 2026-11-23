@@ -795,11 +795,15 @@ client, such as a game reading its backend's answer or a Worker reading a
 store provider's. Each takes `maximumBytes` and optional `timeoutMs` (10
 seconds by default) and `signal`:
 
-- The limit applies twice: a declared `Content-Length` over it is refused
-  before any byte is read, and the bytes the stream yields are counted as they
-  arrive, so a chunked or mislabelled body is refused before it is buffered.
-  A client counts the bytes after the runtime decodes a `Content-Encoding`
-  such as gzip, so the decoded size is what is bounded.
+- The limit applies twice. A declared `Content-Length` over it is refused,
+  for a request before any byte is read and for a response once its first
+  byte arrives. Then the bytes the stream yields are counted as they arrive,
+  so a chunked or mislabelled body is refused before it is buffered. A client
+  counts the bytes after the runtime decodes a `Content-Encoding` such as
+  gzip, so the decoded size is what is bounded. A message whose body is
+  missing or empty, such as a GET request or a response to HEAD or a 304,
+  reads as empty whatever its `Content-Length` describes; Chromium and WebKit
+  give a response to HEAD an empty body rather than none.
 - The timeout covers the whole read, so a body that trickles in a byte at a
   time is refused as surely as one that stalls. An aborted `signal` stops the
   read; a client passes the signal it gave `fetch`. A stream whose chunks are

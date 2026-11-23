@@ -110,8 +110,8 @@ describe('HttpBodyError', () => {
 });
 
 describe('size limit', () => {
-  it('refuses a declared Content-Length over the limit before reading', async () => {
-    const request = trackedBody(['{}']);
+  it('refuses a declared Content-Length over the limit, a request before reading', async () => {
+    const request = trackedBody(['{}', '{}']);
     const requestError = await refusal(
       readBoundedJsonRequest(post(request.stream, { ...json, 'Content-Length': '17' }), 16),
     );
@@ -119,7 +119,8 @@ describe('size limit', () => {
     // The server runtime discards a request body it did not read.
     expect([request.pulls(), request.cancelled()]).toEqual([0, undefined]);
 
-    const response = trackedBody(['{}']);
+    // A response's declared length counts once its first byte arrives.
+    const response = trackedBody(['{}', '{}']);
     const responseError = await refusal(
       readBoundedJsonResponse(
         new Response(response.stream, { headers: { ...json, 'Content-Length': '17' } }),
@@ -128,7 +129,7 @@ describe('size limit', () => {
     );
     expect(responseError.code).toBe('BODY_TOO_LARGE');
     // Nothing else releases a response body, so the reader cancels it.
-    expect([response.pulls(), response.cancelled()]).toEqual([0, { reason: responseError }]);
+    expect([response.pulls(), response.cancelled()]).toEqual([1, { reason: responseError }]);
   });
 
   it('refuses a streamed body once the bytes read pass the limit, and cancels it', async () => {
@@ -172,19 +173,26 @@ describe('size limit', () => {
 
   it('refuses a Content-Length that is not one decimal length', async () => {
     for (const declared of ['abc', '-1', '1.5', '1e3', '0x10', '', '10, 11', '10,']) {
-      const body = trackedBody(['{}']);
+      const request = trackedBody(['{}']);
       const error = await refusal(
-        readBoundedJsonResponse(
-          new Response(body.stream, { headers: { ...json, 'Content-Length': declared } }),
-          64,
-        ),
+        readBoundedJsonRequest(post(request.stream, { ...json, 'Content-Length': declared }), 64),
       );
       expect([declared, error.code, error.status]).toEqual([
         declared,
         'INVALID_CONTENT_LENGTH',
         400,
       ]);
-      expect(body.pulls()).toBe(0);
+      expect([request.pulls(), request.cancelled()]).toEqual([0, undefined]);
+
+      const response = trackedBody(['{}']);
+      const responseError = await refusal(
+        readBoundedJsonResponse(
+          new Response(response.stream, { headers: { ...json, 'Content-Length': declared } }),
+          64,
+        ),
+      );
+      expect(responseError.code).toBe('INVALID_CONTENT_LENGTH');
+      expect(response.cancelled()).toEqual({ reason: responseError });
     }
     // Repeated fields that agree, as Headers joins them, are one length.
     const repeated = new Headers(json);
@@ -496,6 +504,40 @@ describe('empty bodies', () => {
     );
     await expect(readBoundedResponseText(new Response(''), 64)).resolves.toBe('');
     await expect(readBoundedResponseText(new Response(null), 64)).resolves.toBe('');
+  });
+});
+
+describe('bodyless messages', () => {
+  it('reads a message without a body as empty, whatever its headers describe', async () => {
+    // A response to HEAD, or a 304, keeps the Content-Type and Content-Length
+    // of the representation it describes.
+    const head = () =>
+      new Response(null, { headers: { 'Content-Type': 'text/html', 'Content-Length': '1024' } });
+    await expect(readBoundedResponseText(head(), 64)).resolves.toBe('');
+    await expect(refusal(readBoundedJsonResponse(head(), 64))).resolves.toMatchObject({
+      code: 'EMPTY_BODY',
+    });
+
+    const notModified = new Response(null, { status: 304, headers: { 'Content-Length': 'x' } });
+    await expect(readBoundedResponseText(notModified, 64)).resolves.toBe('');
+    const noContent = new Response(null, { status: 204 });
+    await expect(refusal(readBoundedJsonResponse(noContent, 64))).resolves.toMatchObject({
+      code: 'EMPTY_BODY',
+    });
+
+    const get = new Request('https://game.example/', { headers: { 'Content-Length': '999' } });
+    await expect(readBoundedRequestText(get, 64)).resolves.toBe('');
+
+    // Chromium and WebKit give a response to HEAD an empty stream, not a null body.
+    const emptyHead = (contentLength: string) =>
+      new Response(trackedBody([]).stream, {
+        headers: { ...json, 'Content-Length': contentLength },
+      });
+    await expect(readBoundedResponseText(emptyHead('1024'), 64)).resolves.toBe('');
+    await expect(readBoundedResponseText(emptyHead('x'), 64)).resolves.toBe('');
+    await expect(refusal(readBoundedJsonResponse(emptyHead('1024'), 64))).resolves.toMatchObject(
+      { code: 'EMPTY_BODY' },
+    );
   });
 });
 

@@ -96,13 +96,14 @@ export interface HttpBodyReadOptions {
  * (`JSON_REQUIRED`), and a declared Content-Length that is malformed
  * (`INVALID_CONTENT_LENGTH`) or over the limit (`BODY_TOO_LARGE`), and leaves
  * the body unread for the server runtime to discard once the error response
- * is sent. While reading, it refuses a body that passes the limit, outlasts
- * `timeoutMs`, is aborted, or whose stream fails or yields something other
- * than bytes (`BODY_TOO_LARGE`, `BODY_READ_TIMEOUT`, `BODY_READ_ABORTED`,
- * `BODY_READ_FAILED`), and cancels it. Empty chunks are skipped, but more
- * than 1024 of them are a `BODY_READ_FAILED` too. A complete body that is
- * empty, not UTF-8 or not JSON is refused with `EMPTY_BODY`, `INVALID_UTF8`
- * or `INVALID_JSON`.
+ * is sent. A request without a body skips those header checks and is refused
+ * with `EMPTY_BODY`. While reading, it refuses a body that passes the limit,
+ * outlasts `timeoutMs`, is aborted, or whose stream fails or yields something
+ * other than bytes (`BODY_TOO_LARGE`, `BODY_READ_TIMEOUT`,
+ * `BODY_READ_ABORTED`, `BODY_READ_FAILED`), and cancels it. Empty chunks are
+ * skipped, but more than 1024 of them are a `BODY_READ_FAILED` too. A
+ * complete body that is empty, not UTF-8 or not JSON is refused with
+ * `EMPTY_BODY`, `INVALID_UTF8` or `INVALID_JSON`.
  *
  * A body that was already read, even partly, that another reader has locked,
  * or that the runtime does not expose as a stream rejects with a TypeError,
@@ -121,9 +122,9 @@ export async function readBoundedJsonRequest(
  * Reads a request body of at most `maximumBytes` bytes as strict UTF-8 text,
  * whatever its Content-Type or charset says, for example to verify a webhook
  * signature over the body text. Like `text()`, it drops a leading byte order
- * mark. A request without a body reads as `''`. Refusals follow
- * `readBoundedJsonRequest`, without `JSON_REQUIRED`, `EMPTY_BODY` and
- * `INVALID_JSON`.
+ * mark. A request without a body reads as `''`, whatever its headers say.
+ * Refusals follow `readBoundedJsonRequest`, without `JSON_REQUIRED`,
+ * `EMPTY_BODY` and `INVALID_JSON`.
  */
 export async function readBoundedRequestText(
   request: Request,
@@ -136,9 +137,14 @@ export async function readBoundedRequestText(
 /**
  * Reads a JSON response body of at most `maximumBytes` bytes and returns the
  * parsed value as `unknown`, for the caller's own schema check. Refusals
- * follow `readBoundedJsonRequest`, except that a refusal before reading
- * cancels the body too, since nothing else releases the connection behind an
- * unread response body.
+ * follow `readBoundedJsonRequest`, with two differences. A refusal before
+ * reading cancels the body too, since nothing else releases the connection
+ * behind an unread response body. And a declared Content-Length is held
+ * against the body only once its first byte arrives: a response to a HEAD
+ * request declares the length of a body it does not carry, which Chromium
+ * and WebKit give as an empty stream. So a response whose body is missing or
+ * empty, such as one to HEAD or a 204 or 304, is `EMPTY_BODY` whatever its
+ * Content-Length says.
  */
 export async function readBoundedJsonResponse(
   response: Response,
@@ -150,9 +156,12 @@ export async function readBoundedJsonResponse(
 
 /**
  * Reads a response body of at most `maximumBytes` bytes as strict UTF-8 text,
- * whatever its Content-Type or charset says. A response without a body reads
- * as `''`. Refusals follow `readBoundedRequestText`, and every one cancels
- * the body, as in `readBoundedJsonResponse`.
+ * whatever its Content-Type or charset says. A response whose body is missing
+ * or empty, such as one to a HEAD request or a 304, reads as `''` whatever
+ * its Content-Length says. Refusals follow `readBoundedRequestText`, with the
+ * differences of `readBoundedJsonResponse`: every one cancels the body, and a
+ * declared Content-Length is held against the body once its first byte
+ * arrives.
  */
 export async function readBoundedResponseText(
   response: Response,
@@ -205,23 +214,35 @@ async function readBody(message: Request | Response, plan: ReadPlan): Promise<Ui
   if (message.bodyUsed || body?.locked === true) {
     throw new TypeError('The body was already read or is locked by another reader.');
   }
-  const refusal = refuseBeforeReading(message.headers, plan);
-  if (refusal !== undefined) {
+  // A refusal before reading cancels a response body: nothing else would.
+  const released = (refusal: HttpBodyError): HttpBodyError => {
     if (plan.owner === 'response' && body !== null) {
       void body.cancel(refusal).catch(() => undefined);
     }
-    throw refusal;
+    return refusal;
+  };
+  if (plan.signal?.aborted === true) {
+    throw released(new HttpBodyError('BODY_READ_ABORTED', { cause: plan.signal.reason }));
   }
-  return body === null ? new Uint8Array(0) : readStream(body, plan);
+  // A message without a body reads as empty whatever its headers say: a
+  // response to HEAD, or a 304, keeps the Content-Type and Content-Length of
+  // the representation it describes.
+  if (body === null) {
+    return new Uint8Array(0);
+  }
+  if (plan.json && !isJsonMediaType(message.headers.get('Content-Type'))) {
+    throw released(new HttpBodyError('JSON_REQUIRED'));
+  }
+  const lengthRefusal = refuseDeclaredLength(message.headers, plan.maximumBytes);
+  if (lengthRefusal !== undefined && plan.owner === 'request') {
+    throw lengthRefusal;
+  }
+  // Chromium and WebKit give a response to HEAD an empty stream instead of no
+  // body, so a response's declared length counts only once a byte arrives.
+  return readStream(body, plan, lengthRefusal);
 }
 
-function refuseBeforeReading(headers: Headers, plan: ReadPlan): HttpBodyError | undefined {
-  if (plan.signal?.aborted === true) {
-    return new HttpBodyError('BODY_READ_ABORTED', { cause: plan.signal.reason });
-  }
-  if (plan.json && !isJsonMediaType(headers.get('Content-Type'))) {
-    return new HttpBodyError('JSON_REQUIRED');
-  }
+function refuseDeclaredLength(headers: Headers, maximumBytes: number): HttpBodyError | undefined {
   const declared = headers.get('Content-Length');
   if (declared === null) {
     return undefined;
@@ -232,7 +253,7 @@ function refuseBeforeReading(headers: Headers, plan: ReadPlan): HttpBodyError | 
   if (lengths.size !== 1 || length === undefined || !/^\d+$/u.test(length)) {
     return new HttpBodyError('INVALID_CONTENT_LENGTH');
   }
-  return Number(length) > plan.maximumBytes ? new HttpBodyError('BODY_TOO_LARGE') : undefined;
+  return Number(length) > maximumBytes ? new HttpBodyError('BODY_TOO_LARGE') : undefined;
 }
 
 /** A JSON MIME type in the WHATWG MIME Sniffing sense; parameters such as charset are ignored. */
@@ -253,9 +274,11 @@ function isJsonMediaType(contentType: string | null): boolean {
 // event loop (workerd), nothing else would stop a stream of empty chunks.
 const maximumEmptyChunks = 1024;
 
+/** Reads the stream; `refusalAtFirstByte` is thrown as soon as a byte arrives. */
 async function readStream(
   body: ReadableStream<Uint8Array>,
   { maximumBytes, timeoutMs, signal }: ReadPlan,
+  refusalAtFirstByte: HttpBodyError | undefined,
 ): Promise<Uint8Array> {
   const reader = body.getReader();
   // Chunks are copied as they arrive: holding every chunk object would cost
@@ -319,6 +342,9 @@ async function readStream(
           });
         }
         continue;
+      }
+      if (refusalAtFirstByte !== undefined) {
+        throw refusalAtFirstByte;
       }
       const end = received + chunk.byteLength;
       if (end > maximumBytes) {
