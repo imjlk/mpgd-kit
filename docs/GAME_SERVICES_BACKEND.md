@@ -938,7 +938,10 @@ secret, read it with `parseGoogleServiceAccount`, and keep one source per
 isolate. Pass its `get` as `getAccessToken` and its `invalidate` as
 `invalidateAccessToken`: the client calls that with the token Google answered
 HTTP 401 for (revoked, or expired early), and the next request mints a new
-one. The request that got the 401 still fails. The private service behind the
+one. The request that got the 401 still fails. Play also answers 401 when the
+service account lacks its Play Console permission, which a new token does not
+fix, so the source drops a refused token at most once a minute rather than
+minting one for every request. The private service behind the
 reference Worker's `GAME_SERVICES_GOOGLE_PLAY_PUBLISHER_AUTH` binding can mint
 its tokens with the same source.
 

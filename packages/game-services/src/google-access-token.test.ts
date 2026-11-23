@@ -98,7 +98,7 @@ function assertionOf(exchange: Exchange | undefined): string {
 // The Play Developer API source signs for its scope and plugs into the publisher client.
 {
   assert.equal(googlePlayPublisherScope, 'https://www.googleapis.com/auth/androidpublisher');
-  const now = start;
+  let now = start;
   const google = fakeGoogle();
   const tokens = createGooglePlayPublisherAccessTokenSource({
     serviceAccount,
@@ -156,6 +156,18 @@ function assertionOf(exchange: Exchange | undefined): string {
   await client.getProductPurchaseV2(purchase);
   assert.equal(google.exchanges.length, 2);
   assert.equal(new Headers(publisher.at(-1)?.init.headers).get('authorization'), 'Bearer token-2');
+  // Play also answers 401 for a missing Play Console permission, which a new
+  // token does not fix: within a minute of the last drop a refused token stays.
+  unauthorized = true;
+  await assert.rejects(client.getProductPurchaseV2(purchase), /HTTP 401/u);
+  await client.getProductPurchaseV2(purchase);
+  assert.equal(google.exchanges.length, 2);
+  now += 60_000;
+  unauthorized = true;
+  await assert.rejects(client.getProductPurchaseV2(purchase), /HTTP 401/u);
+  await client.getProductPurchaseV2(purchase);
+  assert.equal(google.exchanges.length, 3);
+  assert.equal(new Headers(publisher.at(-1)?.init.headers).get('authorization'), 'Bearer token-3');
 }
 
 // A cached token answers until five minutes before it expires; then a new one is minted.

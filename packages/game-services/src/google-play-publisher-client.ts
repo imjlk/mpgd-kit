@@ -13,15 +13,22 @@ import type {
 const publisherOrigin = 'https://androidpublisher.googleapis.com';
 /** The OAuth scope of the Google Play Developer API (the Android Publisher API). */
 export const googlePlayPublisherScope = 'https://www.googleapis.com/auth/androidpublisher';
+/**
+ * Play also answers HTTP 401 when the service account lacks its Play Console
+ * permission, which a new token does not fix: the Play token source drops a
+ * refused token at most this often, so such a deployment does not mint a
+ * token for every request.
+ */
+const tokenInvalidationIntervalMs = 60_000;
 
 export interface GooglePlayPublisherClientOptions {
   /** Supplies an androidpublisher-scoped OAuth access token for each request. */
   readonly getAccessToken: (signal: AbortSignal) => Promise<string> | string;
   /**
    * Called with the access token Google Play answered HTTP 401 for (revoked,
-   * or expired early), so a caching token source drops it and the next
-   * request gets a new one. The request still fails. An error it throws is
-   * ignored.
+   * or expired early; Play also answers 401 for a missing Play Console
+   * permission), so a caching token source drops it and a later request gets
+   * a new one. The request still fails. An error it throws is ignored.
    */
   readonly invalidateAccessToken?: (accessToken: string) => void;
   readonly fetch?: typeof fetch;
@@ -37,8 +44,10 @@ export type CreateGooglePlayPublisherAccessTokenSourceInput = Omit<
  * Access tokens for the Google Play Developer API from a game-owned service
  * account: `createGoogleAccessTokenSource` with `googlePlayPublisherScope`.
  * Its `get` is the client's `getAccessToken` and its `invalidate` the
- * client's `invalidateAccessToken`. Server side only, one per isolate: the
- * key and the token stay in its memory and never reach the game.
+ * client's `invalidateAccessToken`; `invalidate` drops a token at most once a
+ * minute, since Play also answers 401 for a missing Play Console permission.
+ * Server side only, one per isolate: the key and the token stay in its memory
+ * and never reach the game.
  *
  * ```ts
  * const tokens = createGooglePlayPublisherAccessTokenSource({
@@ -53,7 +62,20 @@ export type CreateGooglePlayPublisherAccessTokenSourceInput = Omit<
 export function createGooglePlayPublisherAccessTokenSource(
   input: CreateGooglePlayPublisherAccessTokenSourceInput,
 ): GoogleAccessTokenSource {
-  return createGoogleAccessTokenSource({ ...input, scope: googlePlayPublisherScope });
+  const tokens = createGoogleAccessTokenSource({ ...input, scope: googlePlayPublisherScope });
+  const now = input.now ?? Date.now;
+  let invalidatedAt: number | undefined;
+  return {
+    get: tokens.get,
+    invalidate(token) {
+      const at = now();
+      if (invalidatedAt !== undefined && at - invalidatedAt < tokenInvalidationIntervalMs) {
+        return;
+      }
+      invalidatedAt = at;
+      tokens.invalidate(token);
+    },
+  };
 }
 
 /**
