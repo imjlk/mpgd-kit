@@ -2332,9 +2332,10 @@ const aitIapUserCanceledCode = 'USER_CANCELED';
 /**
  * Whether a native checkout error is the buyer's cancellation. The checkout
  * asks only before any order was observed, so a paid or pending order is never
- * cancelled here. A `code` other than `undefined` decides alone. Only without
- * one is `errorCode` read, and only the exact documented cancel code counts.
- * Message text never does.
+ * cancelled here. A non-empty string `code` decides alone. Any other `code`
+ * (absent, empty or not a string) counts as no code, as it does for the
+ * diagnostic's `providerCode`; only then is `errorCode` read, and only the
+ * exact documented cancel code counts. Message text never does.
  */
 function isAitIapCancellation(error: unknown): boolean {
   if (isAbortError(error)) {
@@ -2344,8 +2345,8 @@ function isAitIapCancellation(error: unknown): boolean {
     return false;
   }
   const code = error.code;
-  if (code !== undefined) {
-    return typeof code === 'string' && /CANCEL|ABORT/u.test(code);
+  if (typeof code === 'string' && code.length > 0) {
+    return /CANCEL|ABORT/u.test(code);
   }
   return error.errorCode === aitIapUserCanceledCode;
 }

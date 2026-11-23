@@ -1081,7 +1081,11 @@ describe('AIT production host bridge', () => {
       'errorCode USER_CANCELED beside an undefined code',
       { code: undefined, errorCode: 'USER_CANCELED' },
     ],
-    // A code still decides alone, as before.
+    // A code that is not a non-empty string counts as none, as for the providerCode.
+    ['errorCode USER_CANCELED beside an empty code', { code: '', errorCode: 'USER_CANCELED' }],
+    ['errorCode USER_CANCELED beside a null code', { code: null, errorCode: 'USER_CANCELED' }],
+    ['errorCode USER_CANCELED beside a numeric code', { code: 0, errorCode: 'USER_CANCELED' }],
+    // A non-empty string code still decides alone, as before.
     ['code USER_CANCELED', { code: 'USER_CANCELED' }],
     [
       'code USER_CANCELED beside another errorCode',
@@ -1102,26 +1106,22 @@ describe('AIT production host bridge', () => {
   });
 
   it.each([
-    // An explicit code decides alone, even beside the documented cancel errorCode.
+    // A non-empty string code decides alone, even beside the documented cancel errorCode.
     [
       'code NETWORK_ERROR beside errorCode USER_CANCELED',
       { code: 'NETWORK_ERROR', errorCode: 'USER_CANCELED' },
       'NETWORK_ERROR',
     ],
+    // A code that is not a non-empty string counts as none; the errorCode must still be exact.
     [
-      'an empty code beside errorCode USER_CANCELED',
-      { code: '', errorCode: 'USER_CANCELED' },
-      'USER_CANCELED',
+      'an empty code beside errorCode NETWORK_ERROR',
+      { code: '', errorCode: 'NETWORK_ERROR' },
+      'NETWORK_ERROR',
     ],
     [
-      'a null code beside errorCode USER_CANCELED',
-      { code: null, errorCode: 'USER_CANCELED' },
-      'USER_CANCELED',
-    ],
-    [
-      'a numeric code beside errorCode USER_CANCELED',
-      { code: 0, errorCode: 'USER_CANCELED' },
-      'USER_CANCELED',
+      'a numeric code beside errorCode USER_CANCELLED',
+      { code: 0, errorCode: 'USER_CANCELLED' },
+      'USER_CANCELLED',
     ],
     // Only the exact documented errorCode is a cancellation.
     ['errorCode PAYMENT_PENDING', { errorCode: 'PAYMENT_PENDING' }, 'PAYMENT_PENDING'],

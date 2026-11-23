@@ -176,7 +176,9 @@ It keeps the server authoritative and adds these recovery rules:
   contains `CANCEL` or `ABORT`, or has no `code` and an `errorCode` of exactly
   `USER_CANCELED`. The SDK reference reports checkout codes as `error.code`,
   and the in-app purchase guide also documents an `errorCode` property. A
-  `code` that is set (anything but `undefined`) decides alone. Message text,
+  non-empty string `code` decides alone; a `code` that is empty or not a
+  string counts as no `code`, as it does for the diagnostic's
+  `providerCode`. Message text,
   any other `errorCode` and a value that is not an error object are never a
   cancellation. A cancellation removes the attempt marker, so the same client
   key can open a new order sheet. Every other `onError` before an order keeps
