@@ -789,7 +789,7 @@ async function readJsonOrRefuse(
 ```
 
 `readBoundedJsonRequest` and `readBoundedRequestText` read a request on a
-server; the text reader suits a webhook whose signature covers the raw body.
+server; the text reader suits a webhook whose signature covers the body text.
 `readBoundedJsonResponse` and `readBoundedResponseText` read a response on a
 client, such as a game reading its backend's answer or a Worker reading a
 store provider's. Each takes `maximumBytes` and optional `timeoutMs` (10
@@ -819,7 +819,7 @@ upstream failure, so a client or proxy answers with its own status instead.
 | `BODY_TOO_LARGE` | 413 | The declared or counted size passes `maximumBytes`. |
 | `BODY_READ_TIMEOUT` | 408 | The read outlasts `timeoutMs`. |
 | `BODY_READ_ABORTED` | 400 | `signal` aborted; `cause` is its reason. |
-| `BODY_READ_FAILED` | 400 | The stream failed (`cause`) or yielded a chunk that is not bytes. |
+| `BODY_READ_FAILED` | 400 | The stream failed (`cause`), yielded a chunk that is not bytes, or yielded more than 1024 empty chunks. |
 | `INVALID_UTF8` | 400 | The body is not valid UTF-8. |
 | `EMPTY_BODY` | 400 | A JSON reader gets no bytes. |
 | `INVALID_JSON` | 400 | The text does not parse as JSON (`cause`). |

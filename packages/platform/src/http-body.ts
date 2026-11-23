@@ -95,10 +95,12 @@ export interface HttpBodyReadOptions {
  * (`INVALID_CONTENT_LENGTH`) or over the limit (`BODY_TOO_LARGE`), and leaves
  * the body unread for the server runtime to discard once the error response
  * is sent. While reading, it refuses a body that passes the limit, outlasts
- * `timeoutMs`, is aborted, or whose stream fails (`BODY_TOO_LARGE`,
- * `BODY_READ_TIMEOUT`, `BODY_READ_ABORTED`, `BODY_READ_FAILED`), and cancels
- * it. A complete body that is empty, not UTF-8 or not JSON is refused with
- * `EMPTY_BODY`, `INVALID_UTF8` or `INVALID_JSON`.
+ * `timeoutMs`, is aborted, or whose stream fails or yields something other
+ * than bytes (`BODY_TOO_LARGE`, `BODY_READ_TIMEOUT`, `BODY_READ_ABORTED`,
+ * `BODY_READ_FAILED`), and cancels it. Empty chunks are skipped, but more
+ * than 1024 of them are a `BODY_READ_FAILED` too. A complete body that is
+ * empty, not UTF-8 or not JSON is refused with `EMPTY_BODY`, `INVALID_UTF8`
+ * or `INVALID_JSON`.
  *
  * A body that was already read, even partly, that another reader has locked,
  * or that the runtime does not expose as a stream rejects with a TypeError,
@@ -116,9 +118,10 @@ export async function readBoundedJsonRequest(
 /**
  * Reads a request body of at most `maximumBytes` bytes as strict UTF-8 text,
  * whatever its Content-Type or charset says, for example to verify a webhook
- * signature over the raw text. A request without a body reads as `''`.
- * Refusals follow `readBoundedJsonRequest`, without `JSON_REQUIRED`,
- * `EMPTY_BODY` and `INVALID_JSON`.
+ * signature over the body text. Like `text()`, it drops a leading byte order
+ * mark. A request without a body reads as `''`. Refusals follow
+ * `readBoundedJsonRequest`, without `JSON_REQUIRED`, `EMPTY_BODY` and
+ * `INVALID_JSON`.
  */
 export async function readBoundedRequestText(
   request: Request,
@@ -244,13 +247,21 @@ function isJsonMediaType(contentType: string | null): boolean {
   );
 }
 
+// Where the clock does not advance between reads that never yield to the
+// event loop (workerd), nothing else would stop a stream of empty chunks.
+const maximumEmptyChunks = 1024;
+
 async function readStream(
   body: ReadableStream<Uint8Array>,
   { maximumBytes, timeoutMs, signal }: ReadPlan,
 ): Promise<Uint8Array> {
   const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
+  // Chunks are copied as they arrive: holding every chunk object would cost
+  // far more than its bytes for a body sent a byte at a time, and a source
+  // may reuse a chunk's buffer after enqueueing it.
+  let bytes = new Uint8Array(0);
   let received = 0;
+  let emptyChunks = 0;
   let stopped: HttpBodyError | undefined;
   let rejectPendingRead: ((reason: HttpBodyError) => void) | undefined;
   // Settle the pending read first: the cancel below resolves it as done, and
@@ -268,6 +279,10 @@ async function readStream(
     stop(new HttpBodyError('BODY_READ_ABORTED', { cause: signal?.reason }));
   };
   const timer = setTimeout(() => stop(new HttpBodyError('BODY_READ_TIMEOUT')), timeoutMs);
+  // A stream whose chunks are always ready resolves every read without
+  // yielding to the event loop, so the timer cannot fire; the clock is
+  // checked after each read as well.
+  const deadline = Date.now() + timeoutMs;
   signal?.addEventListener('abort', abort, { once: true });
   try {
     for (;;) {
@@ -280,6 +295,9 @@ async function readStream(
         reader.read().then(resolve, reject);
       });
       rejectPendingRead = undefined;
+      if (Date.now() >= deadline) {
+        throw new HttpBodyError('BODY_READ_TIMEOUT');
+      }
       if (next.done) {
         break;
       }
@@ -289,11 +307,28 @@ async function readStream(
           cause: new TypeError('A body chunk is not a Uint8Array.'),
         });
       }
-      received += chunk.byteLength;
-      if (received > maximumBytes) {
+      if (chunk.byteLength === 0) {
+        emptyChunks += 1;
+        if (emptyChunks > maximumEmptyChunks) {
+          throw new HttpBodyError('BODY_READ_FAILED', {
+            cause: new TypeError(`The body yielded more than ${maximumEmptyChunks} empty chunks.`),
+          });
+        }
+        continue;
+      }
+      const end = received + chunk.byteLength;
+      if (end > maximumBytes) {
         throw new HttpBodyError('BODY_TOO_LARGE');
       }
-      chunks.push(chunk);
+      if (end > bytes.byteLength) {
+        const grown = new Uint8Array(
+          Math.min(maximumBytes, Math.max(end, bytes.byteLength * 2, 4096)),
+        );
+        grown.set(bytes.subarray(0, received));
+        bytes = grown;
+      }
+      bytes.set(chunk, received);
+      received = end;
     }
     if (stopped !== undefined) {
       throw stopped;
@@ -314,14 +349,7 @@ async function readStream(
     clearTimeout(timer);
     signal?.removeEventListener('abort', abort);
   }
-
-  const bytes = new Uint8Array(received);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
+  return bytes.subarray(0, received);
 }
 
 // `instanceof` alone misses a Uint8Array from another realm, such as a test DOM's.

@@ -246,6 +246,34 @@ describe('timeout and abort', () => {
     expect(cancelled).toBe(true);
   });
 
+  it('times out a stream whose chunks are always ready, before the timer can', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    let pulls = 0;
+    let cancelled = false;
+    const ready = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          pulls += 1;
+          if (pulls > 100) {
+            controller.close();
+            return;
+          }
+          // Each chunk is ready at once but costs 1 ms; no timer runs meanwhile.
+          vi.setSystemTime(Date.now() + 1);
+          controller.enqueue(encoder.encode(' '));
+        },
+        cancel() {
+          cancelled = true;
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    const error = await refusal(
+      readBoundedResponseText(new Response(ready), 1024, { timeoutMs: 50 }),
+    );
+    expect([error.code, pulls, cancelled]).toEqual(['BODY_READ_TIMEOUT', 50, true]);
+  });
+
   it('does not wait for a cancel that the stream never finishes', async () => {
     // A body whose source never finishes its cancel step.
     const stuck = (pull: NonNullable<UnderlyingDefaultSource<Uint8Array>['pull']>) => {
@@ -535,6 +563,56 @@ describe('body ownership', () => {
       expect(notBytes.cause).toBeInstanceOf(TypeError);
       expect(body.cancelled()).toEqual({ reason: notBytes });
     }
+  });
+
+  it('skips empty chunks but stops a stream that yields nothing else', async () => {
+    const empty = new Uint8Array(0);
+    const sparse = trackedBody([empty, '{"a":', empty, empty, '1}', empty]);
+    await expect(readBoundedJsonRequest(post(sparse.stream), 64)).resolves.toEqual({ a: 1 });
+
+    // Each read resolves at once, so the timer never gets a turn, and where the
+    // clock does not move between such reads either (workerd), only a count stops it.
+    let cancelled = false;
+    const endless = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          controller.enqueue(new Uint8Array(0));
+        },
+        cancel() {
+          cancelled = true;
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    const error = await refusal(readBoundedResponseText(new Response(endless), 64));
+    expect([error.code, (error.cause as Error).message, cancelled]).toEqual([
+      'BODY_READ_FAILED',
+      'The body yielded more than 1024 empty chunks.',
+      true,
+    ]);
+  });
+
+  it('copies each chunk before the source can reuse its buffer', async () => {
+    const text = encoder.encode('["ab","cd"]');
+    const shared = new Uint8Array(4);
+    let offset = 0;
+    const reusing = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          if (offset >= text.byteLength) {
+            controller.close();
+            return;
+          }
+          const length = Math.min(shared.byteLength, text.byteLength - offset);
+          shared.set(text.subarray(offset, offset + length));
+          controller.enqueue(shared.subarray(0, length));
+          offset += length;
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    await expect(readBoundedJsonResponse(new Response(reusing, { headers: json }), 64)).resolves
+      .toEqual(['ab', 'cd']);
   });
 
   it('accepts byte chunks from another realm', async () => {
