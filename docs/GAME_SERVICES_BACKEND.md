@@ -800,10 +800,13 @@ seconds by default) and `signal`:
   byte arrives. Then the bytes the stream yields are counted as they arrive,
   so a chunked or mislabelled body is refused before it is buffered. A client
   counts the bytes after the runtime decodes a `Content-Encoding` such as
-  gzip, so the decoded size is what is bounded. A message whose body is
-  missing or empty, such as a GET request or a response to HEAD or a 304,
-  reads as empty whatever its `Content-Type` and `Content-Length` describe;
-  Chromium and WebKit give a response to HEAD an empty body rather than none.
+  gzip, so the decoded size is what is bounded. A message without a body,
+  such as a GET request or a response to HEAD or a 304, reads as empty
+  whatever its `Content-Type` and `Content-Length` describe. So does a
+  response whose body stream is empty, because Chromium and WebKit give a
+  response to HEAD an empty body rather than none. A request whose body
+  stream is empty still has its headers checked first, so a `text/plain`
+  POST with an empty body is refused with `JSON_REQUIRED`.
 - The timeout covers the whole read, so a body that trickles in a byte at a
   time is refused as surely as one that stalls. An aborted `signal` stops the
   read; a client passes the signal it gave `fetch`. A stream whose chunks are
