@@ -285,15 +285,17 @@ for (const [answer, expected] of refusedResultAnswers) {
  * answers a new key on every call, a key pays at most once and a used key
  * answers 4113, and execution-result answers 4111 for a key with no payment.
  * A queued fault changes the next execute answer: the request is lost before
- * Toss sees it, or Toss pays and the answer is lost, times out, or is an
- * HTTP 500.
+ * Toss sees it, or Toss pays and the answer is lost, is held until the call
+ * is aborted (by the client's timeout or the caller, through `hooks.onHold`),
+ * or is an HTTP 500.
  */
 function createDocumentedPromotionApi() {
-  type Fault = 'request-lost' | 'answer-lost' | 'answer-timeout' | 'answer-internal-error';
+  type Fault = 'request-lost' | 'answer-lost' | 'answer-held' | 'answer-internal-error';
   const issuedKeys: string[] = [];
   const payments = new Map<string, number>();
   const faults: Fault[] = [];
   const routesCalled: string[] = [];
+  const hooks: { onHold?: () => void } = {};
   const mtls: AppsInTossMutualTlsFetcher = {
     async fetch(url, init) {
       const path = new URL(url).pathname;
@@ -327,11 +329,15 @@ function createDocumentedPromotionApi() {
       if (fault === 'answer-lost') {
         throw new TypeError('fetch failed: the connection closed after Toss applied the request');
       }
-      if (fault === 'answer-timeout') {
+      if (fault === 'answer-held') {
         return new Promise<Response>((_resolve, reject) => {
-          init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), {
-            once: true,
-          });
+          const signal = init?.signal;
+          if (signal?.aborted === true) {
+            reject(signal.reason);
+            return;
+          }
+          signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+          hooks.onHold?.();
         });
       }
       if (fault === 'answer-internal-error') {
@@ -347,7 +353,7 @@ function createDocumentedPromotionApi() {
       return answer;
     },
   };
-  return { mtls, issuedKeys, payments, faults, routesCalled };
+  return { mtls, issuedKeys, payments, faults, routesCalled, hooks };
 }
 
 // The caller protocol every scenario follows: one key per grant, stored
@@ -384,8 +390,9 @@ const grant = { recipient: anonymous, promotionCode: documentedPromotionCode } a
   ]);
 }
 
-// The request was lost before Toss saw it. NOT_FOUND (4111) lets the grant
-// execute again with the same key, which pays once.
+// The request was lost before Toss saw it. Once the caller has backed off
+// (this fake holds no call in progress to wait for), NOT_FOUND (4111) lets the
+// grant execute again with the same key, which pays once.
 {
   const api = createDocumentedPromotionApi();
   const client = createAppsInTossPartnerApiClient({ baseUrl, mtls: api.mtls });
@@ -406,24 +413,30 @@ const grant = { recipient: anonymous, promotionCode: documentedPromotionCode } a
   assert.deepEqual(api.issuedKeys, [key]);
 }
 
-// Toss paid, then the client timed out, or Toss answered HTTP 500. Both are
-// ambiguous rejections; the result shows the one payment, and a retry with
-// the same key is answered 4113.
-for (const fault of ['answer-timeout', 'answer-internal-error'] as const) {
+// Toss paid, then the client timed out, the caller aborted, or Toss answered
+// HTTP 500. Each is an ambiguous rejection; the result shows the one payment,
+// and a retry with the same key is answered 4113.
+const ambiguousEndings = [
+  { ending: 'timeout', fault: 'answer-held', code: 'TIMEOUT', status: 0 },
+  { ending: 'caller-abort', fault: 'answer-held', code: 'ABORTED', status: 0 },
+  { ending: 'http-500', fault: 'answer-internal-error', code: 'INTERNAL_ERROR', status: 500 },
+] as const;
+for (const { ending, fault, code, status } of ambiguousEndings) {
   const api = createDocumentedPromotionApi();
   const client = createAppsInTossPartnerApiClient({ baseUrl, mtls: api.mtls });
-  const impatientClient = createAppsInTossPartnerApiClient({
-    baseUrl,
-    mtls: api.mtls,
-    timeoutMs: 50,
-  });
+  // Only the held call gets the short timeout, so an immediate answer never races it.
+  const executingClient = ending === 'timeout'
+    ? createAppsInTossPartnerApiClient({ baseUrl, mtls: api.mtls, timeoutMs: 50 })
+    : client;
+  const caller = new AbortController();
+  if (ending === 'caller-abort') {
+    api.hooks.onHold = () => caller.abort(new Error('The caller gave up.'));
+  }
   const { key } = await client.issuePromotionKey({ recipient: grant.recipient });
   api.faults.push(fault);
   await assert.rejects(
-    impatientClient.executePromotion({ ...grant, key, amount: 10 }),
-    fault === 'answer-timeout'
-      ? { name: 'AppsInTossPartnerApiError', code: 'TIMEOUT', status: 0 }
-      : { name: 'AppsInTossPartnerApiError', code: 'INTERNAL_ERROR', status: 500 },
+    executingClient.executePromotion({ ...grant, key, amount: 10, signal: caller.signal }),
+    { name: 'AppsInTossPartnerApiError', code, status },
   );
   assert.deepEqual(await client.getPromotionExecutionResult({ ...grant, key }), {
     status: 'SUCCESS',

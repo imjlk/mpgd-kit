@@ -460,7 +460,9 @@ and the partner API's `errorCode` as `code` (`TIMEOUT`, `ABORTED`, or
 `TRANSPORT_ERROR` when no answer arrived). Business errors such as `4109`
 (promotion not running), `4112` (promotion money too low), `4114` (amount over
 the promotion's per-payment limit), and `4095` (rate limit) arrive as HTTP 200
-with `resultType: 'FAIL'`. The calls never retry and never follow a redirect.
+with `resultType: 'FAIL'`. Besides the per-app limit, `executePromotion` is
+limited per user: 20 calls a minute in the API reference, 10 in the
+development guide. The calls never retry and never follow a redirect.
 They only move Toss points: deciding who may receive them and recording the
 grant stay in the game's ledger.
 
@@ -482,17 +484,24 @@ twice as long as it reuses the key:
    - `SUCCESS`: paid.
    - `PENDING`: accepted and still being processed. Ask again later; Apps in
      Toss asks games to show the player the pending state meanwhile.
-   - `FAILED`: the payment failed and Toss rolled back its budget. Only this
-     answer lets the grant start over with a new key.
-   - `NOT_FOUND` (business error `4111`): Toss holds no payment for the key.
-     Execute again with the same key while it is valid.
+   - `FAILED`: the payment failed and Toss rolled back the budget it used, so
+     the key paid nothing. Only this answer lets the grant start over with a
+     new key.
+   - `NOT_FOUND` (business error `4111`): Toss has no payment recorded for the
+     key yet. Execute again with the same key while it is valid, but not while
+     an earlier execute call could still be in progress: one that ended
+     without an answer (a timeout, an abort, a transport failure, an HTTP 5xx)
+     may still be processing at Toss. Back off well past the client timeout
+     first; the documentation gives no bound on that processing time.
 4. Whatever an `executePromotion` rejection says, the key's outcome is
    unknown: a timeout, an abort, a transport failure, an HTTP 5xx, a
    `resultType` other than `SUCCESS`, an answer that does not echo the key,
-   or any business error. A business error answered to a retry describes the
-   retry, not the earlier call, and `4113` also covers a retracted payment.
-   Do not issue a new key: read the result (step 3), or execute again with the
-   same key.
+   or any business error. That includes `4110` (Toss could not pay because of
+   an internal error, which its error table says to retry), `4095` (rate
+   limit), and `4113`, which also covers a retracted payment. A business error
+   answered to a retry describes the retry, not the earlier call. Do not issue
+   a new key: read the result (step 3), and execute again only with the same
+   key.
 
 The Apps in Toss error table says to issue a new key after `4113`. That is for
 a deliberate second payment to the same user. After an execute call whose

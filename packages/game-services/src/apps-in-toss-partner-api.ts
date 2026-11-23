@@ -135,8 +135,9 @@ export interface GetAppsInTossPromotionExecutionResultInput {
 /**
  * A key's payment as `execution-result` reports it. `SUCCESS`: paid.
  * `PENDING`: accepted and still being processed. `FAILED`: the payment
- * failed and its budget was rolled back. `NOT_FOUND`: business error `4111`,
- * no payment is recorded for the key.
+ * failed and the budget it used was rolled back. `NOT_FOUND`: business error
+ * `4111`, no payment is recorded for the key yet; an execute call that is
+ * still in progress at Toss may not be recorded.
  */
 export type AppsInTossPromotionExecutionStatus = 'SUCCESS' | 'PENDING' | 'FAILED' | 'NOT_FOUND';
 
@@ -187,7 +188,8 @@ export interface AppsInTossPartnerApiClient {
    * accepted the payment, which may still be `PENDING`. A rejection (a
    * timeout, an abort, an HTTP or business error such as `4113`) does not
    * tell whether the key paid: settle the grant with
-   * `getPromotionExecutionResult`, and execute again only with the same key.
+   * `getPromotionExecutionResult`, and execute again only with the same key,
+   * once the earlier call can no longer be in progress at Toss.
    */
   executePromotion(input: ExecuteAppsInTossPromotionInput): Promise<AppsInTossPromotionKey>;
   /** Reads a key's payment: the answer that settles a grant. */
