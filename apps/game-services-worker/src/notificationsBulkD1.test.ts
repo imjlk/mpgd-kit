@@ -46,6 +46,17 @@ const setClock = (iso: string): void => {
   clockOffset = RealDate.parse(iso) - RealDate.now();
 };
 
+// A bulk call starts no further batch once 20 seconds of `performance.now()`
+// time have passed. Every D1 query here is a round trip into miniflare on
+// this machine, so on a busy machine the 2,500-recipient FCM calls below
+// can pass 20 seconds and answer the rest `not-attempted` (`time-budget`).
+// The test holds that clock still, so only the D1 query reserve, which the
+// Worker reports on the same clock, stops a call; the timings it logs read
+// the real clock.
+const elapsedMs = performance.now.bind(performance);
+const heldElapsedMs = elapsedMs();
+Object.defineProperty(performance, 'now', { configurable: true, value: () => heldElapsedMs });
+
 const miniflare = new Miniflare({
   modules: true,
   script: d1BridgeScript,
@@ -130,7 +141,7 @@ try {
     counted.reset();
     identityLookups = 0;
     const calls = partnerCalls.length;
-    const started = performance.now();
+    const started = elapsedMs();
     const answer = await asWorkerNotificationRpcResult(() =>
       deliverWorkerNotificationBulk(env, {
         idempotencyKey,
@@ -142,7 +153,7 @@ try {
     assert.ok(answer.ok, JSON.stringify(answer));
     const measured = {
       ...counted.snapshot(),
-      ms: Math.round(performance.now() - started),
+      ms: Math.round(elapsedMs() - started),
       // The other subrequests the call makes: Workers Paid allows 10,000 per invocation.
       identityLookups,
       partnerCalls: partnerCalls.length - calls,
@@ -480,6 +491,7 @@ try {
         }
         fcmSends = 0;
         counted.reset();
+        const started = elapsedMs();
         const answer = await asWorkerNotificationRpcResult(() =>
           deliverWorkerNotificationBulk(advertisingEnv, {
             idempotencyKey: `event-${name}`,
@@ -489,11 +501,16 @@ try {
           }),
         );
         assert.ok(answer.ok, JSON.stringify(answer));
-        const measured = counted.snapshot();
+        const measured = { ...counted.snapshot(), ms: Math.round(elapsedMs() - started) };
         console.info(`event-${name}:`, measured, answer.value.summary, { sent: fcmSends });
-        // Even indexes are sent: half, rounded up for an odd count.
+        // Even indexes are sent: half, rounded up for an odd count. A call
+        // the D1 query reserve stops answers the rest `not-attempted`.
         const sentCount = Math.ceil(recipientsPerCall / 2);
-        assert.equal(answer.value.summary.delivered, sentCount);
+        assert.equal(
+          answer.value.summary.delivered,
+          sentCount,
+          `${JSON.stringify(answer.value.summary)} after ${measured.queries} D1 queries`,
+        );
         assert.equal(answer.value.summary.suppressed, recipientsPerCall - sentCount);
         assert.equal(fcmSends, sentCount);
         const reasons = new Set(
@@ -531,6 +548,7 @@ try {
   console.info('Worker bulk D1 query budget passed.');
 } finally {
   globalThis.Date = RealDate;
+  Reflect.deleteProperty(performance, 'now');
   await miniflare.dispose();
 }
 
