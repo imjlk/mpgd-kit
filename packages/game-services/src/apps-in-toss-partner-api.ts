@@ -10,6 +10,15 @@ const exchangeLoginAuthorizationCodePath =
   'api-partner/v1/apps-in-toss/user/oauth2/generate-token';
 const getLoginUserPath = 'api-partner/v1/apps-in-toss/user/oauth2/login-me';
 const getIapOrderStatusPath = 'api-partner/v1/apps-in-toss/order/get-order-status';
+// Promotion (Toss points) calls, checked 2026-11-23 against
+// https://developers-apps-in-toss.toss.im/api/promotion.md and the server
+// section of https://developers-apps-in-toss.toss.im/documentation/common/growth/promotion.md.
+const issuePromotionKeyPath = 'api-partner/v1/apps-in-toss/promotion/execute-promotion/get-key';
+const executePromotionPath = 'api-partner/v1/apps-in-toss/promotion/execute-promotion';
+const getPromotionExecutionResultPath = 'api-partner/v1/apps-in-toss/promotion/execution-result';
+/** `execution-result`'s business error for a key with no payment ("리워드 지급내역을 찾을 수 없어요"). */
+const promotionExecutionNotFoundErrorCode = '4111';
+const maximumPromotionKeyLength = 4_096;
 const maximumResponseBodyBytes = 256 * 1_024;
 
 /** Compatible with a Cloudflare mTLS certificate binding (`env.BINDING.fetch`). */
@@ -82,6 +91,59 @@ export interface AppsInTossIapOrderStatusResult {
   readonly reason?: string;
 }
 
+/**
+ * Who a promotion pays, sent as the one recipient header the promotion API
+ * takes: a Toss Login `userKey` (`x-toss-user-key`) or a
+ * `User.getAnonymousKey` hash (`x-anon-key`). Resolve it on the server from
+ * the player's authenticated identity, never from a key a game client sent.
+ */
+export type AppsInTossPromotionRecipient = AppsInTossMessageRecipient;
+
+/**
+ * A promotion payment key. It is opaque (documented as base64), valid for
+ * one hour after it was issued, and pays at most once: executing a used key
+ * answers business error `4113` instead of paying again.
+ */
+export interface AppsInTossPromotionKey {
+  readonly key: string;
+}
+
+export interface IssueAppsInTossPromotionKeyInput {
+  readonly recipient: AppsInTossPromotionRecipient;
+  readonly signal?: AbortSignal;
+}
+
+export interface ExecuteAppsInTossPromotionInput {
+  /** The recipient the key was issued to. */
+  readonly recipient: AppsInTossPromotionRecipient;
+  /** The console's promotion code. Its `TEST_` form is the console test, which pays no points. */
+  readonly promotionCode: string;
+  /** The key issued for this grant, stored with the grant before the first call. */
+  readonly key: string;
+  /** Toss points to pay: a positive safe integer. */
+  readonly amount: number;
+  readonly signal?: AbortSignal;
+}
+
+export interface GetAppsInTossPromotionExecutionResultInput {
+  readonly recipient: AppsInTossPromotionRecipient;
+  readonly promotionCode: string;
+  readonly key: string;
+  readonly signal?: AbortSignal;
+}
+
+/**
+ * A key's payment as `execution-result` reports it. `SUCCESS`: paid.
+ * `PENDING`: accepted and still being processed. `FAILED`: the payment
+ * failed and its budget was rolled back. `NOT_FOUND`: business error `4111`,
+ * no payment is recorded for the key.
+ */
+export type AppsInTossPromotionExecutionStatus = 'SUCCESS' | 'PENDING' | 'FAILED' | 'NOT_FOUND';
+
+export interface AppsInTossPromotionExecutionResult {
+  readonly status: AppsInTossPromotionExecutionStatus;
+}
+
 export interface AppsInTossPartnerApiClient {
   /** Authenticate with a fresh SDK 3.6 code; key existence checks are not login. */
   exchangeAnonymousAuthorizationCode(input: {
@@ -114,6 +176,24 @@ export interface AppsInTossPartnerApiClient {
     readonly tossUserKey?: string;
     readonly signal?: AbortSignal;
   }): Promise<AppsInTossIapOrderStatusResult>;
+  /**
+   * Issues a new promotion payment key for one recipient. Every call issues
+   * another key: store the key with its grant before `executePromotion`, and
+   * never issue a second key for a grant whose first key may have paid.
+   */
+  issuePromotionKey(input: IssueAppsInTossPromotionKeyInput): Promise<AppsInTossPromotionKey>;
+  /**
+   * Pays `amount` Toss points with a stored key and resolves when Toss
+   * accepted the payment, which may still be `PENDING`. A rejection (a
+   * timeout, an abort, an HTTP or business error such as `4113`) does not
+   * tell whether the key paid: settle the grant with
+   * `getPromotionExecutionResult`, and execute again only with the same key.
+   */
+  executePromotion(input: ExecuteAppsInTossPromotionInput): Promise<AppsInTossPromotionKey>;
+  /** Reads a key's payment: the answer that settles a grant. */
+  getPromotionExecutionResult(
+    input: GetAppsInTossPromotionExecutionResultInput,
+  ): Promise<AppsInTossPromotionExecutionResult>;
 }
 
 export interface CreateAppsInTossPartnerApiClientInput {
@@ -295,6 +375,71 @@ export function createAppsInTossPartnerApiClient(
       }
       return orderStatus;
     },
+
+    // The three promotion calls never retry on their own and never follow a
+    // redirect, which would resend the recipient and the key to another URL.
+    async issuePromotionKey(request) {
+      const recipient = normalizeRecipient(request.recipient);
+      const response = await requestJson({
+        mtls: input.mtls,
+        method: 'POST',
+        url: new URL(issuePromotionKeyPath, baseUrl).href,
+        headers: promotionRecipientHeaders(recipient),
+        // The development guide documents no body for key issue.
+        body: undefined,
+        redirect: 'manual',
+        timeoutMs,
+        ...(request.signal === undefined ? {} : { signal: request.signal }),
+      });
+      const envelope = requireSuccessEnvelope(response);
+      return { key: parsePromotionKey(envelope.success, response.status) };
+    },
+
+    async executePromotion(request) {
+      const recipient = normalizeRecipient(request.recipient);
+      const promotionCode = normalizeIdentifier(request.promotionCode, 'promotionCode');
+      const key = normalizePromotionKey(request.key);
+      const amount = normalizePromotionAmount(request.amount);
+      const response = await requestJson({
+        mtls: input.mtls,
+        method: 'POST',
+        url: new URL(executePromotionPath, baseUrl).href,
+        headers: promotionRecipientHeaders(recipient),
+        body: { promotionCode, key, amount },
+        redirect: 'manual',
+        timeoutMs,
+        ...(request.signal === undefined ? {} : { signal: request.signal }),
+      });
+      const envelope = requireSuccessEnvelope(response);
+      if (parsePromotionKey(envelope.success, response.status) !== key) {
+        throw new AppsInTossPartnerApiError(
+          'Apps in Toss returned a mismatched promotion key.',
+          response.status,
+        );
+      }
+      return { key };
+    },
+
+    async getPromotionExecutionResult(request) {
+      const recipient = normalizeRecipient(request.recipient);
+      const promotionCode = normalizeIdentifier(request.promotionCode, 'promotionCode');
+      const key = normalizePromotionKey(request.key);
+      const response = await requestJson({
+        mtls: input.mtls,
+        method: 'POST',
+        url: new URL(getPromotionExecutionResultPath, baseUrl).href,
+        headers: promotionRecipientHeaders(recipient),
+        body: { promotionCode, key },
+        redirect: 'manual',
+        timeoutMs,
+        ...(request.signal === undefined ? {} : { signal: request.signal }),
+      });
+      if (isPromotionExecutionNotFound(response)) {
+        return { status: 'NOT_FOUND' };
+      }
+      const envelope = requireSuccessEnvelope(response);
+      return { status: parsePromotionExecutionStatus(envelope.success, response.status) };
+    },
   };
 }
 
@@ -304,6 +449,8 @@ interface JsonRequestInput {
   readonly url: string;
   readonly headers: Readonly<Record<string, string>>;
   readonly body: Readonly<Record<string, unknown>> | undefined;
+  /** `manual` returns a redirect as a failed answer instead of following it. */
+  readonly redirect?: 'manual';
   readonly timeoutMs: number;
   readonly signal?: AbortSignal;
 }
@@ -339,6 +486,7 @@ async function requestJson(input: JsonRequestInput): Promise<PartnerApiResponse>
         method: input.method,
         headers,
         ...(requestBody === undefined ? {} : { body: requestBody }),
+        ...(input.redirect === undefined ? {} : { redirect: input.redirect }),
         signal: timeout.signal,
       });
       text = await readBoundedResponseText(response);
@@ -562,6 +710,55 @@ const appsInTossIapOrderStatuses = new Set<AppsInTossIapOrderStatus>([
   'MINIAPP_MISMATCH',
   'ERROR',
 ]);
+
+function promotionRecipientHeaders(
+  recipient: AppsInTossPromotionRecipient,
+): Readonly<Record<string, string>> {
+  return recipient.type === 'anonymous'
+    ? { 'x-anon-key': recipient.key }
+    : { 'x-toss-user-key': recipient.key };
+}
+
+/** A key is sent exactly as it was issued: surrounding whitespace is refused, not trimmed. */
+function normalizePromotionKey(value: string): string {
+  return normalizeOpaqueValue(value, 'key', maximumPromotionKeyLength);
+}
+
+function normalizePromotionAmount(value: number): number {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new TypeError('amount must be a positive safe integer.');
+  }
+  return value;
+}
+
+function parsePromotionKey(input: unknown, status: number): string {
+  if (!isRecord(input)) {
+    throw new AppsInTossPartnerApiError('Apps in Toss returned an invalid promotion key.', status);
+  }
+  return requireOpaqueValue(input.key, 'promotion key', status, maximumPromotionKeyLength);
+}
+
+/** The documented `4111` business error: HTTP 200 with `resultType: 'FAIL'`. */
+function isPromotionExecutionNotFound(response: PartnerApiResponse): boolean {
+  if (!response.ok || !isRecord(response.body) || response.body.resultType !== 'FAIL') {
+    return false;
+  }
+  const error = response.body.error;
+  return isRecord(error) && error.errorCode === promotionExecutionNotFoundErrorCode;
+}
+
+function parsePromotionExecutionStatus(
+  input: unknown,
+  status: number,
+): Exclude<AppsInTossPromotionExecutionStatus, 'NOT_FOUND'> {
+  if (input === 'SUCCESS' || input === 'PENDING' || input === 'FAILED') {
+    return input;
+  }
+  throw new AppsInTossPartnerApiError(
+    'Apps in Toss returned an unknown promotion execution result.',
+    status,
+  );
+}
 
 function readContentIds(detail: unknown): readonly string[] {
   if (!isRecord(detail)) {

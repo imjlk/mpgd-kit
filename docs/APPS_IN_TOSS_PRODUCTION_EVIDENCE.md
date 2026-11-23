@@ -414,6 +414,15 @@ do not copy a PEM, private key, or certificate id into the browser bundle. Local
 Workers runtimes do not emulate the mTLS handshake, so inject a fake fetcher in
 unit tests and run a staging call with the real binding before release.
 
+The same client pays promotion (Toss points) rewards over the binding with
+`issuePromotionKey`, `executePromotion`, and `getPromotionExecutionResult`.
+The payment key, not the request, makes a payout idempotent: store one key per
+grant before executing it, settle the grant from the execution result, and
+retry only with the same key, as the game-services README's
+[One key per grant](https://github.com/imjlk/mpgd-kit/blob/main/packages/game-services/README.md#one-key-per-grant)
+describes, so a retry cannot pay twice. Test with the console's `TEST_`
+promotion code, which moves no real points.
+
 The order-status API documents offset-free `statusDeterminedAt` values as KST.
 The verifier parses that exact calendar form as UTC+09:00 and also accepts
 explicit UTC/offset timestamps; malformed dates and calendar overflows fail
