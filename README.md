@@ -193,7 +193,8 @@ starter manifests, and Apps in Toss MCP guidance.
 
 ## Package Map
 
-- `@mpgd/platform`: shared platform gateway surface.
+- `@mpgd/platform`: shared platform gateway surface, plus runtime-neutral
+  helpers such as the [bounded HTTP body readers](docs/GAME_SERVICES_BACKEND.md#bounded-http-bodies).
 - `@mpgd/bridge`: typed native bridge request/response protocol.
 - `@mpgd/adapter-browser`, `@mpgd/adapter-capacitor`, `@mpgd/adapter-ait`,
   `@mpgd/adapter-devvit`, `@mpgd/adapter-verse8`: target adapters.
