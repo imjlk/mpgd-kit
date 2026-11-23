@@ -137,14 +137,14 @@ export async function readBoundedRequestText(
 /**
  * Reads a JSON response body of at most `maximumBytes` bytes and returns the
  * parsed value as `unknown`, for the caller's own schema check. Refusals
- * follow `readBoundedJsonRequest`, with two differences. A refusal before
- * reading cancels the body too, since nothing else releases the connection
- * behind an unread response body. And a declared Content-Length is held
- * against the body only once its first byte arrives: a response to a HEAD
- * request declares the length of a body it does not carry, which Chromium
- * and WebKit give as an empty stream. So a response whose body is missing or
- * empty, such as one to HEAD or a 204 or 304, is `EMPTY_BODY` whatever its
- * Content-Length says.
+ * follow `readBoundedJsonRequest`, with two differences. Every refusal
+ * cancels the body, since nothing else releases the connection behind an
+ * unread response body. And the Content-Type and declared Content-Length are
+ * held against the body only once its first byte arrives (`JSON_REQUIRED`,
+ * `INVALID_CONTENT_LENGTH`, `BODY_TOO_LARGE`): a response to a HEAD request
+ * describes a body it does not carry, which Chromium and WebKit give as an
+ * empty stream. So a response whose body is missing or empty, such as one to
+ * HEAD or a 204 or 304, is `EMPTY_BODY` whatever its headers say.
  */
 export async function readBoundedJsonResponse(
   response: Response,
@@ -214,7 +214,8 @@ async function readBody(message: Request | Response, plan: ReadPlan): Promise<Ui
   if (message.bodyUsed || body?.locked === true) {
     throw new TypeError('The body was already read or is locked by another reader.');
   }
-  // A refusal before reading cancels a response body: nothing else would.
+  // An aborted signal refuses before reading; that cancels a response body,
+  // since nothing else would.
   const released = (refusal: HttpBodyError): HttpBodyError => {
     if (plan.owner === 'response' && body !== null) {
       void body.cancel(refusal).catch(() => undefined);
@@ -230,16 +231,17 @@ async function readBody(message: Request | Response, plan: ReadPlan): Promise<Ui
   if (body === null) {
     return new Uint8Array(0);
   }
-  if (plan.json && !isJsonMediaType(message.headers.get('Content-Type'))) {
-    throw released(new HttpBodyError('JSON_REQUIRED'));
-  }
-  const lengthRefusal = refuseDeclaredLength(message.headers, plan.maximumBytes);
-  if (lengthRefusal !== undefined && plan.owner === 'request') {
-    throw lengthRefusal;
+  const headerRefusal =
+    plan.json && !isJsonMediaType(message.headers.get('Content-Type'))
+      ? new HttpBodyError('JSON_REQUIRED')
+      : refuseDeclaredLength(message.headers, plan.maximumBytes);
+  if (headerRefusal !== undefined && plan.owner === 'request') {
+    throw headerRefusal;
   }
   // Chromium and WebKit give a response to HEAD an empty stream instead of no
-  // body, so a response's declared length counts only once a byte arrives.
-  return readStream(body, plan, lengthRefusal);
+  // body, so a response's headers count against it only once a byte arrives,
+  // and an empty response reads as empty in every runtime.
+  return readStream(body, plan, headerRefusal);
 }
 
 function refuseDeclaredLength(headers: Headers, maximumBytes: number): HttpBodyError | undefined {

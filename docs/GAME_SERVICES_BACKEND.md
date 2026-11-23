@@ -802,8 +802,8 @@ seconds by default) and `signal`:
   counts the bytes after the runtime decodes a `Content-Encoding` such as
   gzip, so the decoded size is what is bounded. A message whose body is
   missing or empty, such as a GET request or a response to HEAD or a 304,
-  reads as empty whatever its `Content-Length` describes; Chromium and WebKit
-  give a response to HEAD an empty body rather than none.
+  reads as empty whatever its `Content-Type` and `Content-Length` describe;
+  Chromium and WebKit give a response to HEAD an empty body rather than none.
 - The timeout covers the whole read, so a body that trickles in a byte at a
   time is refused as surely as one that stalls. An aborted `signal` stops the
   read; a client passes the signal it gave `fetch`. A stream whose chunks are
@@ -813,7 +813,8 @@ seconds by default) and `signal`:
 - Text is strict UTF-8 whatever the `charset` says, and a leading byte order
   mark is dropped, as `text()` does. The JSON readers also require a JSON media
   type (`application/json`, `text/json` or any `+json` type) and refuse an
-  empty body.
+  empty body. Like the declared length, a response's type is checked once its
+  first byte arrives, and a request's before reading.
 
 Every refusal is an `HttpBodyError` whose `code` is stable. `status` is the
 answer a server gives for a request body; a refused response body is an
@@ -833,8 +834,8 @@ upstream failure, so a client or proxy answers with its own status instead.
 
 A reader that gives up part way cancels the body. A request it refuses before
 reading stays unread, and the server runtime discards it after the error
-response. A response it refuses before reading is cancelled as well, because
-nothing else releases the connection behind it. A body that was already read,
+response. A response it refuses is always cancelled, because nothing else
+releases the connection behind it. A body that was already read,
 even partly, or is locked rejects with a `TypeError`, as does a request in
 Firefox, which does not implement `Request.body`; an invalid limit rejects with
 a `RangeError`. Neither touches the body.

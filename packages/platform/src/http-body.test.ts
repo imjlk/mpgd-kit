@@ -453,12 +453,13 @@ describe('content type', () => {
       ]);
       expect([request.pulls(), request.cancelled()]).toEqual([0, undefined]);
 
-      const response = trackedBody(['{}']);
+      // A response's type counts once its first byte arrives, then it is cancelled.
+      const response = trackedBody(['{}', '{}']);
       const responseError = await refusal(
         readBoundedJsonResponse(new Response(response.stream, { headers }), 64),
       );
       expect(responseError.code).toBe('JSON_REQUIRED');
-      expect([response.pulls(), response.cancelled()]).toEqual([0, { reason: responseError }]);
+      expect([response.pulls(), response.cancelled()]).toEqual([1, { reason: responseError }]);
 
       await expect(readBoundedRequestText(post('{}', headers), 64)).resolves.toBe('{}');
       await expect(readBoundedResponseText(new Response('{}', { headers }), 64)).resolves.toBe(
@@ -538,6 +539,17 @@ describe('bodyless messages', () => {
     await expect(refusal(readBoundedJsonResponse(emptyHead('1024'), 64))).resolves.toMatchObject(
       { code: 'EMPTY_BODY' },
     );
+    // The same answer as a null body, whatever Content-Type the HEAD response describes.
+    for (const headers of [{ 'Content-Type': 'text/html' }, {}]) {
+      const emptyStream = new Response(trackedBody([]).stream, { headers });
+      const nullBody = new Response(null, { headers });
+      await expect(refusal(readBoundedJsonResponse(emptyStream, 64))).resolves.toMatchObject({
+        code: 'EMPTY_BODY',
+      });
+      await expect(refusal(readBoundedJsonResponse(nullBody, 64))).resolves.toMatchObject({
+        code: 'EMPTY_BODY',
+      });
+    }
   });
 });
 
