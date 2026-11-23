@@ -58,10 +58,7 @@ const bufferedReporter = createAnalyticsReporter({
   sink: reportedSink,
 });
 await bufferedReporter.track({ name: 'game_started', properties: { configTarget: 'web' } });
-await bufferedReporter.track({
-  name: 'stage_finished',
-  properties: { stage: 1, skipped: undefined },
-});
+await bufferedReporter.track({ name: 'stage_finished', properties: { stage: 1 } });
 assertJsonEqual(
   reportedSink.events,
   [

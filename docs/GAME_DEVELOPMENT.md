@@ -79,10 +79,10 @@ smoke action. Microsoft Store files are generated only when selected or later
 initialized. It stays intentionally small; real scoring, economy, content, and
 save models should be added by each game.
 
-The starter sends no analytics anywhere. Its buffered sink keeps only the latest
-100 events in memory for debugging, and the Phaser Play scene shows how many
-were tracked. To deliver events, give the reporter and the game services a sink
-of your own in `src/main.ts`.
+The starter's analytics events stay in memory; nothing sends them. Its buffered
+sink keeps only the latest 100 for debugging, and the Phaser template's Play
+scene shows how many were tracked. To deliver events, give the reporter and the
+game services a sink of your own in `src/main.ts`.
 
 ## Viewport And UI Composition
 
