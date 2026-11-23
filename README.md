@@ -632,4 +632,4 @@ Official references:
 
 ONE play uses the browser adapter's `/oneplay` entry point and a hosted, non-installable web artifact. It supports asynchronous host startup, synchronous exit checkpoints and server-gated monetization. See [ONE play integration](docs/ONEPLAY.md).
 
-Review requests: [cross-platform adapters, courtesy policy and support matrix](docs/REVIEWS.md).
+Review requests: [cross-platform adapters, courtesy policy, when to ask and support matrix](docs/REVIEWS.md).
