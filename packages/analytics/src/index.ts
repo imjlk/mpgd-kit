@@ -54,8 +54,26 @@ export interface CreateAnalyticsReporterInput {
 }
 
 export interface BufferedAnalyticsSink extends AnalyticsSink {
+  /**
+   * The most recent events, oldest first, up to the sink's capacity. Every read returns the
+   * same array, which changes in place as events arrive and the oldest are dropped.
+   */
   readonly events: readonly AnalyticsEvent[];
+  /** Events tracked since the sink was created, including those no longer in `events`. */
+  readonly trackedCount: number;
 }
+
+export interface CreateBufferedAnalyticsSinkInput {
+  /**
+   * The most events `events` keeps; each event past it drops the oldest. A non-negative
+   * integer, `defaultBufferedAnalyticsSinkCapacity` when omitted; anything else throws a
+   * `RangeError`. `0` keeps no events and only counts them.
+   */
+  readonly capacity?: number;
+}
+
+/** How many events a buffered sink keeps when no `capacity` is given. */
+export const defaultBufferedAnalyticsSinkCapacity = 1_000;
 
 export const assertAnalyticsEvent = typia.createAssert<AnalyticsEvent>();
 
@@ -65,15 +83,35 @@ export function createNoopAnalyticsSink(): AnalyticsSink {
   };
 }
 
-export function createBufferedAnalyticsSink(): BufferedAnalyticsSink {
+/**
+ * An in-memory sink for tests and debug views. It keeps only the most recent events, so a
+ * long session holds at most `capacity` of them, and it sends nothing anywhere.
+ */
+export function createBufferedAnalyticsSink(
+  input: CreateBufferedAnalyticsSinkInput = {},
+): BufferedAnalyticsSink {
+  const capacity = input.capacity ?? defaultBufferedAnalyticsSinkCapacity;
+  if (!Number.isSafeInteger(capacity) || capacity < 0) {
+    throw new RangeError('Buffered analytics sink capacity must be a non-negative integer.');
+  }
   const events: AnalyticsEvent[] = [];
+  let trackedCount = 0;
 
   return {
     get events() {
       return events;
     },
+    get trackedCount() {
+      return trackedCount;
+    },
     track(event) {
       events.push(assertAnalyticsEvent(event));
+      trackedCount += 1;
+      // Each call trims, so at most one event is over. In place, so a caller holding
+      // `events` keeps reading the live buffer.
+      if (events.length > capacity) {
+        events.shift();
+      }
     },
   };
 }

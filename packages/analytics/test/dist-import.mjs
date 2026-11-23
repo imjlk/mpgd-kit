@@ -1,7 +1,12 @@
 // Plain Node must load the shipped exports without a TS loader hiding missing .js extensions.
 import assert from 'node:assert/strict';
 
-import { createAnalyticsReporter, createMonetizationAttempt } from '@mpgd/analytics';
+import {
+  createAnalyticsReporter,
+  createBufferedAnalyticsSink,
+  createMonetizationAttempt,
+  defaultBufferedAnalyticsSinkCapacity,
+} from '@mpgd/analytics';
 
 const events = [];
 const attempt = createMonetizationAttempt({
@@ -21,4 +26,11 @@ assert.equal(events[1].errorCode, 'USER_CANCELLED');
 await createAnalyticsReporter({ target: 'server', sessionId: 'published-consumer' }).track({
   name: 'purchase_started', properties: { productId: 'logical-product' },
 });
+const sink = createBufferedAnalyticsSink({ capacity: 1 });
+const reporter = createAnalyticsReporter({ target: 'server', sessionId: 'published-consumer', sink });
+await reporter.track({ name: 'purchase_started', properties: { productId: 'logical-product' } });
+await reporter.track({ name: 'purchase_granted', properties: { productId: 'logical-product' } });
+assert.deepEqual(sink.events.map(({ name }) => name), ['purchase_granted']);
+assert.equal(sink.trackedCount, 2);
+assert.equal(defaultBufferedAnalyticsSinkCapacity, 1_000);
 console.info('Published analytics entry smoke passed.');
