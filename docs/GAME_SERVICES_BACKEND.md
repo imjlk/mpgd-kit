@@ -802,7 +802,10 @@ seconds by default) and `signal`:
   such as gzip, so the decoded size is what is bounded.
 - The timeout covers the whole read, so a body that trickles in a byte at a
   time is refused as surely as one that stalls. An aborted `signal` stops the
-  read; a client passes the signal it gave `fetch`.
+  read; a client passes the signal it gave `fetch`. A stream whose chunks are
+  always ready, such as one built in memory, never waits; in a Worker, whose
+  clock stands still until the next I/O, reading it is bounded by the byte
+  limit instead of the timeout.
 - Text is strict UTF-8 whatever the `charset` says, and a leading byte order
   mark is dropped, as `text()` does. The JSON readers also require a JSON media
   type (`application/json`, `text/json` or any `+json` type) and refuse an

@@ -78,7 +78,9 @@ export interface HttpBodyReadOptions {
   /**
    * Milliseconds the whole read may take, from the call until the last byte;
    * 10 000 when omitted. A positive integer of at most 2 147 483 647, the
-   * longest delay a timer keeps.
+   * longest delay a timer keeps. A stream whose chunks are always ready, such
+   * as one built in memory, never waits: in Workers, whose clock stands still
+   * until the next I/O, reading it is bounded by `maximumBytes` instead.
    */
   readonly timeoutMs?: number | undefined;
   /** Stops the read when it aborts; the reader then refuses with `BODY_READ_ABORTED`. */
@@ -281,7 +283,9 @@ async function readStream(
   const timer = setTimeout(() => stop(new HttpBodyError('BODY_READ_TIMEOUT')), timeoutMs);
   // A stream whose chunks are always ready resolves every read without
   // yielding to the event loop, so the timer cannot fire; the clock is
-  // checked after each read as well.
+  // checked after each read as well. Workers' clock stands still until the
+  // next I/O, so there such a read is bounded by maximumBytes alone: a timer
+  // yield would fix that, but would also hang callers' tests on fake timers.
   const deadline = Date.now() + timeoutMs;
   signal?.addEventListener('abort', abort, { once: true });
   try {
