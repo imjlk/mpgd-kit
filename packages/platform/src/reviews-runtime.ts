@@ -213,8 +213,8 @@ export function createReviewSession(input: {
   if (!isReviewPolicy(policy)) {
     throw new TypeError('Invalid review policy');
   }
-  const provider = gateway.reviews;
   try {
+    const provider = gateway.reviews;
     if (!provider?.getCapabilities().nativePrompt) {
       return undefined;
     }
@@ -237,15 +237,16 @@ export interface ReviewMoments {
   /**
    * A finished play, whatever its outcome, or a reward the backend already granted. Each ID counts
    * once, so a result rendered twice reuses its ID; pass a new ID of at most 128 characters per
-   * moment. Never record only wins, high scores or good ratings.
+   * moment. A runtime counts at most 10,000 moments. Never record only wins, high scores or good
+   * ratings.
    */
   record(momentId: string): void;
   /**
    * The player reached a settled screen: a menu after a result, a sheet just closed, the app back in
    * the foreground. `isSafe` says whether that screen still shows with nothing over it (no play,
-   * dialog, ad, purchase or hidden document); it is checked again after every wait. Without a new
-   * moment the call does nothing. Do not await it in navigation: it can stay pending while the host
-   * shows its own UI.
+   * dialog, ad, purchase or hidden document); it is checked again after every wait, and a screen
+   * found covered keeps its opportunity for the next settled screen. Without a new moment the call
+   * does nothing. Do not await it in navigation: it can stay pending while the host shows its own UI.
    */
   settled(isSafe: () => boolean): Promise<void>;
   /** Ends the flow with the game runtime and disposes the session; later calls do nothing. */
@@ -276,8 +277,20 @@ export function createReviewMoments(session: ReviewSession | undefined): ReviewM
         try {
           await persistence;
           if (!disposed && isSafe()) {
+            const previous = considered;
             considered = candidate;
-            await review.consider(() => !disposed && isSafe());
+            let covered = false;
+            await review.consider(() => {
+              const safe = !disposed && isSafe();
+              if (!safe) {
+                covered = true;
+              }
+              return safe;
+            });
+            // The session found the screen covered when it checked again, so it did not ask.
+            if (covered && !disposed) {
+              considered = previous;
+            }
           }
           // A covered screen keeps its opportunity; a newer settled screen replaces an older one.
         } catch {
@@ -285,6 +298,8 @@ export function createReviewMoments(session: ReviewSession | undefined): ReviewM
           considered = candidate;
         }
       }
+      // A settled screen whose moments were all considered is not kept for a later moment.
+      latest = undefined;
     })().finally(() => {
       checking = undefined;
       // A screen that settled while the loop was finishing is checked now, not at the next one.

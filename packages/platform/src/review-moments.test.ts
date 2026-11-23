@@ -209,6 +209,29 @@ describe('review sessions', () => {
     expect(asked).toHaveBeenCalledOnce();
   });
 
+  it('keeps the opportunity when the screen was covered as the session checked it', async () => {
+    const { storage, values } = memoryStorage();
+    const request = vi.fn(async () => {});
+    const moments = createReviewMoments(createReviewSession({
+      gateway: gateway(storage, request),
+      gameId: 'demo',
+      policy: { minimumVisits: 1, minimumCompletedPlays: 1, cooldownMs: 1000 },
+    }));
+    moments.record('play-1');
+    // Safe for the moment, covered by a dialog when the session checks again, then safe again.
+    let checks = 0;
+    await moments.settled(() => {
+      checks += 1;
+      return checks !== 2;
+    });
+    expect(checks).toBe(2);
+    expect(request).not.toHaveBeenCalled();
+    expect(values.get('mpgd:reviews:v1:demo:ait:apps-in-toss')).toMatchObject({ lastRequestAt: null });
+    await moments.settled(() => true);
+    expect(request).toHaveBeenCalledOnce();
+    moments.dispose();
+  });
+
   it('keeps recording moments while the host request never resolves', async () => {
     const { storage, values } = memoryStorage();
     const request = vi.fn(() => new Promise<void>(() => {}));
@@ -223,7 +246,12 @@ describe('review sessions', () => {
     moments.record('play-2');
     await vi.waitFor(() => expect(values.get('mpgd:reviews:v1:demo:ait:apps-in-toss'))
       .toMatchObject({ plays: 2 }));
+    // Disposing while the host still holds the request ends the flow without waiting for it.
     moments.dispose();
+    moments.record('play-3');
+    await expect(moments.settled(() => true)).resolves.toBeUndefined();
+    expect(request).toHaveBeenCalledOnce();
+    expect(values.get('mpgd:reviews:v1:demo:ait:apps-in-toss')).toMatchObject({ plays: 2 });
   });
 });
 
