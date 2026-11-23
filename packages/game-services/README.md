@@ -20,6 +20,22 @@ installed by game clients, and no other subpath imports it. It moved here from
 `@mpgd/adapter-capacitor/app-store-server`, whose deprecated re-export was
 removed in commerce v2 PR C4.
 
+## Google service-account access tokens
+
+`createGoogleAccessTokenSource` from `@mpgd/game-services/google-access-token`
+mints OAuth access tokens for any Google API scope from a service-account key
+(`parseGoogleServiceAccount` reads the key file), with WebCrypto only, so it
+runs on Cloudflare Workers. It caches each token until five minutes before it
+expires, shares one token request between concurrent callers, bounds each
+request in time (`timeoutMs`, 10 seconds) and response size (16 KiB), refuses
+redirects, and fails with a `GoogleAccessTokenError` that holds a code, never
+the key, the signed assertion, or a token.
+`createGooglePlayPublisherAccessTokenSource` is it with
+`googlePlayPublisherScope`: pass its `get` as the publisher client's
+`getAccessToken` and its `invalidate` as `invalidateAccessToken`. FCM's
+`createFcmAccessTokenSource` is it with the FCM scope. Backend only. See
+[Google Play one-time products](../../docs/GAME_SERVICES_BACKEND.md#google-play-one-time-products).
+
 ## Commerce reconciler
 
 `createCommerceReconciler` from `@mpgd/game-services/commerce-reconciler` is

@@ -1012,13 +1012,62 @@ Google Play one-time products. The game-owned backend supplies a
 `GooglePlayProductPurchaseClient` implementation using its own OAuth/service
 account environment. `@mpgd/game-services/google-play-publisher-client` now
 provides that transport: pass a server-side `getAccessToken(signal)` callback
-that returns a token scoped to `https://www.googleapis.com/auth/androidpublisher`.
-The callback must refresh tokens when needed; do not put credentials or access
-tokens in the game client, generated artifacts, or this repository. The
-transport calls the official ProductPurchaseV2 get endpoint and the legacy
-product acknowledge/consume endpoints used for post-ledger finalization. It
-does not grant anything on its own, and an HTTP success is not evidence of a
-working Play Console account until tested with that game's configuration.
+that returns a token scoped to `googlePlayPublisherScope`
+(`https://www.googleapis.com/auth/androidpublisher`). The callback must refresh
+tokens when needed; do not put credentials or access tokens in the game client,
+generated artifacts, or this repository. The transport calls the official
+ProductPurchaseV2 get endpoint and the legacy product acknowledge/consume
+endpoints used for post-ledger finalization. It does not grant anything on its
+own, and an HTTP success is not evidence of a working Play Console account
+until tested with that game's configuration.
+
+`createGooglePlayPublisherAccessTokenSource` from the same subpath is such a
+callback, minted from the game-owned service-account key: it signs a JWT
+through WebCrypto and exchanges it at Google's token endpoint, so it needs no
+dependency and runs on Cloudflare Workers. Keep the key file in a server
+secret, read it with `parseGoogleServiceAccount`, and keep one source per
+isolate. Pass its `get` as `getAccessToken` and its `invalidate` as
+`invalidateAccessToken`: the client calls that with the token Google answered
+HTTP 401 for (revoked, or expired early), and the next request mints a new
+one. The request that got the 401 still fails. Play also answers 401 when the
+service account lacks its Play Console permission, which a new token does not
+fix, so the source drops a refused token at most once a minute rather than
+minting one for every request. The private service behind the
+reference Worker's `GAME_SERVICES_GOOGLE_PLAY_PUBLISHER_AUTH` binding can mint
+its tokens with the same source.
+
+```ts
+const tokens = createGooglePlayPublisherAccessTokenSource({
+  serviceAccount: parseGoogleServiceAccount(env.GOOGLE_PLAY_SERVICE_ACCOUNT),
+});
+const client = createGooglePlayPublisherClient({
+  getAccessToken: tokens.get,
+  invalidateAccessToken: tokens.invalidate,
+});
+```
+
+The source caches a token in memory until five minutes before it expires and
+shares one token request between concurrent callers. A caller's signal ends
+only its own wait. Each token request is bounded by `timeoutMs` (10 seconds by
+default), response body included, and its answer by 16 KiB; a redirect is
+refused, never followed. No caller waits longer than `timeoutMs` and a second,
+even on a request started by a Worker request that ended before Google
+answered; the next caller then starts a new request. A failure rejects with a
+`GoogleAccessTokenError` whose `code` says why (`TOKEN_KEY_UNUSABLE`,
+`TOKEN_INVALID_GRANT`, `TOKEN_NETWORK_ERROR`, ...) and whether a retry can
+help (`retryable`), and the source answers with it for a while (30 seconds for
+a refused grant, a few seconds for an outage) before asking Google again. The
+error carries that code and, for an unusable key, a `cause` naming the step
+that failed: never the key, the signed assertion, a token, or Google's error
+description. The source is `createGoogleAccessTokenSource` from
+`@mpgd/game-services/google-access-token` with the Play scope; the same
+function serves any other Google API scope, and the FCM provider's
+`createFcmAccessTokenSource` is it with the FCM scope. The service account
+also needs its Play Console permissions (see the
+[store refunds runbook](./CLOUDFLARE_WORKER_DEPLOY.md#google-play-voided-purchases-and-owed-acknowledges)).
+
+<!-- @link ../packages/game-services/src/google-play-publisher-client.ts#createGooglePlayPublisherAccessTokenSource The Play Developer API token source: the Google source with googlePlayPublisherScope. -->
+<!-- @link ../packages/game-services/src/google-oauth.ts#createAccessTokenSource Shared token request, timeout and size bounds, refused redirects, and redacted failures. -->
 
 The Android callback sends a `google-play.product-purchase.v2` evidence envelope
 whose payload contains only the purchase token. Configure the package name on

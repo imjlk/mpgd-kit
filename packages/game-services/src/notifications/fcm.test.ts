@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 
+import { createGoogleAccessTokenSource, GoogleAccessTokenError } from '../google-access-token.js';
 import type { NotificationRemoteDeliveryRequest } from './delivery-provider.js';
 import {
   buildFcmMessage,
@@ -795,6 +796,65 @@ const request: NotificationRemoteDeliveryRequest = {
   release();
   assert.equal(await refreshing, 'new-token');
   assert.equal(await tokens.get(), 'new-token');
+}
+
+// The FCM source is the Google token source for the FCM scope: its errors
+// keep their FCM name and message and are GoogleAccessTokenErrors, and the
+// provider maps a refusal from any shared Google source as configuration.
+{
+  const now = () => Date.parse('2026-10-19T03:00:00Z');
+  const refusing = fakeGoogle({
+    token: () => Response.json({ error: 'invalid_grant' }, { status: 400 }),
+  });
+  await assert.rejects(
+    createFcmAccessTokenSource({ serviceAccount, fetch: refusing.fetch, now }).get(),
+    (error: unknown) => {
+      assert.ok(error instanceof FcmAccessTokenError);
+      assert.ok(error instanceof GoogleAccessTokenError);
+      assert.equal(error.name, 'FcmAccessTokenError');
+      assert.equal(error.message, 'FCM access token request failed: TOKEN_INVALID_GRANT.');
+      // The stack names FCM too: V8 writes its first line when it is first read.
+      assert.match(
+        String(error.stack),
+        /^FcmAccessTokenError: FCM access token request failed: TOKEN_INVALID_GRANT\.\n/u,
+      );
+      assert.deepEqual(
+        { code: error.code, retryable: error.retryable, retryAfter: error.retryAfterSeconds },
+        { code: 'TOKEN_INVALID_GRANT', retryable: false, retryAfter: undefined },
+      );
+      return true;
+    },
+  );
+  const shared = createGoogleAccessTokenSource({
+    serviceAccount,
+    scope: fcmMessagingScope,
+    fetch: refusing.fetch,
+    now,
+  });
+  assert.deepEqual(
+    await createFcmDeliveryProvider({ serviceAccount, fetch: refusing.fetch, now, tokens: shared })
+      .send(request),
+    { status: 'rejected', reason: 'configuration', providerCode: 'TOKEN_INVALID_GRANT' },
+  );
+  // A timeout that cannot bound a token request is refused when the provider is made.
+  assert.throws(
+    () => createFcmDeliveryProvider({ serviceAccount, timeoutMs: 0 }),
+    /timeout must be a positive number/u,
+  );
+  // The key's own messages still name FCM.
+  await assert.rejects(
+    createFcmAccessTokenSource({
+      serviceAccount: { ...serviceAccount, privateKey: pemOf('AAAA') },
+      fetch: refusing.fetch,
+      now,
+    }).get(),
+    (error: unknown) => {
+      assert.ok(error instanceof FcmAccessTokenError);
+      assert.ok(error.cause instanceof TypeError);
+      assert.match(error.cause.message, /^The FCM service account private key/u);
+      return true;
+    },
+  );
 }
 
 // The registration wires FCM into the registry for android and ios, registration tokens only.

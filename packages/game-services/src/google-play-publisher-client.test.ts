@@ -203,3 +203,34 @@ await assert.rejects(
   stuckClient.getProductPurchaseV2({ ...input, signal: abortedBefore.signal }),
   (error) => error instanceof DOMException && error.name === 'AbortError',
 );
+
+// A 401 tells the token source which token Google refused; other failures do not.
+const refused: string[] = [];
+let answer = 401;
+const refusing = createGooglePlayPublisherClient({
+  getAccessToken: () => 'revoked-access-token',
+  invalidateAccessToken: (accessToken) => {
+    refused.push(accessToken);
+  },
+  fetch: async () => new Response('sensitive/token+value', { status: answer }),
+});
+await assert.rejects(refusing.getProductPurchaseV2(input), /request failed \(HTTP 401\)/u);
+await assert.rejects(refusing.acknowledgeProductPurchase(input), /HTTP 401/u);
+answer = 403;
+await assert.rejects(refusing.getProductPurchaseV2(input), /HTTP 403/u);
+answer = 503;
+await assert.rejects(refusing.consumeProductPurchase(input), /HTTP 503/u);
+assert.deepEqual(refused, ['revoked-access-token', 'revoked-access-token']);
+// A hook that throws does not replace the request's failure.
+const throwingHook = createGooglePlayPublisherClient({
+  getAccessToken: () => 'revoked-access-token',
+  invalidateAccessToken: () => {
+    throw new Error('hook failed');
+  },
+  fetch: async () => new Response(null, { status: 401 }),
+});
+await assert.rejects(
+  throwingHook.getProductPurchaseV2(input),
+  (error: unknown) => error instanceof Error
+    && error.message === 'Google Play Publisher request failed (HTTP 401).',
+);

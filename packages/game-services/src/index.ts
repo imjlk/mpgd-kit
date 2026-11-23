@@ -18,6 +18,7 @@ export * from './admob-client-reward.js';
 export * from './contract.js';
 export * from './evidence-verification.js';
 export * from './guest-session.js';
+export * from './google-access-token.js';
 export * from './google-play-purchase.js';
 export * from './google-play-publisher-client.js';
 export * from './google-play-rtdn.js';
