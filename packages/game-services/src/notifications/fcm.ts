@@ -3,6 +3,15 @@ import {
   referenceNotificationProviders,
 } from '@mpgd/platform/notifications';
 
+import { GoogleAccessTokenError } from '../google-access-token.js';
+import {
+  createAccessTokenSource,
+  errorOptionsOf,
+  googleTokenEndpoint,
+  providerCodeOf,
+  readServiceAccountFields,
+  retryAfterOf,
+} from '../google-oauth.js';
 import {
   fcmInstallationIdRefusal,
   notificationExpiredProviderCode,
@@ -37,7 +46,8 @@ import type { NotificationProviderRegistration } from './registry.js';
  */
 
 export const fcmMessagingScope = 'https://www.googleapis.com/auth/firebase.messaging';
-export const fcmTokenEndpoint = 'https://oauth2.googleapis.com/token';
+/** Google's OAuth token endpoint (`googleTokenEndpoint`), where FCM access tokens are minted. */
+export const fcmTokenEndpoint = googleTokenEndpoint;
 /**
  * The FCM HTTP v1 API takes registration tokens. A Firebase installation id
  * (FID, the `fcm-installation` kind) is reserved: the kit types it because
@@ -85,15 +95,6 @@ const maxPayloadBytes = 3840;
  * id is the SHA-256 of the send key, which is 64 hex characters.
  */
 export const fcmCollapseIdBytes = 64;
-/** The longest `Retry-After` this provider passes on; the service gives up after a day anyway. */
-const maxRetryAfterSeconds = 86_400;
-/** How long a refused grant or an unusable key answers without asking Google again. */
-const failedTokenCacheMs = 30_000;
-/** How long a token endpoint that is down answers without asking again. */
-const retryableTokenCacheMs = 5_000;
-const tokenLifetimeSeconds = 3600;
-/** A cached token is refreshed this long before it expires. */
-const tokenRefreshMarginMs = 5 * 60 * 1000;
 const defaultTimeoutMs = 10_000;
 const defaultRetryAfterSeconds = 60;
 
@@ -111,34 +112,12 @@ export interface FcmServiceAccount {
  * Errors name the missing field and never include a value.
  */
 export function parseFcmServiceAccount(input: unknown): FcmServiceAccount {
-  let value: unknown = input;
-  if (typeof input === 'string') {
-    try {
-      value = JSON.parse(input);
-    } catch {
-      throw new TypeError('The FCM service account is not JSON.');
-    }
-  }
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new TypeError('The FCM service account must be an object.');
-  }
-  const record = value as Readonly<Record<string, unknown>>;
-  const field = (name: string): string => {
-    const text = record[name];
-    if (typeof text !== 'string' || text.trim() === '') {
-      throw new TypeError(`The FCM service account has no ${name}.`);
-    }
-    return text;
-  };
-  if (record.type !== undefined && record.type !== 'service_account') {
-    throw new TypeError('The FCM credential is not a service account key.');
-  }
-  const privateKeyId = record.private_key_id;
+  const { field, privateKeyId } = readServiceAccountFields(input, 'FCM');
   return {
     projectId: field('project_id'),
     clientEmail: field('client_email'),
     privateKey: field('private_key'),
-    ...(typeof privateKeyId === 'string' && privateKeyId !== '' ? { privateKeyId } : {}),
+    ...(privateKeyId === undefined ? {} : { privateKeyId }),
   };
 }
 
@@ -151,26 +130,31 @@ export interface FcmAccessTokenSource {
   invalidate(token: string): void;
 }
 
-/** Why no access token could be minted, and whether trying again later can help. */
-export class FcmAccessTokenError extends Error {
+/**
+ * Why no access token could be minted, and whether trying again later can
+ * help: a `GoogleAccessTokenError` whose message names FCM.
+ */
+export class FcmAccessTokenError extends GoogleAccessTokenError {
   override readonly name = 'FcmAccessTokenError';
-  readonly retryable: boolean;
-  readonly code: string;
-  readonly retryAfterSeconds: number | undefined;
 
-  constructor(code: string, retryable: boolean, retryAfterSeconds?: number, options?: { readonly cause?: unknown }) {
-    super(`FCM access token request failed: ${code}.`, options);
-    this.code = code;
-    this.retryable = retryable;
-    this.retryAfterSeconds = retryAfterSeconds;
+  constructor(
+    code: string,
+    retryable: boolean,
+    retryAfterSeconds?: number,
+    options?: { readonly cause?: unknown },
+  ) {
+    super(code, retryable, retryAfterSeconds, options);
+    this.message = `FCM access token request failed: ${code}.`;
   }
 }
 
 /**
- * Mints and caches OAuth access tokens for the FCM scope. The token lives
- * only in this object's memory: it is never logged, persisted, or put in an
- * error. Concurrent callers share one request, a failed request is not
- * cached, and a token is refreshed five minutes before it expires.
+ * Mints and caches OAuth access tokens for the FCM scope: the Google token
+ * source (`createGoogleAccessTokenSource`) for `fcmMessagingScope`, whose
+ * failures are `FcmAccessTokenError`s. The token lives only in this object's
+ * memory: it is never logged, persisted, or put in an error. Concurrent
+ * callers share one request, a failed request is not cached, and a token is
+ * refreshed five minutes before it expires.
  */
 export function createFcmAccessTokenSource(input: {
   readonly serviceAccount: FcmServiceAccount;
@@ -179,137 +163,19 @@ export function createFcmAccessTokenSource(input: {
   readonly subtle?: SubtleCrypto;
   readonly timeoutMs?: number;
 }): FcmAccessTokenSource {
-  const { serviceAccount } = input;
-  const fetcher: FetchLike = input.fetch ?? ((url, init) => globalThis.fetch(url, init));
-  const now = input.now ?? Date.now;
-  const subtle = input.subtle ?? globalThis.crypto.subtle;
-  const timeoutMs = input.timeoutMs ?? defaultTimeoutMs;
-  let signingKey: Promise<CryptoKey> | undefined;
-  let cached: { readonly token: string; readonly refreshAt: number; readonly expiresAt: number } | undefined;
-  let failed: { readonly error: FcmAccessTokenError; readonly until: number } | undefined;
-  let pending: Promise<string> | undefined;
-
-  const key = (): Promise<CryptoKey> => {
-    signingKey ??= importPrivateKey(subtle, serviceAccount.privateKey).catch((error: unknown) => {
-      signingKey = undefined;
-      throw error;
-    });
-    return signingKey;
-  };
-  /** The signed assertion; a key that cannot sign is a configuration error, never retried as a rate limit. */
-  const signedAssertion = async (claims: object): Promise<string> => {
-    try {
-      return await signJwt(subtle, await key(), {
-        header: {
-          alg: 'RS256',
-          typ: 'JWT',
-          ...(serviceAccount.privateKeyId === undefined ? {} : { kid: serviceAccount.privateKeyId }),
-        },
-        claims,
-      });
-    } catch (error) {
-      // The cause says which step failed (the PEM, the import, or signing); it never holds the key.
-      throw new FcmAccessTokenError('TOKEN_KEY_UNUSABLE', false, undefined, { cause: error });
-    }
-  };
-  const mint = async (): Promise<string> => {
-    const issuedAt = Math.floor(now() / 1000);
-    const assertion = await signedAssertion({
-      iss: serviceAccount.clientEmail,
-      scope: fcmMessagingScope,
-      aud: fcmTokenEndpoint,
-      iat: issuedAt,
-      exp: issuedAt + tokenLifetimeSeconds,
-    });
-    let response: Response;
-    try {
-      response = await fetcher(fcmTokenEndpoint, {
-        method: 'POST',
-        headers: { 'content-type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-          grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
-          assertion,
-        }).toString(),
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-    } catch {
-      throw new FcmAccessTokenError('TOKEN_NETWORK_ERROR', true);
-    }
-    const body = await readJson(response);
-    if (!response.ok) {
-      const error = typeof body?.error === 'string' ? body.error : `HTTP_${response.status}`;
-      const retryable = response.status === 429 || response.status >= 500;
-      throw new FcmAccessTokenError(
-        `TOKEN_${providerCodeOf(error)}`,
-        retryable,
-        retryable ? retryAfterOf(response, now()) : undefined,
-      );
-    }
-    const token = body?.access_token;
-    if (typeof token !== 'string' || token === '') {
-      throw new FcmAccessTokenError('TOKEN_MALFORMED_RESPONSE', true);
-    }
-    const expiresIn = typeof body?.expires_in === 'number' && Number.isFinite(body.expires_in) && body.expires_in > 0
-      ? Math.min(body.expires_in, tokenLifetimeSeconds)
-      : tokenLifetimeSeconds;
-    const expiresAt = issuedAt * 1000 + expiresIn * 1000;
-    cached = { token, refreshAt: expiresAt - tokenRefreshMarginMs, expiresAt };
-    return token;
-  };
-
-  return {
-    async get() {
-      if (cached !== undefined && now() < cached.refreshAt) {
-        return cached.token;
-      }
-      // Inside the refresh margin a token that has not expired still sends
-      // while a refresh fails.
-      const usable = cached !== undefined && now() < cached.expiresAt ? cached.token : undefined;
-      // A refresh already under way, or one that failed a moment ago, does not hold up a usable token.
-      if (usable !== undefined && pending !== undefined) {
-        return usable;
-      }
-      if (failed !== undefined && now() < failed.until) {
-        if (usable !== undefined) {
-          return usable;
-        }
-        // A refused grant fails the same way for a while: a fan-out does not ask Google per send.
-        throw failed.error;
-      }
-      pending ??= mint()
-        .then((token) => {
-          failed = undefined;
-          return token;
-        })
-        .catch((error: unknown) => {
-          if (error instanceof FcmAccessTokenError) {
-            // A refused grant waits 30 s; an outage waits a few seconds, or
-            // as long as it asked, so a fan-out does not ask once per send.
-            const wait = error.retryable
-              ? Math.max(retryableTokenCacheMs, Math.min((error.retryAfterSeconds ?? 0) * 1000, 60_000))
-              : failedTokenCacheMs;
-            failed = { error, until: now() + wait };
-          }
-          throw error;
-        })
-        .finally(() => {
-          pending = undefined;
-        });
-      if (usable === undefined) {
-        return pending;
-      }
-      try {
-        return await pending;
-      } catch {
-        return usable;
-      }
+  return createAccessTokenSource(
+    { ...input, scope: fcmMessagingScope },
+    {
+      label: 'FCM',
+      errorOf: (failure) =>
+        new FcmAccessTokenError(
+          failure.code,
+          failure.retryable,
+          failure.retryAfterSeconds,
+          errorOptionsOf(failure),
+        ),
     },
-    invalidate(token) {
-      if (cached?.token === token) {
-        cached = undefined;
-      }
-    },
-  };
+  );
 }
 
 export interface CreateFcmDeliveryProviderInput {
@@ -581,13 +447,14 @@ export function createFcmDeliveryProvider(
         try {
           token = await tokens.get();
         } catch (error) {
-          // No token means nothing was sent.
-          if (error instanceof FcmAccessTokenError && !error.retryable) {
+          // No token means nothing was sent. A shared `tokens` source may be
+          // any Google one: an `FcmAccessTokenError` is one too.
+          if (error instanceof GoogleAccessTokenError && !error.retryable) {
             return { status: 'rejected', reason: 'configuration', providerCode: error.code };
           }
           return {
             status: 'rate-limited',
-            retryAfterSeconds: error instanceof FcmAccessTokenError
+            retryAfterSeconds: error instanceof GoogleAccessTokenError
               ? (error.retryAfterSeconds ?? defaultRetryAfterSeconds)
               : defaultRetryAfterSeconds,
           };
@@ -698,56 +565,6 @@ function fcmErrorCodeOf(body: unknown): string | undefined {
   return errorCodeOf(errorDetailsOf(body));
 }
 
-/** An upstream error string as a short provider code: upper case, `[A-Z0-9_]`, at most 64 characters. */
-function providerCodeOf(text: string): string {
-  return text.toUpperCase().replace(/[^A-Z0-9_]+/gu, '_').slice(0, 64) || 'UNKNOWN';
-}
-
-async function importPrivateKey(subtle: SubtleCrypto, pem: string): Promise<CryptoKey> {
-  const body = pem
-    .replace(/-----(?:BEGIN|END) PRIVATE KEY-----/gu, '')
-    .replace(/\\n|\s/gu, '');
-  let der: Uint8Array<ArrayBuffer>;
-  try {
-    der = Uint8Array.from(atob(body), (char) => char.charCodeAt(0));
-  } catch {
-    throw new TypeError('The FCM service account private key is not PKCS #8 PEM.');
-  }
-  try {
-    return await subtle.importKey(
-      'pkcs8',
-      der,
-      { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
-      false,
-      ['sign'],
-    );
-  } catch {
-    // The key itself never appears in the error.
-    throw new TypeError('The FCM service account private key could not be imported.');
-  }
-}
-
-async function signJwt(
-  subtle: SubtleCrypto,
-  key: CryptoKey,
-  input: { readonly header: object; readonly claims: object },
-): Promise<string> {
-  const encoder = new TextEncoder();
-  const signingInput = `${base64Url(encoder.encode(JSON.stringify(input.header)))}.${
-    base64Url(encoder.encode(JSON.stringify(input.claims)))
-  }`;
-  const signature = await subtle.sign('RSASSA-PKCS1-v1_5', key, encoder.encode(signingInput));
-  return `${signingInput}.${base64Url(new Uint8Array(signature))}`;
-}
-
-function base64Url(bytes: Uint8Array): string {
-  let binary = '';
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte);
-  }
-  return btoa(binary).replace(/\+/gu, '-').replace(/\//gu, '_').replace(/=+$/u, '');
-}
-
 async function readJson(response: Response): Promise<Readonly<Record<string, unknown>> | undefined> {
   try {
     const parsed: unknown = await response.json();
@@ -755,24 +572,6 @@ async function readJson(response: Response): Promise<Readonly<Record<string, unk
   } catch {
     return undefined;
   }
-}
-
-/** `Retry-After` in seconds (a number or an HTTP date), at most a day. */
-function retryAfterOf(response: Response, now: number): number | undefined {
-  const header = response.headers.get('retry-after');
-  if (header === null || header.trim() === '') {
-    return undefined;
-  }
-  const seconds = Number(header);
-  if (Number.isFinite(seconds) && seconds > 0) {
-    return Math.min(Math.ceil(seconds), maxRetryAfterSeconds);
-  }
-  const date = Date.parse(header);
-  if (Number.isFinite(date)) {
-    const delta = Math.ceil((date - now) / 1000);
-    return delta > 0 ? Math.min(delta, maxRetryAfterSeconds) : undefined;
-  }
-  return undefined;
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {

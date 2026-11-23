@@ -220,6 +220,13 @@ for the full configuration):
    ```
 
    `FCM_PROJECT_ID` overrides the key's `project_id` when they differ.
+   The Worker mints FCM access tokens from the key in memory
+   (`createFcmAccessTokenSource`, the
+   [Google service-account token source](GAME_SERVICES_BACKEND.md#google-play-one-time-products)
+   with the FCM scope): about one token request an hour per isolate, bounded
+   in time and response size. A refused token request answers the send with
+   a `TOKEN_*` provider code (`TOKEN_INVALID_GRANT`, `TOKEN_KEY_UNUSABLE`); no
+   error holds the key, the signed assertion, or a token.
 3. Set `MPGD_NOTIFICATIONS_CATALOG` to the game's `notifications/topics.json`
    and `MPGD_NOTIFICATIONS_DEPLOYMENT` to `notifications/deployment.json`
    (both JSON vars), and apply the D1 migrations `0007_notifications.sql`

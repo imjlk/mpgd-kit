@@ -1,3 +1,8 @@
+import {
+  createGoogleAccessTokenSource,
+  type CreateGoogleAccessTokenSourceInput,
+  type GoogleAccessTokenSource,
+} from './google-access-token.js';
 import type { GooglePlayProductPurchaseClient } from './google-play-purchase.js';
 import type {
   GooglePlayVoidedPurchase,
@@ -6,11 +11,49 @@ import type {
 } from './google-play-store-server.js';
 
 const publisherOrigin = 'https://androidpublisher.googleapis.com';
+/** The OAuth scope of the Google Play Developer API (the Android Publisher API). */
+export const googlePlayPublisherScope = 'https://www.googleapis.com/auth/androidpublisher';
 
 export interface GooglePlayPublisherClientOptions {
   /** Supplies an androidpublisher-scoped OAuth access token for each request. */
   readonly getAccessToken: (signal: AbortSignal) => Promise<string> | string;
+  /**
+   * Called with the access token Google Play answered HTTP 401 for (revoked,
+   * or expired early), so a caching token source drops it and the next
+   * request gets a new one. The request still fails. An error it throws is
+   * ignored.
+   */
+  readonly invalidateAccessToken?: (accessToken: string) => void;
   readonly fetch?: typeof fetch;
+}
+
+/** `createGoogleAccessTokenSource` input without the scope, which is `googlePlayPublisherScope`. */
+export type CreateGooglePlayPublisherAccessTokenSourceInput = Omit<
+  CreateGoogleAccessTokenSourceInput,
+  'scope'
+>;
+
+/**
+ * Access tokens for the Google Play Developer API from a game-owned service
+ * account: `createGoogleAccessTokenSource` with `googlePlayPublisherScope`.
+ * Its `get` is the client's `getAccessToken` and its `invalidate` the
+ * client's `invalidateAccessToken`. Server side only, one per isolate: the
+ * key and the token stay in its memory and never reach the game.
+ *
+ * ```ts
+ * const tokens = createGooglePlayPublisherAccessTokenSource({
+ *   serviceAccount: parseGoogleServiceAccount(env.GOOGLE_PLAY_SERVICE_ACCOUNT),
+ * });
+ * const client = createGooglePlayPublisherClient({
+ *   getAccessToken: tokens.get,
+ *   invalidateAccessToken: tokens.invalidate,
+ * });
+ * ```
+ */
+export function createGooglePlayPublisherAccessTokenSource(
+  input: CreateGooglePlayPublisherAccessTokenSourceInput,
+): GoogleAccessTokenSource {
+  return createGoogleAccessTokenSource({ ...input, scope: googlePlayPublisherScope });
 }
 
 /**
@@ -55,10 +98,22 @@ export function createGooglePlayPublisherClient(
     // Also reject a redirect followed by an injected fetch that ignores redirect: 'manual'.
     if (!response.ok || response.redirected) {
       await discardBody(response);
+      if (response.status === 401) {
+        forgetAccessToken(accessToken);
+      }
       // Do not forward an error body or URL: both can contain purchase credentials.
       throw new Error(`Google Play Publisher request failed (HTTP ${response.status}).`);
     }
     return response;
+  }
+
+  /** Tells the token source Google refused `accessToken`; the request's own failure stays the answer. */
+  function forgetAccessToken(accessToken: string): void {
+    try {
+      options.invalidateAccessToken?.(accessToken);
+    } catch {
+      // A failing hook must not replace the HTTP failure.
+    }
   }
 
   return {
