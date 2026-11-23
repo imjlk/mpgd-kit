@@ -336,6 +336,29 @@ describe('Apps in Toss commerce v2 provider', () => {
     void hanging;
   });
 
+  it('maps the documented errorCode USER_CANCELED to a cancellation', async () => {
+    const { host, provider } = setup();
+    const request = {
+      logicalId: 'gems_small',
+      idempotencyKey: 'op-error-code',
+      source: 'shop',
+    } as const;
+    host.queueCheckout({
+      kind: 'error',
+      error: { errorCode: 'USER_CANCELED', message: 'The buyer left the order sheet.' },
+    });
+    await expect(provider.requestPurchase(request)).resolves.toEqual({
+      outcome: 'cancelled',
+      error: { code: 'USER_CANCELLED', retryable: false, message: expect.any(String) },
+    });
+
+    // The cancelled attempt frees its key: the same request opens a new order
+    // sheet. A payment that awaits approval is never read as a cancellation.
+    host.queueCheckout({ kind: 'error', error: { errorCode: 'PAYMENT_PENDING' } });
+    await expect(provider.requestPurchase(request)).resolves.toEqual({ outcome: 'launched' });
+    expect(host.checkoutCalls).toHaveLength(2);
+  });
+
   it('rejects an unconfigured product and a quantity above one before any checkout', async () => {
     const { host, provider } = setup();
     await expect(provider.requestPurchase({
