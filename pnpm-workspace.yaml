@@ -21,6 +21,27 @@ minimumReleaseAgeExclude:
   # Reviewed first-party releases: imjlk/ait-kit PRs #52 and #53.
   - '@ait-kit/api-core@0.6.0'
   - '@ait-kit/sdk@0.7.0'
+# Devvit 0.15.4 packages import these at runtime without declaring them. A
+# hoisted node_modules resolves them by accident; pnpm's global virtual store
+# and other isolated layouts fail the Devvit build or upload instead. Keep the
+# keys on the Devvit version the Devvit apps pin: `pnpm validate:starter-workflow`
+# fails on a missing or stale key (tools/workspace/devvit-package-extensions.ts).
+packageExtensions:
+  # `devvit upload` and `devvit playtest` bundle build-pack's devvit.json entry
+  # template, which imports these; build-pack lists them only as devDependencies.
+  '@devvit/build-pack@0.15.4':
+    dependencies:
+      '@devvit/public-api': 0.15.4
+      '@devvit/scheduler': 0.15.4
+  # MediaClient imports @devvit/shared-types, which media lists only as a devDependency.
+  '@devvit/media@0.15.4':
+    dependencies:
+      '@devvit/shared-types': 0.15.4
+  # Generated protobuf modules, the Redis client among them, import long
+  # directly; 5.3.2 is the long that protos' protobufjs resolves.
+  '@devvit/protos@0.15.4':
+    dependencies:
+      long: 5.3.2
 overrides:
   '@xmldom/xmldom': '0.9.12'
   # Security patches for transitive advisories reported by `pnpm audit --prod`.
@@ -32,6 +53,6 @@ overrides:
   'browserslist@4': '4.29.3' # @babel/helper-compilation-targets ^4.24.0, core-js-compat ^4.28.1
   'baseline-browser-mapping@2': '2.11.27' # browserslist declares ^2.10.38
   'qs@6': '6.16.0' # googleapis-common ^6.7.0, express ^6.14.0, body-parser ^6.15.2
-  # @devvit/protos pins protobufjs to exactly 7.6.3, so only the Apps in Toss
+  # @devvit/protos pins protobufjs to exactly 7.6.5, so only the Apps in Toss
   # path (declared ^7.5.4) is patched here.
   '@apps-in-toss/ait-format-proto>protobufjs': '7.6.6'

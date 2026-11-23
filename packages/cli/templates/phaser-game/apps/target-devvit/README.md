@@ -84,6 +84,24 @@ the verified completion route is not the generic `PlatformGateway` leaderboard.
 `devvit playtest` runs the official unified Vite build in watch mode, so a
 separate client/server watcher or staging prebuild is not required.
 
+## Updating the Devvit SDK
+
+The upload scripts run `mpgd kit devvit-check` first and stop when a newer
+stable Devvit release exists. To update, change the exact `@devvit/web`,
+`@devvit/start`, and `devvit` pins in this directory's `package.json`, then
+update the `packageExtensions` block in the game root's `pnpm-workspace.yaml`
+to the same release before `pnpm install`, a rebuild, and your target checks.
+
+That block exists because some Devvit packages import modules they do not
+declare: `@devvit/media` imports `@devvit/shared-types`, `@devvit/protos`
+imports `long`, and the devvit.json entry template that `@devvit/build-pack`
+bundles for `devvit upload` and `devvit playtest` imports `@devvit/public-api`
+and `@devvit/scheduler`. A hoisted `node_modules` resolves them by accident.
+pnpm's global virtual store and other isolated layouts do not, so with keys
+left on an older release `pnpm build:devvit` or the upload bundle fails on an
+unresolved import. A new Devvit release can change the list; the `@mpgd/cli`
+changelog records each change the kit makes to it.
+
 ## Durable Post Operations
 
 Use `src/server/postOperationStore.ts` with `@mpgd/adapter-devvit/server` for a
