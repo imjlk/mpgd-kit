@@ -228,7 +228,7 @@ jobs:
 
       - name: Run Sampo release automation
         id: sampo
-        uses: bruits/sampo/crates/sampo-github-action@dc653d6ac85c45f139b0af898fb2dd1507f3fcd8 # cargo-sampo-github-action-v0.22.1
+        uses: bruits/sampo/crates/sampo-github-action@8494f0fd88b6b3ada5adabf8a1ac682a927a96ee # cargo-sampo-github-action-v0.22.1
         with:
           command: auto
           create-github-release: true
